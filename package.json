@@ -1,0 +1,31 @@
+{
+  "name": "wb-tender-enterprise-production-pilot",
+  "version": "2026.08.11-commercial-readiness-rc23",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "gate": "node tests/production-gate.mjs",
+    "gate:readiness": "node scripts/release-readiness-gate.mjs",
+    "sbom": "node scripts/generate-sbom.mjs",
+    "start": "node platform/server.mjs",
+    "worker": "node platform/autopilot-pipeline-worker.mjs",
+    "audit:production": "node scripts/production-system-audit.mjs",
+    "verify:artifact": "node scripts/verify-release-artifact.mjs"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.0.2",
+    "@fastify/helmet": "13.0.2",
+    "@fastify/rate-limit": "10.3.0",
+    "csv-parse": "7.0.1",
+    "docx": "9.7.1",
+    "fastify": "5.10.0",
+    "fast-xml-parser": "5.10.1",
+    "iconv-lite": "0.7.3",
+    "jszip": "3.10.1",
+    "pdfjs-dist": "6.2.108",
+    "pdfkit": "0.19.1",
+    "pg": "8.16.3",
+    "playwright": "1.55.1"
+  }
+}
