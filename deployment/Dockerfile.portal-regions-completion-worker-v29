@@ -1,0 +1,3 @@
+FROM wb-tender-real-operations:20260821-portal-regions-completion-worker.28
+LABEL org.opencontainers.image.version="20260821-portal-regions-completion.29" org.opencontainers.image.revision="d9fa4892bbb73659bb3ffedae077fe47a3a4ac10c0d90a38956bffbebcd78973" wb.release.scope="portal-retry-execution-window-verified"
+COPY --chown=root:root tests/portal-relogin-central-contract.test.mjs /app/tests/portal-relogin-central-contract.test.mjs

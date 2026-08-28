@@ -1,0 +1,7 @@
+FROM wb-tender-real-operations:20260821-portal-regions-completion.20
+LABEL org.opencontainers.image.version="20260821-portal-regions-completion.21" \
+      org.opencontainers.image.revision="72796a3e96c814b37328813473ab2bca61bb33440ddf64a8b8a7e093e63bc0f2" \
+      wb.release.base="sha256:c357650a7e1d4e7a01c73b22a12a725da26481bf2c1ca8628230ded90d25e8a9" \
+      wb.release.scope="portal-wide-expired-session-recovery"
+COPY --chown=root:root platform/portal-login-action.mjs /app/platform/portal-login-action.mjs
+COPY --chown=root:root tests/portal-relogin-central-contract.test.mjs /app/tests/portal-relogin-central-contract.test.mjs

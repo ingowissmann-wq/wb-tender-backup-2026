@@ -1,0 +1,8 @@
+FROM wb-tender-real-operations:20260820-portal-worker-status.1
+ARG RELEASE_VERSION=20260820-portal-save-verify-worker.1
+ARG SOURCE_FINGERPRINT=unverified
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      wb.release.scope="portal-save-verify-worker-only" \
+      wb.release.base="sha256:ee4cd35a68ac6959f32ca6c4834f7fd24d62b17292cd4acb0f9f68ed549f7ea3"
+COPY --chown=root:root platform/autopilot-pipeline-worker.mjs /app/platform/autopilot-pipeline-worker.mjs

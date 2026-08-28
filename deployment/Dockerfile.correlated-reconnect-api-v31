@@ -1,0 +1,7 @@
+FROM wb-tender-real-operations:20260821-portal-regions-completion.30
+LABEL org.opencontainers.image.version="20260821-correlated-portal-reconnect.31" org.opencontainers.image.revision="2926b7d6d355bb874a99cc9a06930e9c36d28abad38ce79c558435dc921964b3" wb.release.scope="correlated-managed-portal-reconnect"
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs
+COPY --chown=root:root platform/assets/inbox-regions.js /app/platform/assets/inbox-regions.js
+COPY --chown=root:root platform/assets/autopilot-navigation.js /app/platform/assets/autopilot-navigation.js
+COPY --chown=root:root migrations/118_correlated_portal_reconnect.sql /app/migrations/118_correlated_portal_reconnect.sql
+COPY --chown=root:root tests/portal-relogin-central-contract.test.mjs /app/tests/portal-relogin-central-contract.test.mjs

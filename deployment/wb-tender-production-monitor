@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state_dir=/var/lib/wb-tender-monitor
+install -d -m 700 "$state_dir"
+timestamp="$(date -u +%FT%TZ)"
+temp="$(mktemp "$state_dir/check.XXXXXX")"
+on_exit() {
+  status=$?
+  if [[ $status -ne 0 ]]; then
+    printf 'timestamp|%s\nstatus|failed\nexit_code|%s\n' "$timestamp" "$status" >"$state_dir/current-alert.txt"
+    chmod 600 "$state_dir/current-alert.txt"
+    logger -p daemon.err -t wb-tender-monitor "production readiness check failed (exit $status)"
+  fi
+  rm -f "$temp"
+}
+trap on_exit EXIT
+
+check_http() {
+  local expected="$1" url="$2" status
+  status="$(curl -sS -o /dev/null --max-time 20 -w '%{http_code}' "$url")"
+  [[ "$status" = "$expected" ]]
+  printf 'http|%s|%s\n' "$status" "$url" >>"$temp"
+}
+
+for host in wb-holding.ag www.wb-holding.ag admin.wb-holding.ag cms.wb-holding.ag crm.wb-holding.ag kalkulator.wb-holding.ag service-platform-test.wb-holding.ag; do
+  getent ahostsv4 "$host" | awk 'NR==1{print $1}' | grep -qx '85.215.172.121'
+done
+
+check_http 200 https://www.wb-holding.ag/
+check_http 200 https://www.wb-holding.ag/karriere
+check_http 200 https://www.wb-holding.ag/karriere/geschaeftsfuehrer-reinigung-m-w-d-augsburg
+check_http 200 'https://www.wb-holding.ag/application?job=geschaeftsfuehrer-reinigung-m-w-d-augsburg'
+check_http 200 https://admin.wb-holding.ag/admin/
+check_http 200 https://admin.wb-holding.ag/api/tender/healthz
+check_http 200 https://kalkulator.wb-holding.ag/
+check_http 401 https://service-platform-test.wb-holding.ag/
+
+for container in \
+  wb-green-nginx \
+  website-seo-dynamic-blog-live-green \
+  wb-auth-lockout-recovery-iam-user-create-canary-20260811 \
+  wb-tender-portal-action-rc21-production-api \
+  wb-tender-public-ingestion-visibility-production-20260817 \
+  wb-tender-commercial-readiness-rc23-production-worker \
+  wb-green-main-postgres \
+  wb-phase4b-acceptance-postgres-1 \
+  wb-redis \
+  wb-phase4b-acceptance-redis-1; do
+  [[ "$(docker inspect -f '{{.State.Running}}' "$container")" = true ]]
+done
+
+[[ "$(docker inspect -f '{{.State.Health.Status}}' wb-tender-portal-action-rc21-production-api)" = healthy ]]
+[[ "$(docker inspect -f '{{.State.Health.Status}}' wb-tender-public-ingestion-visibility-production-20260817)" = healthy ]]
+[[ "$(docker inspect -f '{{.State.Health.Status}}' wb-tender-commercial-readiness-rc23-production-worker)" = healthy ]]
+systemctl is-enabled --quiet wb-tender-daily-sync.timer
+systemctl is-active --quiet wb-tender-daily-sync.timer
+/srv/wb-green/tender-daily-sync-v1/health.sh >>"$temp"
+docker exec wb-tender-portal-action-rc21-production-api npm run gate:readiness >>"$temp"
+docker exec wb-green-main-postgres sh -lc 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >>"$temp"
+docker exec wb-phase4b-acceptance-postgres-1 sh -lc 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' >>"$temp"
+docker exec wb-redis redis-cli --no-auth-warning ping | grep -qx PONG
+docker exec wb-phase4b-acceptance-redis-1 sh -lc 'redis-cli --no-auth-warning -a "$REDIS_PASSWORD" ping' | grep -qx PONG
+
+for domain in wb-holding.ag service-platform-test.wb-holding.ag; do
+  expiry="$(echo | openssl s_client -servername "$domain" -connect "$domain:443" 2>/dev/null | openssl x509 -noout -enddate | cut -d= -f2-)"
+  openssl x509 -checkend 1814400 -noout -in <(echo | openssl s_client -servername "$domain" -connect "$domain:443" 2>/dev/null) >/dev/null
+  printf 'certificate|%s|%s\n' "$domain" "$expiry" >>"$temp"
+done
+
+use_percent="$(df -P / | awk 'NR==2{gsub(/%/,"",$5); print $5}')"
+# Keep the integer shell gate aligned with source-ingestion-health: 85% used is
+# a warning state (not critical); only values above 85% fail the monitor.
+[[ "$use_percent" -le 85 ]]
+printf 'disk_used_percent|%s\n' "$use_percent" >>"$temp"
+
+printf 'timestamp|%s\nstatus|healthy\n' "$timestamp" >>"$temp"
+install -m 600 "$temp" "$state_dir/last-success.txt"
+rm -f "$state_dir/current-alert.txt"

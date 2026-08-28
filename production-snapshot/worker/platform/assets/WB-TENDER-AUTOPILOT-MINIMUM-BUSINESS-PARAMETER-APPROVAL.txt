@@ -1,0 +1,325 @@
+WB TENDER-AUTOPILOT – MINIMALE UNTERNEHMENSPARAMETER-FREIGABE
+======================================================================
+
+Zweck
+-----
+Priorisierung der 294 offenen beziehungsweise erneut fachlich zu
+bestätigenden Unternehmensparameter. Es werden keine Werte ergänzt,
+geschätzt oder aktiviert. Die Minimalfreigabe soll zuerst belastbares
+Discovery/Matching, danach GO/NO-GO und erst zuletzt Kalkulation erlauben.
+
+Matrix und Zählung
+------------------
+Der Parameterkatalog enthält 49 gesellschaftsscharfe Parameter.
+Er gilt einzeln für jede der sechs Gesellschaften:
+
+1. WB-Cleaning GmbH – CLEANING
+2. WB-Security GmbH – SECURITY
+3. WB-Facilitys GmbH – FACILITY
+4. WB-Sicherheitstechnik GmbH – SECURITY_TECHNOLOGY
+5. WB-Emergency Service GmbH – EMERGENCY_SERVICES
+6. WB-Protect & Service GmbH – PROTECT_SERVICE
+
+49 Parameter x 6 Gesellschaften = 294 Gesellschaftsparameter.
+Jede Kombination aus Gesellschaft und Katalogzeile ist ein eigener
+Freigabepunkt; Werte dürfen nicht gesellschaftsübergreifend geerbt werden.
+
+Wertstatus je Gesellschaft
+---------------------------
+WB-Cleaning:
+Bereits als Profilinhalt vorhanden, aber für die operative Minimalfreigabe
+zu bestätigen: Leistungen Unterhalt, Glas, Grund, Bauende, Industrie,
+Praxis, Treppenhaus, Halle, Logistik, Sonderreinigung; CPV 90910000,
+90911000, 90911200, 90911300, 90914000, 90919000, 90919200, 90919300;
+vorhandene Keywords/Synonyme/Ausschlüsse. Regionen, Erlaubnisse,
+Zertifikate, Referenzen, Kapazitäts- und Kostenparameter: FEHLT.
+
+WB-Security:
+Vorhanden, aber zu bestätigen: Objektschutz, Werkschutz, Empfang,
+Revier, Intervention, Doorman, Baustellen- und Veranstaltungsschutz;
+CPV 79700000, 79710000, 79711000, 79713000, 79714000, 79715000;
+vorhandene Keywords/Synonyme/Ausschlüsse. Regionen, Erlaubnisse,
+Zertifikate, Referenzen, Kapazitäts- und Kostenparameter: FEHLT.
+
+WB-Facilitys:
+Nur Kandidaten: Hausmeister, Winterdienst, Grünpflege, infrastrukturelles
+und technisches Gebäudemanagement, Betreiber-/Inspektionsleistungen;
+Kandidaten-CPV 79993000, 79993100, 50700000, 50710000, 50720000,
+50730000, 77314000, 90620000. Alle 49 Werte gelten als NICHT
+FREIGEGEBEN. Discovery/Matching bleiben gesperrt.
+
+WB-Sicherheitstechnik:
+Nur Kandidaten: Video, Zutritt, Einbruch, Alarm, Sicherheitssysteme,
+Installation, Wartung, Service; Kandidaten-CPV 35120000, 35121000,
+35121700, 35125300, 42961100, 50610000. Alle 49 Werte gelten als
+NICHT FREIGEGEBEN. Discovery/Matching bleiben gesperrt.
+
+WB-Emergency Service:
+Nur Kandidaten: Betriebssanitäter, Sanitätsdienst, medizinische
+Einsatzleistung, betriebliche Notfallversorgung; Kandidaten-CPV
+85142000, 85143000, 75252000. Alle 49 Werte gelten als NICHT
+FREIGEGEBEN. Matching bleibt gesperrt.
+
+WB-Protect & Service:
+Sektor und Leistungen sind offen. Alle 49 Werte fehlen. Vor jeder
+weiteren Freigabe ist A01 "Sektor/Leistungsscope" zu entscheiden.
+Keine operative Tenderberechtigung und keine Primärzuordnung.
+
+PARAMETERKATALOG
+================
+
+PRIORITÄT A – DISCOVERY UND MATCHING (A01–A16)
+------------------------------------------------
+Für alle Zeilen ist die Entscheidung gesellschaftsscharf durch die
+fachlich verantwortliche Stelle zu dokumentieren.
+
+A01 Sektor und bestätigter Leistungsscope
+Einheit: freigegebene Taxonomie/Liste
+Wert: Cleaning/Security teilweise vorhanden; übrige FEHLEN
+Entscheidung: aktive Leistungen verbindlich bestätigen
+Blockiert: Discovery, Matching, Protect-Sektorfreigabe
+Reihenfolge: 1
+
+A02 ausdrücklich nicht angebotene Leistungen
+Einheit: Liste
+Wert: FEHLT
+Entscheidung: Negativumfang bestätigen
+Blockiert: Fehlalarmunterdrückung
+Reihenfolge: 2
+
+A03 freigegebene CPV-Hauptcodes
+Einheit: CPV-Liste
+Wert: Cleaning/Security vorhanden, zu bestätigen; übrige nur Kandidaten
+Entscheidung: Codes aktiv/falsch/bedingt markieren
+Blockiert: Discovery/Matching
+Reihenfolge: 3
+
+A04 ausgeschlossene CPV-Codes
+Einheit: CPV-Liste
+Wert: FEHLT
+Entscheidung: Liefer-, Bau-, IT- und fachfremde Codes ausschließen
+Blockiert: Fehlalarmunterdrückung
+Reihenfolge: 4
+
+A05 bestätigte Schlüsselwörter
+Einheit: Liste
+Wert: Cleaning/Security vorhanden, zu bestätigen; übrige FEHLEN
+Entscheidung: fachliche Positivsignale bestätigen
+Blockiert: Titel-/Beschreibungsmatching
+Reihenfolge: 5
+
+A06 bestätigte Synonyme
+Einheit: Liste
+Wert: Cleaning/Security teilweise vorhanden; übrige FEHLEN
+Entscheidung: Synonyme/Branchenbegriffe bestätigen
+Blockiert: Recall/übersehene Treffer
+Reihenfolge: 6
+
+A07 Ausschlussbegriffe
+Einheit: Liste
+Wert: Teilbestände vorhanden; zu ergänzen
+Entscheidung: insbesondere Lieferaufträge, allgemeiner Bau, IT,
+Blitzschutz und bahnbetriebliche Spezialleistungen
+Blockiert: Fehlalarmunterdrückung
+Reihenfolge: 7
+
+A08 Kernregionen
+Einheit: NUTS/Bundesland/Radius-Liste
+Wert: FEHLT
+Entscheidung: aktiv bedienbare Kernregionen
+Blockiert: regionale Bewertung
+Reihenfolge: 8
+
+A09 bedingte/strategische Regionen
+Einheit: NUTS/Bundesland-Liste mit Bedingung
+Wert: FEHLT
+Entscheidung: Regionen mit Mindestvolumen/-laufzeit
+Blockiert: regionale Bewertung
+Reihenfolge: 9
+
+A10 ausgeschlossene Regionen
+Einheit: NUTS/Bundesland-Liste
+Wert: FEHLT
+Entscheidung: nicht bedienbare Gebiete
+Blockiert: Fehlalarmunterdrückung/GO-NO-GO
+Reihenfolge: 10
+
+A11 zwingende Erlaubnisse je Leistung
+Einheit: Erlaubnis + Gültigkeit
+Wert: FEHLT
+Entscheidung: vorhandene Erlaubnisse revisionsfest belegen
+Blockiert: Hard Gates/GO-NO-GO
+Reihenfolge: 11
+
+A12 zwingende Zertifikate je Leistung
+Einheit: Zertifikat + Gültigkeit
+Wert: FEHLT
+Entscheidung: vorhandene Zertifikate belegen
+Blockiert: Hard Gates/GO-NO-GO
+Reihenfolge: 12
+
+A13 Referenzkategorien
+Einheit: Leistung/Branche/Größenklasse
+Wert: FEHLT
+Entscheidung: belegbare Referenztypen bestätigen
+Blockiert: Hard Gates
+Reihenfolge: 13
+
+A14 Leistungsspezifische Ausschlusskunden/-objekte
+Einheit: Objekt-/Risikokategorie
+Wert: FEHLT
+Entscheidung: nicht bedienbare Objektarten
+Blockiert: Fehlalarmunterdrückung/Risiko
+Reihenfolge: 14
+
+A15 zulässige Primär-/Alternativzuordnung
+Einheit: Regel je Leistung
+Wert: Protect ausdrücklich gesperrt; übrige nur teilweise definiert
+Entscheidung: Gesellschaftsgrenzen verbindlich bestätigen
+Blockiert: Primärzuordnung/Datenabgrenzung
+Reihenfolge: 15
+
+A16 fachlicher Profilverantwortlicher und Freigabestand
+Einheit: interne Rolle, Datum, Version
+Wert: FEHLT
+Entscheidung: Owner und Reviewzyklus benennen
+Blockiert: revisionssichere Profilpflege
+Reihenfolge: 16
+
+PRIORITÄT B – GO/NO-GO (B01–B12)
+---------------------------------
+B01 verfügbare operative Vollzeitäquivalente
+Einheit: FTE je Leistung/Region
+Wert: FEHLT
+Entscheidung: gesicherte Kapazität
+Blockiert: Kapazitäts-Hard-Gate
+Reihenfolge: 17
+
+B02 zulässige Schicht-/Betriebszeiten
+Einheit: Stunden/Schichtmodell
+Wert: FEHLT
+Entscheidung: 24/7, Nacht, Wochenende, Rufbereitschaft
+Blockiert: Leistungsfähigkeit
+Reihenfolge: 18
+
+B03 maximale Mobilisierungsfrist
+Einheit: Kalendertage
+Wert: FEHLT
+Entscheidung: realistische Anlaufzeit
+Blockiert: Frist-/Start-Hard-Gate
+Reihenfolge: 19
+
+B04 maximale parallele Objekte/Lose
+Einheit: Anzahl
+Wert: FEHLT
+Entscheidung: Kapazitätsobergrenze
+Blockiert: Los-/Portfolioentscheidung
+Reihenfolge: 20
+
+B05 Mindestauftragsvolumen
+Einheit: EUR/Jahr
+Wert: FEHLT
+Entscheidung: wirtschaftliche Untergrenze
+Blockiert: GO/NO-GO
+Reihenfolge: 21
+
+B06 Höchstauftragsvolumen
+Einheit: EUR/Jahr
+Wert: FEHLT
+Entscheidung: Risikokonzentration/Kapazität
+Blockiert: GO/NO-GO
+Reihenfolge: 22
+
+B07 maximale Entfernung
+Einheit: km oder Minuten Fahrzeit
+Wert: FEHLT
+Entscheidung: je Leistung/Region
+Blockiert: regionale Bewertung
+Reihenfolge: 23
+
+B08 minimale Vertragslaufzeit
+Einheit: Monate
+Wert: FEHLT
+Entscheidung: wirtschaftliche Mindestdauer
+Blockiert: GO/NO-GO
+Reihenfolge: 24
+
+B09 bevorzugte/maximale Vertragslaufzeit
+Einheit: Monate
+Wert: FEHLT
+Entscheidung: Ziel- und Risikodauer
+Blockiert: Portfolio-/Risikobewertung
+Reihenfolge: 25
+
+B10 Nachunternehmerregeln
+Einheit: erlaubt/verboten/maximaler Anteil
+Wert: FEHLT
+Entscheidung: je Leistung und Nachweisart
+Blockiert: Kapazität/Compliance
+Reihenfolge: 26
+
+B11 Mindestumfang vergleichbarer Referenzen
+Einheit: Anzahl, EUR, FTE oder Fläche
+Wert: FEHLT
+Entscheidung: belegbare Referenzschwelle
+Blockiert: Eignungs-Hard-Gate
+Reihenfolge: 27
+
+B12 Risikogrenzen
+Einheit: Score/Haftung/Vertragsstrafe/Konzentration
+Wert: FEHLT
+Entscheidung: NO-GO-Schwellen
+Blockiert: finale GO/NO-GO-Entscheidung
+Reihenfolge: 28
+
+PRIORITÄT C – KALKULATION (C01–C21)
+-----------------------------------
+Alle folgenden Werte fehlen in den Version-2-Kostenkonfigurationen jeder
+Gesellschaft. Status bleibt BLOCKED_PENDING_APPROVAL; Null-, Standard-,
+Test- oder Fremdgesellschaftswerte sind unzulässig.
+
+C01 Grundlohn – EUR/Stunde – Tarif-/Lohnwert freigeben – blockiert Preis – Reihenfolge 29
+C02 Tarifgrundlage – Tarifwerk/Datum – Tarifbezug freigeben – blockiert Preis – 30
+C03 Zuschläge – Prozent je Art – Nacht/Sonntag/Feiertag freigeben – Preis – 31
+C04 Arbeitgebernebenkosten – Prozent – Satz freigeben – Preis – 32
+C05 Urlaubsreserve – Prozent – Satz freigeben – Produktivkosten – 33
+C06 Krankheitsreserve – Prozent – Satz freigeben – Produktivkosten – 34
+C07 Ausfallreserve – Prozent – Satz freigeben – Produktivkosten – 35
+C08 Verwaltungskosten – Prozent/EUR – Umlage freigeben – DB/Preis – 36
+C09 Objektleitung – EUR/Stunde oder Anteil – Ansatz freigeben – Preis – 37
+C10 Einsatzleitung – EUR/Stunde oder Anteil – Ansatz freigeben – Preis – 38
+C11 Material – EUR/Einheit/Objekt – Ansätze freigeben – Preis – 39
+C12 Geräte – EUR/Stunde/Monat – Ansätze freigeben – Preis – 40
+C13 Fahrzeuge – EUR/km/Stunde/Monat – Ansätze freigeben – Preis – 41
+C14 Fahrtkosten – EUR/km/Stunde – Ansätze freigeben – Preis – 42
+C15 Personalbeschaffung – EUR/FTE oder Prozent – Ansatz freigeben – Preis – 43
+C16 Nachunternehmer – EUR/Einheit oder Prozent – Ansatz freigeben – Preis – 44
+C17 Versicherungen – EUR/Jahr oder Prozent – Ansatz freigeben – Preis – 45
+C18 Risiko – Prozent – Risikozuschlag freigeben – Preis/DB – 46
+C19 Ziel-DB1 – Prozent/EUR – Zielwert freigeben – Angebotspreis – 47
+C20 Ziel-DB2 – Prozent/EUR – Zielwert freigeben – Angebotspreis – 48
+C21 Ziel-DB3 – Prozent/EUR – Zielwert freigeben – Angebotspreis – 49
+
+Empfohlene konkrete Minimalfreigabe
+-----------------------------------
+Sofort, ohne Kalkulationsaktivierung:
+1. WB-Facilitys: A01, A03–A12 und B01–B04/B07 für Winterdienst und
+   Hausmeisterdienste wegen der Fristen 2026-08-06 und 2026-08-10.
+2. WB-Cleaning: A08–A13 und B01–B04/B07/B11 für die ersten fünf
+   priorisierten Cleaning-Tender.
+3. WB-Security: A08–A13 und B01–B04/B07/B11 für Frankfurt und Rostock.
+4. WB-Sicherheitstechnik: A01/A03/A11/A12/A13 für Zutrittskontrolle.
+5. WB-Emergency Service: A01/A03/A11/A12/A13 sowie B01–B04 für den
+   Rettungswagenbetrieb.
+6. WB-Protect & Service: zunächst ausschließlich A01 und A15; alle
+   weiteren Parameter bleiben bis zur Sektorentscheidung gesperrt.
+
+Danach:
+B05–B12 für belastbare GO/NO-GO-Entscheidungen.
+C01–C21 erst nach ausdrücklicher separater Kalkulationsfreigabe.
+
+Unveränderter Sperrstatus
+-------------------------
+Es wurde kein Parameter aktiviert oder mit einem Wert befüllt.
+Alle Kalkulationen bleiben gesperrt:
+"KALKULATION GESPERRT – FREIGEGEBENE UNTERNEHMENSPARAMETER FEHLEN".

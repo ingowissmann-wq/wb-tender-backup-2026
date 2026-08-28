@@ -1,0 +1,9 @@
+FROM wb-tender-real-operations:20260820-portal-worker-status.1
+ARG RELEASE_VERSION=20260820-portal-save-verify-exact-binding-worker.2
+ARG SOURCE_FINGERPRINT=f307eb36ed65b21512cb20bc23887a8d2bd41f371ddead3ed70eafa79b23f51c
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      wb.release.scope="portal-save-verify-exact-binding-worker-only" \
+      wb.release.base="sha256:ee4cd35a68ac6959f32ca6c4834f7fd24d62b17292cd4acb0f9f68ed549f7ea3"
+COPY --chown=root:root platform/portal-credentials.mjs /app/platform/portal-credentials.mjs
+COPY --chown=root:root platform/autopilot-pipeline-worker.mjs /app/platform/autopilot-pipeline-worker.mjs

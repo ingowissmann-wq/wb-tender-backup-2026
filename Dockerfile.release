@@ -1,0 +1,22 @@
+ARG RUNTIME_IMAGE=wb-tender-real-operations:rollback-pre-pdf-acroform-20260816
+FROM ${RUNTIME_IMAGE}
+
+ARG RELEASE_VERSION
+ARG SOURCE_FINGERPRINT
+ARG RUNTIME_IMAGE_ID
+LABEL org.opencontainers.image.title="WB Tender public ingestion and discovery visibility" \
+      org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      org.opencontainers.image.base.digest="${RUNTIME_IMAGE_ID}" \
+      org.opencontainers.image.source="/root/wb-tender-production-current-source" \
+      org.opencontainers.image.description="Public TED/DOE ingestion, service-line discovery visibility, scoped portal execution and immutable external submission lock"
+
+ENV EXTERNAL_SUBMISSION_ENABLED=false \
+    WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false \
+    WB_TENDER_SAAS_ENABLED=false \
+    WB_TENDER_SAAS_LEGACY_API_ENABLED=false
+
+WORKDIR /app
+COPY --chown=root:root . /app/
+COPY --chown=root:root deployment/wb-tender-ingestion-entrypoint /usr/local/bin/wb-tender-ingestion-entrypoint
+RUN chmod 0555 /usr/local/bin/wb-tender-ingestion-entrypoint

@@ -1,0 +1,9 @@
+FROM wb-tender-real-operations:20260821-management-inbox-504-current.16
+LABEL org.opencontainers.image.version="20260821-dtvp-metadata-validation.17" \
+      org.opencontainers.image.revision="80c1eaf22418905b562faf3d74465f1842808c1b775ddc9dd9dd7befcb1c4f0c" \
+      wb.release.base="sha256:e2f1b618d1b67932862f960493f059d77ef52dc311c2616a4d75873bcf150345" \
+      wb.release.scope="dtvp-metadata-status-contract-and-field-validation"
+COPY --chown=root:root platform/portal-credentials.mjs /app/platform/portal-credentials.mjs
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs
+COPY --chown=root:root platform/assets/autopilot-navigation.js /app/platform/assets/autopilot-navigation.js
+COPY --chown=root:root tests/portal-access-management-security.test.mjs /app/tests/portal-access-management-security.test.mjs

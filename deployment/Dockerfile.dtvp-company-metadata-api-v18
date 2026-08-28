@@ -1,0 +1,8 @@
+FROM wb-tender-real-operations:20260821-dtvp-metadata-validation.17
+LABEL org.opencontainers.image.version="20260821-dtvp-company-metadata.18" \
+      org.opencontainers.image.revision="351dc01a17d90aac662747c5f071e60e43e4a298220eac407f2a2b9bd17d4752" \
+      wb.release.base="sha256:27d3a49325e5b739b119f6096e923ca4eb2af7a167168ffc959c9768be7b4893" \
+      wb.release.scope="company-scoped-dtvp-non-secret-metadata"
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs
+COPY --chown=root:root tests/portal-access-management-security.test.mjs /app/tests/portal-access-management-security.test.mjs
+COPY --chown=root:root migrations/113_company_scoped_portal_credential_metadata.sql /app/migrations/113_company_scoped_portal_credential_metadata.sql

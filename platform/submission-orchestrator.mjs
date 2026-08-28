@@ -160,6 +160,10 @@ export async function runReconciliationJob(job, { poll, now = () => new Date() }
 
 export function advanceSubmissionState(current, next, event = {}) {
   required(current.transmitted !== true && event.transmitted !== true, "TRANSMISSION_STATE_FORBIDDEN");
+  if (current.status === next && current.lastEvent?.reason === (event.reason || "") &&
+      (current.processedKeys || []).includes(current.lastEvent?.idempotencyKey)) {
+    return { ...current, idempotent:true };
+  }
   const idempotencyKey = submissionHash({ contextId:current.contextId, from:current.status, to:next, reason:event.reason || "", bindingSha256:current.bindingSha256 });
   if ((current.processedKeys || []).includes(idempotencyKey)) return { ...current, idempotent:true };
   assertTransition(current.status, next);

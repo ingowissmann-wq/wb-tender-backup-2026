@@ -1,6 +1,14 @@
 import crypto from "node:crypto";
 import {readFileSync} from "node:fs";
 import {lookup} from "node:dns/promises";
+import {
+  credentialAccountEligibility,
+  credentialJobEligibility,
+  portalCatalogProfile,
+  tenderPortalEligibility as capabilityTenderPortalEligibility,
+} from "./portal-capability-policy.mjs";
+
+export {credentialAccountEligibility,credentialJobEligibility,portalCatalogProfile};
 
 const RESULTS=new Set(["LOGIN_ERFOLGREICH","BENUTZERNAME_ODER_PASSWORT_FALSCH","KONTO_GESPERRT","PASSWORT_ABGELAUFEN","MFA_BESTÄTIGUNG_ERFORDERLICH","CAPTCHA_MANUELL_ERFORDERLICH","CSRF_TOKEN_FEHLT","SESSION_COOKIE_FEHLT","LOGIN_FORMULAR_GEAENDERT","JAVASCRIPT_BROWSERKONTEXT_ERFORDERLICH","LOGIN_REDIRECT_UNERWARTET","SSO_WEITERLEITUNG_ERFORDERLICH","CONSENT_INTERAKTION_ERFORDERLICH","PORTAL_NICHT_ERREICHBAR","DOKUMENTENBERECHTIGUNG_FEHLT","TECHNISCHER_CONNECTORFEHLER"]);
 const forbiddenHost=host=>/^(localhost|0\.0\.0\.0|127\.|10\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$)/i.test(host);
@@ -10,8 +18,47 @@ export function credentialKey(path=process.env.PORTAL_CREDENTIAL_KEY_FILE){if(!p
 export function encryptSecret(payload,key=credentialKey()){const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv("aes-256-gcm",key,iv);cipher.setAAD(Buffer.from("WB_TENDER_PORTAL_CREDENTIAL_V1"));const ciphertext=Buffer.concat([cipher.update(JSON.stringify(payload),"utf8"),cipher.final()]);return {ciphertext,iv,authTag:cipher.getAuthTag(),keyVersion:1}}
 export function decryptSecret(record,key=credentialKey()){const decipher=crypto.createDecipheriv("aes-256-gcm",key,record.iv);decipher.setAAD(Buffer.from("WB_TENDER_PORTAL_CREDENTIAL_V1"));decipher.setAuthTag(record.auth_tag||record.authTag);return JSON.parse(Buffer.concat([decipher.update(record.ciphertext),decipher.final()]).toString("utf8"))}
 export function maskUsername(value){const text=String(value||"").trim();if(!text)return null;const at=text.indexOf("@");if(at>0)return `${text[0]}***@${text.slice(at+1)}`;return `${text.slice(0,Math.min(2,text.length))}***`}
+const metadataStatusToken=value=>String(value??"").trim().toUpperCase().replace(/Ä/g,"AE").replace(/Ö/g,"OE").replace(/Ü/g,"UE").replace(/ẞ/g,"SS").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^A-Z0-9]+/g,"_").replace(/^_+|_+$/g,"");
+const portalMetadataStatuses={
+  registrationStatus:new Map([["NICHT_REGISTRIERT","NICHT_REGISTRIERT"],["REGISTRIERUNG_OFFEN","REGISTRIERUNG_OFFEN"],["REGISTRIERT","REGISTRIERT"],["MANUELLE_PRUEFUNG","MANUELLE_PRUEFUNG"]]),
+  loginStatus:new Map([["LOGIN_UNGEPRUEFT","LOGIN_UNGEPRUEFT"],["UNGEPRUEFT","LOGIN_UNGEPRUEFT"],["LOGIN_BESTAETIGT","LOGIN_BESTAETIGT"],["BESTAETIGT","LOGIN_BESTAETIGT"],["MFA_ERFORDERLICH","MFA_ERFORDERLICH"],["ZUGANG_GESPERRT","ZUGANG_GESPERRT"],["ZUGANG_ABGELAUFEN","ZUGANG_ABGELAUFEN"],["MANUELLE_PRUEFUNG","MANUELLE_PRUEFUNG"]]),
+};
+export function canonicalPortalMetadataStatus(field,value){return portalMetadataStatuses[field]?.get(metadataStatusToken(value))||null}
+export function credentialStateFingerprint({credentialId,version,portalId,companyId,savedAt}){return crypto.createHash("sha256").update(["WB_PORTAL_CREDENTIAL_STATE_V1",credentialId,version,portalId,companyId,new Date(savedAt).toISOString()].join(":"),"utf8").digest("hex")}
+export function portalCredentialJobKey({actionType,portalId,companyId,credentialId,credentialVersion}){return [String(actionType),String(portalId),String(companyId),String(credentialId),`CREDV${Number(credentialVersion)}`].join(":")}
+export function isTechnicalPublicationSource(portal={}){
+  const host=String(portal.canonical_domain||portal.domain||"").trim().toLowerCase().replace(/\.$/,""),
+    name=String(portal.display_name||portal.portalName||"").trim().toLowerCase(),
+    adapter=String(portal.adapter_id||portal.adapterId||"").trim().toLowerCase();
+  return host==="oeffentlichevergabe.de"||host.endsWith(".oeffentlichevergabe.de")||
+    /\bocds\b|\bdoe(?:-|\b)|technical[-_ ]?(?:source|payload)/i.test(`${name} ${adapter}`);
+}
+export function credentialPortalEligibility(portal={}){
+  if(isTechnicalPublicationSource(portal))return {eligible:false,code:"PORTAL_DER_AUSSCHREIBUNG_NICHT_ERMITTELT"};
+  if(!String(portal.canonical_domain||portal.domain||"").trim())return {eligible:false,code:"PORTAL_NICHT_VALIDIERT"};
+  const profile=portalCatalogProfile(portal);
+  if(profile.isTedService)return profile.knownTedService&&profile.accountTypes.length
+    ?{eligible:true,code:null}
+    :{eligible:false,code:profile.knownTedService?"CREDENTIAL_ACCOUNT_TYPE_NOT_SUPPORTED":"PORTAL_NICHT_VALIDIERT"};
+  if(!portal.adapter_id||portal.adapter_enabled!==true)return {eligible:false,code:"KEIN_ADAPTER_VERFUEGBAR"};
+  const validation=String(portal.adapter_validation_status||portal.adapterValidationStatus||"").toUpperCase();
+  if(validation==="LOGIN_REQUIRED"){
+    const verifiedAuthenticationTarget=Boolean(portal.authentication_entry_url)&&Boolean(portal.last_verified_at||portal.entry_links_verified_at);
+    return verifiedAuthenticationTarget
+      ?{eligible:true,code:null,loginValidationPending:true}
+      :{eligible:false,code:"PORTAL_NICHT_VALIDIERT"};
+  }
+  if(validation!=="PRODUCTION_VALIDATED")return {eligible:false,code:"PORTAL_NICHT_VALIDIERT"};
+  return {eligible:true,code:null};
+}
+export function tenderCredentialPortalEligibility(portal={}){
+  if(isTechnicalPublicationSource(portal))return {eligible:false,code:"PORTAL_DER_AUSSCHREIBUNG_NICHT_ERMITTELT"};
+  const capabilityDecision=capabilityTenderPortalEligibility(portal);
+  if(capabilityDecision)return capabilityDecision;
+  return credentialPortalEligibility(portal);
+}
 export function canonicalPortalUrl(value,domain,allowed=[]){let url;try{url=new URL(value)}catch{throw new Error("portal_url_invalid")}const host=url.hostname.toLowerCase(),valid=host===domain||allowed.map(x=>x.toLowerCase()).includes(host);if(url.protocol!=="https:"||!valid||forbiddenHost(host)||url.username||url.password)throw new Error("portal_domain_binding_failed");url.hash="";return url}
-export function publicCredential(record,{manage=false}={}){return {configured:Boolean(record),usernameMasked:manage?record?.username_masked||null:undefined,internalLabel:manage?record?.internal_label||null:undefined,mfaMethod:record?.mfa_method||null,validUntil:record?.valid_until||null,createdAt:record?.created_at||null,readOnly:record?true:null}}
+export function publicCredential(record,{manage=false}={}){return {configured:Boolean(record),usernameMasked:manage?record?.username_masked||null:undefined,internalLabel:manage?record?.internal_label||null:undefined,contactPerson:manage?record?.contact_person||null:undefined,notes:manage?record?.notes||null:undefined,mfaMethod:record?.mfa_method||null,mfaRequired:record?.mfa_required_state??null,registrationStatus:record?.registration_status||null,loginStatus:record?.login_status||null,lastManualCheckAt:record?.last_manual_check_at||null,validUntil:record?.valid_until||null,createdAt:record?.created_at||null,accountConfirmed:record?.account_confirmed===true,readOnly:record?!record.submission_capable:null,status:record?.status||null,accountType:record?.account_type||null,authorizedCapabilities:Array.isArray(record?.authorized_capabilities)?record.authorized_capabilities:[],boundHost:record?.bound_host||null}}
 export const portalAccessCapabilities=identity=>({manage:identity.permissions.includes("tender.admin")||identity.permissions.includes("tender.portal.manage"),view:identity.permissions.some(code=>["tender.admin","tender.portal.manage","tender.view_assigned","tender.view","tender.read"].includes(code))});
 const bodyText=async response=>String(await response.text()).slice(0,1_000_000);
 const decodeHtml=value=>String(value||"").replaceAll("&amp;","&").replaceAll("&quot;",'"').replaceAll("&#39;", "'").replaceAll("&lt;","<").replaceAll("&gt;",">");

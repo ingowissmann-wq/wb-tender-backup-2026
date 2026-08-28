@@ -1,0 +1,5 @@
+FROM wb-tender-real-operations:20260819-expiry-fail-closed.9
+COPY --chown=root:root deployment/patch-doe-authoritative-terminal.mjs /tmp/patch-doe-authoritative-terminal.mjs
+RUN node /tmp/patch-doe-authoritative-terminal.mjs /app/platform/source-ingestion.mjs \
+ && rm /tmp/patch-doe-authoritative-terminal.mjs \
+ && node --check /app/platform/source-ingestion.mjs

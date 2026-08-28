@@ -1,0 +1,4 @@
+FROM wb-tender-real-operations:20260821-portal-regions-completion-worker.29
+LABEL org.opencontainers.image.version="20260821-portal-regions-completion.30" org.opencontainers.image.revision="b925ce8a11703bf85795d68dc11f2a06b35e2cb624687941071548aa9772af4a" wb.release.scope="portal-login-no-document-continuation"
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs
+COPY --chown=root:root tests/portal-relogin-central-contract.test.mjs /app/tests/portal-relogin-central-contract.test.mjs

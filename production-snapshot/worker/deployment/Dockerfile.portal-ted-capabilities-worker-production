@@ -1,0 +1,10 @@
+FROM wb-tender-real-operations:20260820-portal-save-verify-exact-binding-worker.2
+ARG RELEASE_VERSION=20260820-portal-ted-capabilities-worker.1
+ARG SOURCE_FINGERPRINT
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      wb.release.scope="portal-ted-capability-worker-only" \
+      wb.release.base="sha256:8de23e6a25b3d315aaf074a1e34f5d9360680c93eacd603fc9f426d178e6368a"
+COPY --chown=root:root platform/portal-capability-policy.mjs /app/platform/portal-capability-policy.mjs
+COPY --chown=root:root platform/portal-credentials.mjs /app/platform/portal-credentials.mjs
+COPY --chown=root:root platform/autopilot-pipeline-worker.mjs /app/platform/autopilot-pipeline-worker.mjs

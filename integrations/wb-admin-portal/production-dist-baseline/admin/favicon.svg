@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="44.95 19.5 142 142" role="img" aria-label="WB Holding AG">
+  <g fill="#003B71">
+    <circle cx="106.5" cy="70.2" r="18.9"/>
+    <circle cx="147.5" cy="70.1" r="18.9"/>
+    <circle cx="106.5" cy="110.9" r="18.9"/>
+    <circle cx="147.5" cy="110.9" r="18.9"/>
+    <path d="M65.5,51.2V89c10.4,0,18.9-8.5,18.9-18.9C84.4,59.7,76,51.3,65.5,51.2z"/>
+    <path d="M65.5,92v37.8c10.4,0,18.9-8.5,18.9-18.9S76,92,65.5,92z"/>
+  </g>
+</svg>

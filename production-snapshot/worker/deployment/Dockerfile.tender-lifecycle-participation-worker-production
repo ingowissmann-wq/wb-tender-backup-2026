@@ -1,0 +1,10 @@
+FROM wb-tender-real-operations:20260820-portal-ted-capabilities-worker.1
+ARG RELEASE_VERSION=20260820-tender-lifecycle-livego-worker.14
+ARG SOURCE_FINGERPRINT
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      wb.release.scope="notice-lifecycle-participation-worker-guard" \
+      wb.release.base="sha256:385c73d811856e43aed45c3402918a890413f9a6f1fb2a68093be6824f833a91"
+ENV TENDER_RELEASE=tender-lifecycle-participation-20260820.14-livego
+COPY --chown=root:root platform/autopilot-pipeline-worker.mjs /app/platform/autopilot-pipeline-worker.mjs
+COPY --chown=root:root platform/verified-session-fanout.mjs /app/platform/verified-session-fanout.mjs

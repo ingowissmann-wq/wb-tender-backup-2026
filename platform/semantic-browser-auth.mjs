@@ -6,9 +6,28 @@ const hostsFor=portal=>new Set([portal.canonical_domain,...(portal.allowed_subdo
 const hostAllowed=(host,allowed)=>allowed.has(normalizeHost(host));
 const loginWords=/anmeld|login|sign\s*in|weiter|next|fortfahren|continue/i;
 const accountWords=/abmeld|logout|mein konto|my account|profil|account|organisation|organization/i;
-const mfaWords=/mfa|mehrfaktor|two.factor|2fa|authenticator|sicherheitscode|verification code|bestätigungscode|push.{0,20}bestätigen/i;
+// A generic mention of MFA (for example in help/footer text) is not a
+// challenge. Only an interactive code control or an explicit push approval
+// instruction may stop a correlated login as MFA_REQUIRED.
+export function authoritativeMfaChallenge({otpVisible=false,text="",html=""}={}){
+  if(otpVisible)return true;
+  const source=`${String(text)}\n${String(html)}`;
+  return /(?:bestätigen|genehmigen|approve|confirm).{0,100}(?:anmeldung|login|sign.?in|push).{0,100}(?:app|gerät|device|smartphone)/i.test(source)||
+    /(?:push.{0,40}(?:bestätigen|genehmigen|approve)|(?:authenticator|authentifizierungs).{0,60}(?:bestätigen|genehmigen))/i.test(source);
+}
 const failureWords=/falsch|ungültig|incorrect|invalid|gesperrt|locked|fehlgeschlagen|failed/i;
 const consentWords=/nur notwendige|ablehnen|reject|alle akzeptieren|akzeptieren|zustimmen|accept all|allow all|einverstanden/i;
+const maintenanceWords=/wartungsarbeiten|maintenance(?:\s+work|\s+window|\s+mode)?|vorübergehend(?:\s+technisch)?\s+nicht\s+verfügbar|temporarily\s+unavailable|service\s+unavailable/i;
+
+export function portalAvailabilityFailure({status=0,title="",text=""}={}){
+  const code=Number(status)||0,content=`${String(title)}\n${String(text)}`;
+  return code>=500||maintenanceWords.test(content);
+}
+
+export function portalNavigationFailure(error){
+  const message=String(error?.message||"");
+  return error?.name==="TimeoutError"||/net::ERR_(?:CONNECTION|NAME_NOT_RESOLVED|DNS|ADDRESS|SSL|TLS|CERT|HTTP2|TIMED_OUT|NETWORK_CHANGED|INTERNET_DISCONNECTED|PROXY_CONNECTION_FAILED)/i.test(message);
+}
 
 const visible=locator=>locator.first().isVisible().catch(()=>false);
 async function firstVisible(locators){for(const locator of locators)if(await visible(locator))return locator.first();return null}
@@ -30,13 +49,13 @@ async function semanticInput(page,kind){
   }
   return null;
 }
-async function clickSemantic(page,words=loginWords){for(const frame of page.frames()){const match=await firstVisible([frame.getByRole("button",{name:words}),frame.getByRole("link",{name:words}),frame.locator('button[type="submit"],input[type="submit"]')]);if(match){await Promise.allSettled([page.waitForLoadState("domcontentloaded",{timeout:15000}),match.click({timeout:10000})]);return true}}return false}
+async function clickSemantic(page,words=loginWords){for(const frame of page.frames()){const match=await firstVisible([frame.getByRole("button",{name:words}),frame.getByRole("link",{name:words}),frame.locator('button[type="submit"],input[type="submit"],input[type="image"]')]);if(match){await Promise.allSettled([page.waitForLoadState("domcontentloaded",{timeout:15000}),match.click({timeout:10000})]);return true}}return false}
 async function consent(page){for(const frame of page.frames()){const match=await firstVisible([frame.getByRole("button",{name:consentWords}),frame.getByRole("link",{name:consentWords})]);if(match){await match.click({timeout:5000}).catch(()=>{});return}}}
 async function bodyText(page){return String(await page.locator("body").innerText({timeout:5000}).catch(()=>"" )).slice(0,20000)}
 const sessionInvalidWords=/session.{0,25}(abgelaufen|expired)|sitzung.{0,25}abgelaufen|erneut.{0,20}anmeld/i;
 const authenticatedWords=/abmeld|logout|mein konto|profil|organisation|vergabeverfahren|vergabeunterlagen|bieterbereich|workflowopen|wf_evalink/i;
 const safeBrowserFailure=(error,phase)=>({
-  resultCode:error?.name==="TimeoutError"?"PORTAL_NICHT_ERREICHBAR":"TECHNISCHER_CONNECTORFEHLER",
+  resultCode:portalNavigationFailure(error)?"PORTAL_NICHT_ERREICHBAR":"TECHNISCHER_CONNECTORFEHLER",
   failurePhase:phase,
   failureClass:String(error?.name||"Error").slice(0,80),
   failureReason:String(error?.message||"browser operation failed").replace(/https?:\/\/[^\s]+/gi,"[portal-url]").slice(0,240)
@@ -102,7 +121,10 @@ export async function authenticatePortalWithBrowser({portal,credential,targetUrl
   let forbidden=false,phase="INITIAL_NAVIGATION";
   page.on("framenavigated",frame=>{if(frame===page.mainFrame()){try{const url=new URL(frame.url());if(url.protocol!=="about:"&&!hostAllowed(url.hostname,allowed))forbidden=true}catch{}}});
   try{
-    await page.goto(entry,{waitUntil:"domcontentloaded",timeout:timeoutMs});await consent(page);if(forbidden)return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};phase="LOGIN_FORM_DISCOVERY";
+    const navigation=await page.goto(entry,{waitUntil:"domcontentloaded",timeout:timeoutMs});await consent(page);if(forbidden)return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};
+    const initialText=await bodyText(page),initialTitle=await page.title().catch(()=>"");
+    if(portalAvailabilityFailure({status:navigation?.status(),title:initialTitle,text:initialText}))return {resultCode:"PORTAL_NICHT_ERREICHBAR",failurePhase:"INITIAL_NAVIGATION",failureReason:"Portal temporarily unavailable or under maintenance"};
+    phase="LOGIN_FORM_DISCOVERY";
     let username,password,portalSubmit=null;
     if(portal.adapter_id==="dtvp"){
       password=page.locator('input[type="password"]').first();
@@ -114,8 +136,11 @@ export async function authenticatePortalWithBrowser({portal,credential,targetUrl
     if(username){await username.fill(String(credential.username||""));password=await semanticInput(page,"password");if(!password){await clickSemantic(page);await page.waitForTimeout(750);await consent(page);password=await semanticInput(page,"password")}}
     if(!password)return {resultCode:"LOGIN_FORMULAR_GEAENDERT"};
     phase="CREDENTIAL_SUBMISSION";await password.fill(String(credential.password||""));if(portalSubmit)await Promise.all([page.waitForNavigation({waitUntil:"domcontentloaded",timeout:30000}).catch(()=>null),portalSubmit.click({timeout:10000,noWaitAfter:true}).catch(error=>{if(error?.name!=="TimeoutError")throw error})]);else await clickSemantic(page);await page.waitForTimeout(1200);await consent(page);if(forbidden)return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};
-    const text=await bodyText(page),otp=await firstVisible(page.frames().flatMap(frame=>[frame.locator('input[autocomplete="one-time-code"]'),frame.getByLabel(/code|tan|otp|authenticator/i)]));
-    if(otp||mfaWords.test(text))return {resultCode:"MFA_BESTÄTIGUNG_ERFORDERLICH",mfaUrl:page.url()};
+    const text=await bodyText(page),otp=await firstVisible(page.frames().flatMap(frame=>[
+      frame.locator('input[autocomplete="one-time-code"]'),
+      frame.locator('input[name*="otp" i],input[id*="otp" i],input[name*="mfa" i],input[id*="mfa" i],input[name*="tan" i],input[id*="tan" i],input[name*="verification-code" i],input[id*="verification-code" i]')
+    ])),html=await page.content().catch(()=>"");
+    if(authoritativeMfaChallenge({otpVisible:Boolean(otp),text,html}))return {resultCode:"MFA_BESTÄTIGUNG_ERFORDERLICH",mfaUrl:page.url()};
     if(failureWords.test(text)&&await semanticInput(page,"password"))return {resultCode:"BENUTZERNAME_ODER_PASSWORT_FALSCH"};
     const loginStill=Boolean(await semanticInput(page,"password")),accountVisible=accountWords.test(text);
     if(loginStill&&!accountVisible)return {resultCode:"BENUTZERNAME_ODER_PASSWORT_FALSCH"};

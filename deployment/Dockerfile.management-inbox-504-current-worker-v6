@@ -1,0 +1,6 @@
+FROM wb-tender-real-operations:20260821-management-inbox-504-current-worker.5
+LABEL org.opencontainers.image.version="20260821-management-inbox-504-current.6" \
+      org.opencontainers.image.revision="7c298fd7ee2351165c9c8f254a90b01cff14603b172ae43288d88aef2a9dfc98" \
+      wb.release.base="sha256:e9c975b1a814143c476c9f66c4aa140e3ff9f9bb09bf55a300f21423dd9f55a5" \
+      wb.release.scope="management-inbox-post-pagination-portal-binding"
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs

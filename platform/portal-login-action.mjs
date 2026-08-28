@@ -15,6 +15,7 @@ const nonAuthenticationBlockers = new Set([
   "PORTAL_UNREACHABLE",
   "ACCESS_DENIED",
   "DOCUMENT_NOT_FOUND",
+  "NO_BOUND_DOCUMENT_CONTEXT",
   "EXTERNAL_DOCUMENT_REQUEST_REQUIRED",
 ]);
 
@@ -59,6 +60,32 @@ export function portalLoginAction(
     "RELOGIN_REQUIRED_REVOKED",
   ].includes(sessionEffectiveStatus);
 
+  // A company-scoped, login-capable account with an unusable session must
+  // retain its recovery action even when the portal also exposes public
+  // documents. Public read-only access still applies when no account exists.
+  if (configured && !sessionValid && authenticationTargetConfigured) {
+    if (
+      accessStatus === "MFA_REQUIRED" ||
+      lastError === "MFA_BESTÄTIGUNG_ERFORDERLICH" ||
+      lastError === "MFA_REQUIRED"
+    ) return result("CONFIRM_MFA", "MFA bestätigen", "MFA_REQUIRED");
+    if (credentialFailureCodes.has(lastError))
+      return result("MANAGE_CREDENTIALS", "Zugangsdaten hinterlegen", lastError);
+    if (
+      ["SESSION_EXPIRED", "SESSION_MISSING", "LOGIN_REQUIRED"].includes(accessStatus) ||
+      sessionExpired
+    )
+      return result(
+        "START_LOGIN",
+        "Erneut anmelden",
+        sessionStatus === null ? "SESSION_MISSING" : "SESSION_EXPIRED",
+      );
+    if (accessStatus === "PORTAL_UNREACHABLE" || lastError === "PORTAL_NICHT_ERREICHBAR")
+      return result("START_LOGIN", "Erneut anmelden", "PORTAL_TEMPORARILY_UNAVAILABLE");
+    if (sessionEffectiveStatus !== null)
+      return result("START_LOGIN", "Erneut anmelden", "SESSION_FAILED");
+  }
+
   // Public document profiles do not acquire an authentication requirement
   // merely because an unrelated or historical session is missing/expired.
   // Opening the read-only tender page and refreshing documents are separate
@@ -67,7 +94,7 @@ export function portalLoginAction(
     return portalOpenAvailable
       ? result(
           "OPEN_PORTAL_READ_ONLY",
-          "Portal öffnen",
+          "Portalansicht öffnen",
           documentsComplete
             ? "PUBLIC_DOCUMENTS_COMPLETE"
             : "PUBLIC_DOCUMENT_ACCESS",
@@ -84,7 +111,7 @@ export function portalLoginAction(
   // A current, verified session wins over stale portal-level diagnostics.
   if (sessionValid)
     return portalOpenAvailable
-      ? result("OPEN_PORTAL_READ_ONLY", "Portal öffnen", "SESSION_VALID")
+      ? result("OPEN_PORTAL_READ_ONLY", "Portalansicht öffnen", "SESSION_VALID")
       : result("NONE", null, "SESSION_VALID");
 
   if (!authenticationTargetConfigured)
@@ -108,9 +135,10 @@ export function portalLoginAction(
       lastError,
     );
 
-  if (nonAuthenticationBlockers.has(accessStatus))
-    return result("NONE", null, accessStatus);
-
+  // An absent, expired, revoked or otherwise unusable session is an
+  // authentication fact and must win over stale document diagnostics.  The
+  // latter frequently remains DOCUMENT_NOT_FOUND/ACCESS_DENIED from the last
+  // failed read and previously hid the only recovery action.
   if (accessStatus === "SESSION_EXPIRED" || sessionExpired)
     return sessionStatus === null
       ? result("START_LOGIN", "Am Portal anmelden", "SESSION_MISSING")
@@ -118,6 +146,9 @@ export function portalLoginAction(
 
   if (sessionEffectiveStatus !== null && !sessionValid)
     return result("START_LOGIN", "Erneut anmelden", "SESSION_FAILED");
+
+  if (nonAuthenticationBlockers.has(accessStatus))
+    return result("NONE", null, accessStatus);
 
   if (
     accessStatus === "LOGIN_FAILED" ||

@@ -1,0 +1,28 @@
+FROM wb-tender-real-operations:20260820-portal-navigation.1
+
+ARG RELEASE_VERSION=20260820-portal-management.2
+ARG SOURCE_FINGERPRINT
+
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      org.opencontainers.image.base.digest="sha256:4e1b3947d291584865a096cc327713019fa5e129dd7dd9b79a5a93d9fb660b65" \
+      org.opencontainers.image.description="Company-scoped portal search, credential status and persistent portal-job polling"
+
+WORKDIR /app
+COPY --chown=root:root platform/portal-navigation.mjs /app/platform/portal-navigation.mjs
+COPY --chown=root:root platform/portal-management-search.mjs /app/platform/portal-management-search.mjs
+COPY --chown=root:root platform/server.mjs /app/platform/server.mjs
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs
+COPY --chown=root:root platform/autopilot-pipeline-worker.mjs /app/platform/autopilot-pipeline-worker.mjs
+COPY --chown=root:root platform/assets/ui.js /app/platform/assets/ui.js
+COPY --chown=root:root platform/assets/inbox-regions.js /app/platform/assets/inbox-regions.js
+COPY --chown=root:root platform/assets/autopilot-navigation.js /app/platform/assets/autopilot-navigation.js
+COPY --chown=root:root platform/assets/autopilot-navigation.css /app/platform/assets/autopilot-navigation.css
+COPY --chown=root:root tests/portal-navigation.test.mjs /app/tests/portal-navigation.test.mjs
+COPY --chown=root:root tests/portal-management-search.test.mjs /app/tests/portal-management-search.test.mjs
+COPY --chown=root:root scripts/portal-navigation-artifact-canary.mjs /app/scripts/portal-navigation-artifact-canary.mjs
+COPY --chown=root:root scripts/portal-phantom-access-correction.mjs /app/scripts/portal-phantom-access-correction.mjs
+
+# This local line belongs to a separate, unshipped SaaS change and is absent
+# from the active production base. Keep the candidate byte-scoped to this fix.
+RUN sed -i '/^  upgradeUrl: .*SAAS_UPGRADE_URL/d' /app/platform/server.mjs

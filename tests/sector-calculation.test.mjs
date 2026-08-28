@@ -10,7 +10,18 @@ test("authoritative productive hours do not require a redundant workday input",(
   });
   assert.equal(result.status,"CALCULATED");
   assert.equal(result.productiveHours,862.02);
-  assert.ok(result.totalPrice>0);
+  assert.deepEqual({
+    directWages:result.directWages, employerOnCosts:result.employerOnCosts,
+    holidayReserve:result.holidayReserve, sicknessReserve:result.sicknessReserve,
+    overhead:result.overhead, risk:result.risk, db1:result.db1, db2:result.db2,
+    db3:result.db3, profit:result.profit, hourlyRate:result.hourlyRate,
+    annualPrice:result.annualPrice, totalPrice:result.totalPrice,
+  },{
+    directWages:12283.75, employerOnCosts:2456.75, holidayReserve:1228.37,
+    sicknessReserve:614.19, overhead:1326.64, risk:537.29, db1:4677.39,
+    db2:2834.83, db3:970.89, profit:970.89, hourlyRate:22.53,
+    annualPrice:4854.47, totalPrice:19417.89,
+  });
 });
 
 test("missing productive hours remains a hard calculation blocker",()=>{
@@ -24,4 +35,6 @@ test("security non-personnel parameters are company values and use the documente
   assert.equal(result.status,"CALCULATED");
   assert.equal(result.securityCostParameters.contractWeeks,156);
   assert.equal(result.securityNonPersonnelCosts,3840);
+  assert.deepEqual({directWages:result.directWages,db1:result.db1,db2:result.db2,totalPrice:result.totalPrice,hourlyRate:result.hourlyRate},
+    {directWages:283500,db1:3840,db2:3840,totalPrice:287340,hourlyRate:20.27});
 });

@@ -1,0 +1,12 @@
+FROM wb-tender-real-operations:20260820-company-profile-completion.3
+ARG RELEASE_VERSION=20260820-portal-save-verify-exact-binding.2
+ARG SOURCE_FINGERPRINT=f307eb36ed65b21512cb20bc23887a8d2bd41f371ddead3ed70eafa79b23f51c
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      wb.release.scope="portal-save-verify-exact-binding-only" \
+      wb.release.base="sha256:86bf26028e78da31c0720e7def495f9b5244f893fa3a0f04cf6321c522fa82c4"
+COPY --chown=root:root platform/portal-credentials.mjs /app/platform/portal-credentials.mjs
+COPY --chown=root:root platform/portal-navigation.mjs /app/platform/portal-navigation.mjs
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs
+COPY --chown=root:root platform/assets/autopilot-navigation.js /app/platform/assets/autopilot-navigation.js
+COPY --chown=root:root platform/autopilot-pipeline-worker.mjs /app/platform/autopilot-pipeline-worker.mjs

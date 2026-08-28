@@ -1,0 +1,12 @@
+FROM wb-phase4-platform:20260816-iam-mfa-network-roaming.1
+USER root
+COPY integrations/wb-admin-portal/candidate/admin-login-mfa-enrollment-patch.mjs /tmp/admin-login-mfa-enrollment-patch.mjs
+RUN node /tmp/admin-login-mfa-enrollment-patch.mjs /app \
+ && rm /tmp/admin-login-mfa-enrollment-patch.mjs
+ENV EXTERNAL_SUBMISSION_ENABLED=false \
+    WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false
+LABEL org.opencontainers.image.title="WB Admin mandatory MFA enrollment fix" \
+      wb.release.scope="admin-login-mandatory-mfa-enrollment-only" \
+      wb.release.base="sha256:9641216275d8c93908aa7d02b487d98a9be858553a5e9754b26794882cc20c57" \
+      wb.rollback.image="wb-phase4-platform:20260816-iam-mfa-network-roaming.1"
+USER node

@@ -1,0 +1,31 @@
+import fs from "node:fs";
+import { chromium } from "playwright";
+const proxyIp=process.env.GREEN_PROXY_IP,session=JSON.parse(fs.readFileSync(process.env.SESSION_FILE||"/tmp/green-admin-session.json","utf8"));
+if(!proxyIp)throw new Error("GREEN_PROXY_IP required");
+const tender="411fb40f-cd2f-42e6-9d18-534c1c809261",company="15c3c602-aa51-4dd4-adc1-3586dc82e523",portal="7ea3823b-1e5c-4696-9dda-0303427544d0",lot="LOT-0001",title="Deutschland – Gebäudereinigung – Unterhaltsreinigung Stadt Holzgerlingen";
+const route=`https://admin.wb-holding.ag/admin/ausschreibungen/autopilot/detail?tender=${tender}&company=${company}&lot=${lot}`;
+const browser=await chromium.launch({headless:true,executablePath:"/usr/bin/chromium-browser",args:["--no-sandbox",`--host-resolver-rules=MAP admin.wb-holding.ag ${proxyIp},EXCLUDE localhost`]});
+const network=[],consoleErrors=[];
+try{
+ const context=await browser.newContext({ignoreHTTPSErrors:true,locale:"de-DE",viewport:{width:1440,height:1000}});
+ await context.addCookies([{name:"wb_session",value:session.token,url:"https://admin.wb-holding.ag",secure:true,httpOnly:true,sameSite:"Lax"},{name:"wb_csrf",value:session.csrf,url:"https://admin.wb-holding.ag",secure:true,sameSite:"Lax"}]);
+ const page=await context.newPage();
+ page.on("console",message=>{if(message.type()==="error")consoleErrors.push(message.text().slice(0,240))});
+ page.on("response",response=>{const url=new URL(response.url());if(url.pathname.includes("login-continuations"))network.push({method:response.request().method(),path:url.pathname,status:response.status(),requestId:response.headers()["x-request-id"]||null})});
+ const response=await page.goto(route,{waitUntil:"networkidle",timeout:60000});
+ if(response?.status()!==200||page.url().includes("/login"))throw new Error(`authenticated_navigation_failed:${response?.status()}:${page.url()}`);
+ const card=page.locator(`[data-portal-card="${portal}"]`),button=card.locator(`[data-login-portal="${portal}"]`);await button.waitFor({state:"visible",timeout:15000});
+ const body=await page.locator("body").innerText();for(const expected of [title,"WB-Cleaning GmbH","ACTIVE","DTVP","Detailunterlagen und Portalzugang"])if(!body.includes(expected))throw new Error(`missing_truth:${expected}`);
+ if((await button.textContent())?.trim()!=="Erneut anmelden")throw new Error(`wrong_initial_label:${await button.textContent()}`);
+ const box=await button.boundingBox();if(!box||box.width<1||box.height<1)throw new Error("button_not_clickable");
+ await button.click();
+ await page.waitForFunction(({portal})=>document.querySelector(`[data-login-portal="${portal}"]`)?.textContent?.includes("Anmeldung abgeschlossen"),{portal},{timeout:15000});
+ const ready=(await button.textContent())?.trim();
+ await button.click();
+ const immediate=(await button.textContent())?.trim(),busy=await button.getAttribute("aria-busy");
+ if(immediate!=="Verbindung wird geprüft …"||busy!=="true")throw new Error(`missing_immediate_feedback:${immediate}:${busy}`);
+ await page.waitForTimeout(1000);
+ console.log(JSON.stringify({passed:true,route,title,company:"WB-Cleaning GmbH",active:true,portal:"DTVP · www.dtvp.de",section:"Detailunterlagen und Portalzugang",initialAction:"Erneut anmelden",readyAction:ready,immediateAction:immediate,ariaBusy:busy,network,consoleErrors}));
+ if(consoleErrors.length)process.exitCode=1;
+ await context.close();
+}finally{await browser.close()}

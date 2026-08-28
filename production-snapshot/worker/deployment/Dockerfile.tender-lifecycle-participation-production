@@ -1,0 +1,29 @@
+FROM wb-tender-real-operations:20260820-portal-ted-capabilities.1
+ARG RELEASE_VERSION=20260820-tender-lifecycle-livego.14
+ARG SOURCE_FINGERPRINT
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      wb.release.scope="notice-lifecycle-and-participation-orchestration" \
+      wb.release.base="sha256:400350a280e7bfbb69af098e14670f2aa7ca160bb73251b8ca2ec0dd453e70ce"
+ENV TENDER_RELEASE=tender-lifecycle-participation-20260820.14-livego
+COPY --chown=root:root platform/notice-lifecycle.mjs /app/platform/notice-lifecycle.mjs
+COPY --chown=root:root platform/tender-deadlines.mjs /app/platform/tender-deadlines.mjs
+COPY --chown=root:root platform/lifecycle-plan.mjs /app/platform/lifecycle-plan.mjs
+COPY --chown=root:root platform/participation-readiness.mjs /app/platform/participation-readiness.mjs
+COPY --chown=root:root platform/source-ingestion.mjs /app/platform/source-ingestion.mjs
+COPY --chown=root:root platform/inbox-pipeline.mjs /app/platform/inbox-pipeline.mjs
+COPY --chown=root:root platform/region-recalculation-worker.mjs /app/platform/region-recalculation-worker.mjs
+COPY --chown=root:root platform/verified-session-fanout.mjs /app/platform/verified-session-fanout.mjs
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs
+COPY --chown=root:root platform/server.mjs /app/platform/server.mjs
+COPY --chown=root:root platform/assets/autopilot-navigation.js /app/platform/assets/autopilot-navigation.js
+COPY --chown=root:root platform/assets/inbox-regions.js /app/platform/assets/inbox-regions.js
+COPY --chown=root:root migrations/104_notice_lifecycle_participation.sql /app/migrations/104_notice_lifecycle_participation.sql
+COPY --chown=root:root migrations/104_notice_lifecycle_participation.down.sql /app/migrations/104_notice_lifecycle_participation.down.sql
+COPY --chown=root:root scripts/reclassify-notice-lifecycle.mjs /app/scripts/reclassify-notice-lifecycle.mjs
+COPY --chown=root:root scripts/rollback-notice-lifecycle-correction.mjs /app/scripts/rollback-notice-lifecycle-correction.mjs
+COPY --chown=root:root scripts/lifecycle-release-gate-readonly.mjs /app/scripts/lifecycle-release-gate-readonly.mjs
+COPY --chown=root:root scripts/fetch-ted-deadline-evidence.mjs /app/scripts/fetch-ted-deadline-evidence.mjs
+COPY --chown=root:root scripts/notice-relation-evidence-20260820.json /app/scripts/notice-relation-evidence-20260820.json
+COPY --chown=root:root deployment/wb-tender-ingestion-entrypoint /usr/local/bin/wb-tender-ingestion-entrypoint
+RUN chmod 0755 /usr/local/bin/wb-tender-ingestion-entrypoint

@@ -1,0 +1,9 @@
+FROM wb-tender-real-operations:20260821-management-inbox-504-current-worker.13
+LABEL org.opencontainers.image.version="20260821-management-inbox-504-current.14" \
+      org.opencontainers.image.revision="cb4c3a4f44ceedbd5bf1c8ab430fd843e4b36b07c46667449df8425d9a964add" \
+      wb.release.base="sha256:d7c940dfd94b3400c2fbbf00f345ce97f1ca291be148a51396a32d69424f68f0" \
+      wb.release.scope="management-inbox-compact-current-filter"
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs
+COPY --chown=root:root tests/management-inbox-pagination.test.mjs /app/tests/management-inbox-pagination.test.mjs
+COPY --chown=root:root migrations/111_management_inbox_current_id_covering_lookup.sql /app/migrations/111_management_inbox_current_id_covering_lookup.sql
+COPY --chown=root:root migrations/112_management_inbox_current_compact_covering_lookup.sql /app/migrations/112_management_inbox_current_compact_covering_lookup.sql

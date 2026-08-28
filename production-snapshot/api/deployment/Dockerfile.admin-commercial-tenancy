@@ -1,0 +1,17 @@
+FROM wb-phase4-platform:20260816-iam-mfa-network-roaming.1
+USER root
+COPY integrations/wb-admin-portal/candidate/commercial-tenancy.js /app/apps/api/dist/commercial-tenancy.js
+COPY integrations/wb-admin-portal/candidate/module-navigation.js /app/apps/admin/dist/module-navigation.js
+COPY integrations/wb-admin-portal/candidate/db.js /tmp/admin-commercial-tenancy-db.js
+COPY deployment/admin-commercial-tenancy-patch.mjs /tmp/admin-commercial-tenancy-patch.mjs
+RUN node /tmp/admin-commercial-tenancy-patch.mjs /app /tmp/admin-commercial-tenancy-db.js \
+ && rm -f /tmp/admin-commercial-tenancy-db.js /tmp/admin-commercial-tenancy-patch.mjs
+ENV WB_ADMIN_TENANCY_ENFORCED=false \
+    WB_ADMIN_SAAS_ENABLED=false \
+    WB_ADMIN_TENANT_FILE_STORAGE_ENABLED=false \
+    EXTERNAL_SUBMISSION_ENABLED=false \
+    WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false
+LABEL org.opencontainers.image.title="WB real Admin portal commercial tenancy candidate" \
+      wb.release.scope="candidate-only-real-admin-tenant-module-integration" \
+      wb.release.base="sha256:9641216275d8c93908aa7d02b487d98a9be858553a5e9754b26794882cc20c57"
+USER node

@@ -1,0 +1,13 @@
+FROM wb-tender-real-operations:20260821-dtvp-company-metadata.18
+LABEL org.opencontainers.image.version="20260821-portal-regions-completion.19" \
+      org.opencontainers.image.revision="fe1c74e08d97a4738a6905fc376763dc3ed8d891ddb42646e1412da179b5b324" \
+      wb.release.base="sha256:da89f10e565bb0acf15295b09263517d7a22fd840253bf241de5b560d1f21e68" \
+      wb.release.scope="data-driven-portal-login-submission-preflight-versioned-regions"
+COPY --chown=root:root platform/portal-login-action.mjs /app/platform/portal-login-action.mjs
+COPY --chown=root:root platform/semantic-browser-auth.mjs /app/platform/semantic-browser-auth.mjs
+COPY --chown=root:root platform/assets/autopilot-navigation.js /app/platform/assets/autopilot-navigation.js
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs
+COPY --chown=root:root migrations/114_portal_login_contract_and_submission_validation.sql /app/migrations/114_portal_login_contract_and_submission_validation.sql
+COPY --chown=root:root migrations/115_versioned_region_zone_management.sql /app/migrations/115_versioned_region_zone_management.sql
+COPY --chown=root:root tests/portal-relogin-central-contract.test.mjs /app/tests/portal-relogin-central-contract.test.mjs
+COPY --chown=root:root tests/portal-region-completion-contract.test.mjs /app/tests/portal-region-completion-contract.test.mjs

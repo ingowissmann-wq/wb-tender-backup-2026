@@ -1,0 +1,7 @@
+FROM wb-tender-real-operations:20260821-portal-regions-completion.19
+LABEL org.opencontainers.image.version="20260821-portal-regions-completion.20" \
+      org.opencontainers.image.revision="1bc56203d054cc0ab07d8e42f252d36e31636074345cd2314a80afe78ea2c9a1" \
+      wb.release.base="sha256:68b6667963bfa611c190c067d22ef89f5583332d89a9a2190e2e2047e0708235" \
+      wb.release.scope="complete-canonical-portal-connector-alignment"
+COPY --chown=root:root migrations/116_remaining_portal_connector_contracts.sql /app/migrations/116_remaining_portal_connector_contracts.sql
+COPY --chown=root:root tests/portal-region-completion-contract.test.mjs /app/tests/portal-region-completion-contract.test.mjs

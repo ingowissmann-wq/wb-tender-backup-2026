@@ -1,0 +1,12 @@
+FROM wb-tender-real-operations@sha256:337e53835741c27c095a5876811682476b4045eef3e6f71ddeefe556f33e3133
+
+ARG RELEASE_VERSION=20260820-portal-worker-status.1
+ARG SOURCE_FINGERPRINT
+
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      org.opencontainers.image.base.digest="sha256:337e53835741c27c095a5876811682476b4045eef3e6f71ddeefe556f33e3133" \
+      org.opencontainers.image.description="Exact portal session read-after-write verification only"
+
+WORKDIR /app
+COPY --chown=root:root deployment/portal-worker-production-base.mjs /app/platform/autopilot-pipeline-worker.mjs

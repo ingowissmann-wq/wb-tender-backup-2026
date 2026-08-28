@@ -1,0 +1,36 @@
+FROM wb-tender-real-operations:20260817-public-ingestion-visibility-7
+
+LABEL org.opencontainers.image.title="WB SaaS Stripe webhook isolated candidate" \
+      org.opencontainers.image.description="Webhook-only fail-closed NEW Green runtime; no full SaaS surface and no Tender submission"
+
+ENV EXTERNAL_SUBMISSION_ENABLED=false \
+    WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false \
+    WB_TENDER_SAAS_ENABLED=false \
+    PORT=4240
+
+WORKDIR /app
+
+COPY --chown=node:node node_modules/fastify-raw-body/ node_modules/fastify-raw-body/
+COPY --chown=node:node node_modules/raw-body/ node_modules/raw-body/
+COPY --chown=node:node node_modules/bytes/ node_modules/bytes/
+COPY --chown=node:node node_modules/http-errors/ node_modules/http-errors/
+COPY --chown=node:node node_modules/depd/ node_modules/depd/
+COPY --chown=node:node node_modules/setprototypeof/ node_modules/setprototypeof/
+COPY --chown=node:node node_modules/statuses/ node_modules/statuses/
+COPY --chown=node:node node_modules/toidentifier/ node_modules/toidentifier/
+COPY --chown=node:node node_modules/unpipe/ node_modules/unpipe/
+COPY --chown=node:node node_modules/iconv-lite/ node_modules/iconv-lite/
+COPY --chown=node:node node_modules/inherits/ node_modules/inherits/
+COPY --chown=node:node node_modules/nodemailer/ node_modules/nodemailer/
+COPY --chown=node:node platform/saas-adapters.mjs platform/saas-adapters.mjs
+COPY --chown=node:node platform/saas-catalog.mjs platform/saas-catalog.mjs
+COPY --chown=node:node platform/saas-platform.mjs platform/saas-platform.mjs
+COPY --chown=node:node platform/tenant-context.mjs platform/tenant-context.mjs
+COPY --chown=node:node deployment/saas-webhook-candidate.mjs deployment/saas-webhook-candidate.mjs
+
+USER node
+EXPOSE 4240
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:4240/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+
+ENTRYPOINT ["node", "deployment/saas-webhook-candidate.mjs"]

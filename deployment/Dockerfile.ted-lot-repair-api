@@ -1,0 +1,20 @@
+ARG BASE_IMAGE=wb-tender-real-operations:20260821-external-submission-livego.5
+FROM ${BASE_IMAGE}
+ARG RELEASE_VERSION
+ARG SOURCE_FINGERPRINT
+LABEL org.opencontainers.image.title="WB Tender TED lot document calculation repair API" \
+      org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      wb.tender.change.scope="ted-lot-document-enrichment-calculation"
+COPY --chown=root:root platform/ted-notice-context.mjs /app/platform/ted-notice-context.mjs
+COPY --chown=root:root platform/enrichment-core.mjs /app/platform/enrichment-core.mjs
+COPY --chown=root:root platform/tender-link-evidence.mjs /app/platform/tender-link-evidence.mjs
+COPY --chown=root:root platform/portal-evidence.mjs /app/platform/portal-evidence.mjs
+COPY --chown=root:root platform/portal-navigation.mjs /app/platform/portal-navigation.mjs
+COPY --chown=root:root platform/source-ingestion.mjs /app/platform/source-ingestion.mjs
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs
+COPY --chown=root:root platform/autopilot-pipeline-worker.mjs /app/platform/autopilot-pipeline-worker.mjs
+COPY --chown=root:root platform/assets/inbox-regions.js /app/platform/assets/inbox-regions.js
+COPY --chown=root:root platform/assets/autopilot-navigation.js /app/platform/assets/autopilot-navigation.js
+COPY --chown=root:root scripts/backfill-tender-context.mjs /app/scripts/backfill-tender-context.mjs
+COPY --chown=root:root scripts/backfill-ted-portal-evidence.mjs /app/scripts/backfill-ted-portal-evidence.mjs

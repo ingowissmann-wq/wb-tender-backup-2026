@@ -1,0 +1,24 @@
+[
+  {
+    "sourceCode": "TED",
+    "externalId": "574224-2026",
+    "noticeType": "can-standard",
+    "noticeSubtype": "29",
+    "formType": "result",
+    "procedureIdentifier": "f020869e-5eed-4c0f-84c7-f095dc115b25",
+    "previousNoticeIds": ["377489-2026"],
+    "sourceUrl": "https://ted.europa.eu/en/notice/574224-2026/xml",
+    "verifiedAt": "2026-08-20T12:00:00Z"
+  },
+  {
+    "sourceCode": "TED",
+    "externalId": "377489-2026",
+    "noticeType": "cn-standard",
+    "noticeSubtype": "16",
+    "formType": "competition",
+    "procedureIdentifier": "f020869e-5eed-4c0f-84c7-f095dc115b25",
+    "previousNoticeIds": [],
+    "sourceUrl": "https://ted.europa.eu/en/notice/377489-2026/xml",
+    "verifiedAt": "2026-08-20T12:00:00Z"
+  }
+]

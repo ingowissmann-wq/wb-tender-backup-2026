@@ -19,7 +19,8 @@ export async function enqueueVerifiedSessionFanout(pool,sessionId,{client:provid
         tender_version.id tender_version_id,enrichment.id enrichment_version_id,tender.notice_number notice_id
       FROM tender.current_service_relevance relevance
       JOIN tender.tenders tender ON tender.id=relevance.tender_id AND tender.data_class='PUBLIC_REAL'
-        AND (tender.offer_deadline IS NULL OR tender.offer_deadline>now())
+        AND tender.source_lifecycle_status='ACTIVE' AND tender.participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE')
+        AND EXISTS(SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=tender.id AND eligible.lot_key=coalesce(relevance.lot_key,''))
       JOIN LATERAL(SELECT version.id FROM tender.tender_versions version WHERE version.tender_id=tender.id ORDER BY version.version DESC LIMIT 1)tender_version ON true
       JOIN LATERAL(SELECT version.id FROM tender.enrichment_versions version WHERE version.tender_id=tender.id AND version.historical=false ORDER BY version.version DESC LIMIT 1)enrichment ON true
       WHERE relevance.company_id=$2 AND relevance.relevance_status='RELEVANT' AND relevance.service_scope_gate='PASSED'

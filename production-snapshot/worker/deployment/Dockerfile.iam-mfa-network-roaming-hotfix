@@ -1,0 +1,10 @@
+FROM wb-phase4-platform:iam-user-create-20260811-canary
+USER root
+COPY deployment/iam-mfa-network-roaming-hotfix.mjs /tmp/iam-mfa-network-roaming-hotfix.mjs
+RUN node /tmp/iam-mfa-network-roaming-hotfix.mjs \
+ && rm /tmp/iam-mfa-network-roaming-hotfix.mjs
+USER node
+LABEL org.opencontainers.image.title="WB Phase4 IAM MFA network-roaming hotfix" \
+      org.opencontainers.image.base.name="wb-phase4-platform:iam-user-create-20260811-canary" \
+      wb.release.scope="iam-mfa-network-roaming-only" \
+      wb.rollback.image="wb-phase4-platform:iam-user-create-20260811-canary"

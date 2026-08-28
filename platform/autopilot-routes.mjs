@@ -51,10 +51,20 @@ import {
   decryptSecret,
   encryptSecret,
   maskUsername,
+  canonicalPortalMetadataStatus,
   portalAccessCapabilities,
   publicCredential,
+  credentialStateFingerprint,
+  credentialPortalEligibility,
+  credentialAccountEligibility,
+  credentialJobEligibility,
+  portalCatalogProfile,
+  tenderCredentialPortalEligibility,
+  isTechnicalPublicationSource,
+  portalCredentialJobKey,
   testReadOnlyPortal,
 } from "./portal-credentials.mjs";
+import {withTedServiceCatalog} from "./portal-capability-policy.mjs";
 import { portalLoginAction } from "./portal-login-action.mjs";
 import { PIPELINE_SCHEMA_VERSION, PIPELINE_STEPS } from "./canonical-truth.mjs";
 import { adapterCoverageMatrix } from "./portal-adapter-catalog.mjs";
@@ -77,13 +87,18 @@ import {
 } from "./submission-framework.mjs";
 import { submissionAdapters } from "./submission-adapters.mjs";
 import {
+  effectiveRequiredDocumentStatus,
   inspectUploadedDocument,
+  isRequiredDocumentBlocker,
+  isRequiredDocumentMissing,
+  materiallyEditedPdfWorkingCopy,
   requirementLabel,
   submissionDocumentsComplete,
 } from "./required-documents.mjs";
 import { inspectSignedPdf, prepareSignatureCopy } from "./signature-workbench.mjs";
 import { scanBuffer, scannerHealth } from "./malware-scanner.mjs";
 import {
+  classifyRequirementEvidence,
   discoverSourceRequirements,
   evaluatePackageReadiness,
   explicitDocumentLotKeys,
@@ -98,6 +113,8 @@ import { mayView } from "./auth.mjs";
 import { enqueueVerifiedSessionFanout } from "./verified-session-fanout.mjs";
 import { deriveDocumentWorkflowTruth } from "./document-workflow-truth.mjs";
 import { hasExactOriginalFormProvenance, resolveRequiredOriginalForm, safeOriginalFilename } from "./required-form-mapping.mjs";
+import { fillPdfAcroForm, inspectPdfAcroForm } from "./required-pdf-form.mjs";
+import { inspectPdfForOverlay, renderPdfOverlays, summarizePdfOverlays } from "./required-pdf-overlay.mjs";
 import { resolveRequiredSourceDocument } from "./required-source-mapping.mjs";
 import { saveFavorite } from "./favorites.mjs";
 import { decorateSubmissionBlockers } from "./submission-blocker-actions.mjs";
@@ -108,11 +125,26 @@ import { buildDocumentWorkbench, documentInScope } from "./document-workbench.mj
 import { capabilityState, PRODUCT_BOUNDARY, readinessGate } from "./product-readiness.mjs";
 import { canonicalPackageManifest, monitoringEventPresentation, normalizeInboundEvent } from "./submission-orchestrator.mjs";
 import { authorizeBindingReleaseApproval, effectiveBindingRelease, validateBindingReleaseRequest } from "./binding-action-release.mjs";
-import { requireRegisteredTenderPortalScope } from "./registered-portal-scope.mjs";
+import { registeredTenderPortalScope, requireRegisteredTenderPortalScope } from "./registered-portal-scope.mjs";
+import { loadTenderLinkEvidence, safeExternalHttpsUrl } from "./tender-link-evidence.mjs";
+import {
+  PORTAL_NAVIGATION_RELEASE,
+  decoratePortalNavigation,
+  portalNavigationHref,
+  safePortalReturnTo,
+  validPortalNavigationUuid,
+} from "./portal-navigation.mjs";
+import {
+  canonicalPortalAccessStatus,
+  searchPortalResults,
+} from "./portal-management-search.mjs";
+import { evaluateProfile, profileFieldByKey, profileFieldDefinitions, profileFingerprint, profileSourceTypeLabels, setProfileField } from "./company-profile-completion.mjs";
+import { buildParticipationReadiness } from "./participation-readiness.mjs";
+import { resolveLotChoice } from "./ted-notice-context.mjs";
 
 export function registerAutopilotRoutes(
   app,
-  { pool, requirePermission, csrf, visibleTender },
+  { pool, requirePermission, csrf, visibleTender, scanDocument = scanBuffer },
 ) {
   const read = requirePermission("tender.view_assigned");
   const validUuid = value => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value||""));
@@ -125,7 +157,10 @@ export function registerAutopilotRoutes(
   const accessibleCompanies = async (identity) =>
     (
       await pool.query(
-        "SELECT company_id,legal_name,COALESCE(sector_slug,technical_key) service_line,sector_slug FROM tender.enterprise_company_links ORDER BY legal_name",
+        `SELECT company.company_id,company.legal_name,company.sector_slug,scope.tenant_id,scope.canonical_service,scope.profile_id,scope.active_region_version_id,
+          CASE scope.canonical_service WHEN 'facility_management' THEN 'facility-management' WHEN 'emergency_services' THEN 'emergency-services' ELSE scope.canonical_service END service_line
+         FROM tender.enterprise_company_links company JOIN tender.configuration_scopes scope ON scope.company_id=company.company_id AND scope.profile_id=company.tender_profile_id
+         WHERE company.active=true ORDER BY company.legal_name`,
       )
     ).rows.filter(
       (row) =>
@@ -134,6 +169,27 @@ export function registerAutopilotRoutes(
     );
   const requireRegisteredScope = (reply, tenderId, companyId) =>
     requireRegisteredTenderPortalScope(pool, reply, { tenderId, companyId });
+  const resolveDocumentScope = async (reply, tenderId, companyId) => {
+    const source = (await pool.query(`SELECT t.source_code,EXISTS(
+      SELECT 1 FROM tender.tender_external_links link
+      WHERE link.tender_id=t.id AND link.public_access=true
+        AND link.role IN('NOTICE','NOTICE_VIEW','PUBLIC_DOCUMENT','PROCUREMENT_DOCUMENT')
+        AND link.verification_status IN('DISCOVERED','HTTP_VERIFIED')) has_public_documents
+      FROM tender.tenders t WHERE t.id=$1`, [tenderId])).rows[0];
+    if (source?.source_code === "TED" && source.has_public_documents)
+      return { publicSource: true, portal_id: null, credential_id: null };
+    return requireRegisteredScope(reply, tenderId, companyId);
+  };
+  const requireParticipationEligible = async (reply,tenderId,lotKey) => {
+    const row=(await pool.query("SELECT id,source_lifecycle_status,participation_status,participation_block_reason,notice_classification,offer_deadline FROM tender.tenders WHERE id=$1",[tenderId])).rows[0];
+    if(!row){reply.code(404).send({error:"tender_not_found"});return null}
+    const normalizedLot=String(lotKey||"").trim();
+    const lot=normalizedLot?(await pool.query("SELECT lot_key,lifecycle_status,participation_status,participation_block_reason,offer_deadline FROM tender.tender_lot_lifecycles WHERE tender_id=$1 AND lot_key=$2 AND is_current",[tenderId,normalizedLot])).rows[0]:null;
+    if(row.source_lifecycle_status!=="ACTIVE"||!['ELIGIBLE','PARTIALLY_ELIGIBLE'].includes(row.participation_status)||!lot||lot.lifecycle_status!=="ACTIVE"||lot.participation_status!=="ELIGIBLE"||!lot.offer_deadline||new Date(lot.offer_deadline)<=new Date()){
+      reply.code(409).send({error:row.participation_block_reason||"TENDER_NOT_PARTICIPATION_ELIGIBLE",message:"Dieses Verfahren ist nicht für eine Teilnahmeaktion freigegeben.",noticeClassification:row.notice_classification,lifecycle:row.source_lifecycle_status,nextAction:"VERFAHRENSHISTORIE_ANZEIGEN"});return null
+    }
+    return {...row,lot_key:lot.lot_key,lot_offer_deadline:lot.offer_deadline};
+  };
   const requireQueryCompanyScope = async (req, reply, tenderId) => {
     const companies = await accessibleCompanies(req.identity);
     const company = companies.find(
@@ -209,7 +265,7 @@ export function registerAutopilotRoutes(
     };
   });
   const requiredDocumentContext = async (tenderId, companyId, lotKey = "") => {
-    await pool.query(`WITH matches AS(
+    if(!readOnlyCandidate) await pool.query(`WITH matches AS(
       SELECT r.id required_document_id,e.id evidence_item_id
       FROM tender.required_documents r JOIN tender.evidence_items e ON e.company_id=r.company_id
       WHERE r.tender_id=$1 AND r.company_id=$2 AND r.lot_key=$3 AND r.reusable_company_evidence=true
@@ -221,32 +277,45 @@ export function registerAutopilotRoutes(
       SELECT required_document_id,evidence_item_id,'VERIFIED_COMPANY_EVIDENCE_EXACT_TYPE' FROM matches ON CONFLICT DO NOTHING RETURNING required_document_id
     ) UPDATE tender.required_documents r SET satisfaction_status='VALIDATED',source_type='COMPANY_EVIDENCE',updated_at=now()
       WHERE r.id IN(SELECT required_document_id FROM matches)`,[tenderId,companyId,lotKey]);
-    const rows = (await pool.query(`SELECT r.*,u.filename,u.media_type,u.size_bytes,u.sha256,u.version upload_version,
-      u.validation_status upload_validation_status,u.validation_summary,u.validation_details,u.uploaded_at,u.reviewed_at,
+    const rows = (await pool.query(`SELECT r.*,u.id upload_id,u.filename,u.media_type,u.size_bytes,u.sha256,u.version upload_version,
+      u.source_type upload_source_type,u.source_working_copy_id,u.validation_status upload_validation_status,u.validation_summary,u.validation_details,u.uploaded_at,u.reviewed_at,
       p.id package_binding_id,p.bid_package_id,p.portal_upload_category mapped_portal_category,p.portal_field_id mapped_portal_field,
       source.id original_document_id,source.filename original_filename,source.mime_type original_mime_type,
       source.payload_sha256 original_sha256,source.content original_content,source.procurement_verification_status original_verification_status,
-      source.provenance original_provenance,source_version.version original_document_version,source_version.tender_id original_tender_id
+      source.provenance original_provenance,source_version.version original_document_version,source_version.tender_id original_tender_id,
+      working.id working_copy_id,working.version working_copy_version,working.sha256 working_copy_sha256,
+      working.source_document_id working_source_document_id,working.source_sha256 working_source_sha256,
+      coalesce(working.editor_provenance->>'materiallyEdited','false')='true' OR EXISTS(
+        SELECT 1 FROM jsonb_array_elements(coalesce(working.overlay_data,'[]'::jsonb)) element
+        WHERE element->>'type'='mark' OR (element->>'type'='checkbox' AND element->>'checked'='true')
+          OR (element->>'type' IN('text','note') AND btrim(coalesce(element->>'text',''))<>'')
+      ) working_copy_material
       FROM tender.required_documents r
       LEFT JOIN tender.required_document_uploads u ON u.id=r.current_upload_id
       LEFT JOIN LATERAL(SELECT x.* FROM tender.required_document_package_bindings x WHERE x.required_document_id=r.id AND x.upload_id=u.id ORDER BY x.created_at DESC LIMIT 1)p ON true
+      LEFT JOIN LATERAL(SELECT w.id,w.version,w.sha256,w.source_document_id,w.source_sha256,w.overlay_data,w.editor_provenance FROM tender.required_document_working_copies w WHERE w.required_document_id=r.id AND w.is_current LIMIT 1) working ON true
       LEFT JOIN tender.enrichment_documents source ON source.id=r.source_document_id
       LEFT JOIN tender.enrichment_versions source_version ON source_version.id=source.enrichment_version_id
       WHERE r.tender_id=$1 AND r.company_id=$2 AND r.lot_key=$3 ORDER BY r.mandatory DESC,r.requirement_title`,
       [tenderId,companyId,lotKey])).rows;
-    return rows.map((row)=>{
+    return Promise.all(rows.map(async(row)=>{
       const source=resolveRequiredSourceDocument(row,row.original_document_id?[{
         id:row.original_document_id,tender_id:row.original_tender_id,required_document_id:row.id,
         company_id:row.company_id,lot_key:row.lot_key,filename:row.original_filename,mime_type:row.original_mime_type,
         payload_sha256:row.original_sha256,content:row.original_content,document_version:row.original_document_version,
       }]:[]);
-      const form=resolveRequiredOriginalForm(row,row.original_document_id?[{
+      const form=await resolveRequiredOriginalForm(row,row.original_document_id?[{
         id:row.original_document_id,tender_id:row.original_tender_id,company_id:row.company_id,lot_key:row.lot_key,
         filename:row.original_filename,mime_type:row.original_mime_type,payload_sha256:row.original_sha256,
         content:row.original_content,procurement_verification_status:row.original_verification_status,
         document_version:row.original_document_version,explicit_form_mapping:hasExactOriginalFormProvenance(row,row.original_provenance),
       }]:[]);
-      const result={...row,status_label:requirementLabel(row.satisfaction_status),source_document:{
+      const classification=row.requirement_classification?{
+        classification:row.requirement_classification,
+        reason:row.classification_reason,
+        actionType:row.requirement_classification==="FILLABLE_BIDDER_FORM"?"PDF_EDITOR":row.requirement_classification==="BID_TIME_UPLOAD_EVIDENCE"?"UPLOAD":"NONE",
+      }:classifyRequirementEvidence(row.requirement_description);
+      const effectiveStatus=effectiveRequiredDocumentStatus(row),manuallyExcluded=row.manual_submission_relevance_override===false,result={...row,requirement_classification:classification.classification,classification_reason:classification.reason,action_type:classification.actionType,satisfaction_status:effectiveStatus,persisted_satisfaction_status:row.satisfaction_status,bid_submission_relevance_state:manuallyExcluded?"MANUALLY_NOT_REQUIRED":"REQUIRED",status_label:manuallyExcluded?"Manuell als für die Angebotsabgabe nicht erforderlich bestätigt":requirementLabel(effectiveStatus),source_document:{
         status:source.status,available:source.available,documentId:source.documentId||null,
         documentVersion:source.documentVersion||null,page:source.page||null,filename:source.filename||null,
         mimeType:source.mimeType||null,sha256:source.sha256||null,
@@ -257,7 +326,7 @@ export function registerAutopilotRoutes(
       }};
       delete result.original_content;delete result.original_provenance;
       return result;
-    });
+    }));
   };
   const runRequiredDocumentRecheck = async (client, requirement, upload, actorId) => {
     const requirements=(await client.query("SELECT * FROM tender.required_documents WHERE tender_id=$1 AND company_id=$2 AND lot_key=$3 AND satisfaction_status<>'SUPERSEDED'",[requirement.tender_id,requirement.company_id,requirement.lot_key])).rows,
@@ -268,15 +337,15 @@ export function registerAutopilotRoutes(
     if(upload?.validation_status==="VALIDATED" && packageRow) await client.query(`INSERT INTO tender.required_document_package_bindings(required_document_id,upload_id,bid_package_id,binding_type,portal_upload_category,portal_field_id,created_by)
       VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(upload_id,bid_package_id) DO NOTHING`,[requirement.id,upload.id,packageRow.id,requirement.approval_relevant?"NEW_PACKAGE_REVISION_REQUIRED":"SUPPLEMENTAL_EVIDENCE",requirement.portal_upload_category,requirement.portal_field_id,actorId]);
     const gateStatus=complete?"RECHECK_PASSED_REQUIRED_DOCUMENTS":"BLOCKED_REQUIRED_DOCUMENTS";
-    if(requirement.satisfaction_status==="VALIDATED"){
-      const linked=(await client.query(`UPDATE tender.final_preflight_requirements f SET status='VALIDATED',updated_at=now() FROM tender.final_preflight_contexts c
-        WHERE f.context_id=c.id AND c.is_current AND c.tender_id=$1 AND c.company_id=$2 AND c.lot_key=$3 AND f.requirement_key=$4 RETURNING f.id`,[requirement.tender_id,requirement.company_id,requirement.lot_key,requirement.requirement_code])).rows;
-      if(linked.length)await client.query("UPDATE tender.final_preflight_user_actions SET status='COMPLETED',completed_by=$2,completed_at=now(),updated_at=now() WHERE requirement_id=ANY($1::uuid[]) AND status IN('OPEN','IN_PROGRESS')",[linked.map(x=>x.id),actorId]);
-      await client.query(`UPDATE tender.final_preflight_contexts c SET readiness_status=CASE WHEN NOT EXISTS(SELECT 1 FROM tender.final_preflight_requirements f WHERE f.context_id=c.id AND f.status NOT IN('VALIDATED','NOT_REQUIRED','SUPERSEDED')) AND $4 THEN 'MANAGEMENT_REVIEW_REQUIRED' ELSE readiness_status END,updated_at=now()
-        WHERE c.is_current AND c.tender_id=$1 AND c.company_id=$2 AND c.lot_key=$3`,[requirement.tender_id,requirement.company_id,requirement.lot_key,complete]);
-    }
+    const linked=(await client.query(`UPDATE tender.final_preflight_requirements f SET status=$5,manual_submission_relevance_override=$6,updated_at=now() FROM tender.final_preflight_contexts c
+      WHERE f.context_id=c.id AND c.is_current AND c.tender_id=$1 AND c.company_id=$2 AND c.lot_key=$3 AND f.requirement_key=$4 RETURNING f.id`,[requirement.tender_id,requirement.company_id,requirement.lot_key,requirement.requirement_code,requirement.satisfaction_status,requirement.manual_submission_relevance_override??null])).rows;
+    const manuallyExcluded=requirement.manual_submission_relevance_override===false;
+    if((["VALIDATED","NOT_REQUIRED"].includes(requirement.satisfaction_status)||manuallyExcluded)&&linked.length)await client.query("UPDATE tender.final_preflight_user_actions SET status='COMPLETED',completed_by=$2,completed_at=now(),updated_at=now() WHERE requirement_id=ANY($1::uuid[]) AND status IN('OPEN','IN_PROGRESS')",[linked.map(x=>x.id),actorId]);
+    else if(linked.length)await client.query("UPDATE tender.final_preflight_user_actions SET status='OPEN',completed_by=NULL,completed_at=NULL,updated_at=now() WHERE requirement_id=ANY($1::uuid[]) AND status='COMPLETED'",[linked.map(x=>x.id)]);
+    await client.query(`UPDATE tender.final_preflight_contexts c SET readiness_status=CASE WHEN NOT EXISTS(SELECT 1 FROM tender.final_preflight_requirements f WHERE f.context_id=c.id AND f.status NOT IN('VALIDATED','NOT_REQUIRED','SUPERSEDED') AND f.manual_submission_relevance_override IS DISTINCT FROM false) AND $4 THEN 'MANAGEMENT_REVIEW_REQUIRED' WHEN $6=false THEN readiness_status WHEN $5 IN('MISSING','REJECTED','AVAILABLE') THEN 'PACKAGE_INCOMPLETE' WHEN $5 IN('UPLOADED_PENDING_VALIDATION','MANUAL_REVIEW_REQUIRED') THEN 'WAITING_FOR_USER_INPUT' ELSE readiness_status END,updated_at=now()
+      WHERE c.is_current AND c.tender_id=$1 AND c.company_id=$2 AND c.lot_key=$3`,[requirement.tender_id,requirement.company_id,requirement.lot_key,complete,requirement.satisfaction_status,requirement.manual_submission_relevance_override]);
     await client.query(`INSERT INTO tender.required_document_rechecks(required_document_id,trigger_upload_id,required_document_status,bid_package_status,portal_mapping_status,submission_gate_status,details)
-      VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`,[requirement.id,upload?.id||null,requirement.satisfaction_status,packageRow?(requirement.approval_relevant?"NEW_PACKAGE_REVISION_REQUIRED":"SUPPLEMENT_BOUND_TO_IMMUTABLE_PACKAGE"):"BID_PACKAGE_NOT_AVAILABLE",portalMappingStatus,gateStatus,JSON.stringify({pipeline:["REQUIRED_DOCUMENT_RECHECK","BID_PACKAGE_RECHECK","PORTAL_MAPPING_RECHECK","SUBMISSION_GATE_RECHECK"],allMandatorySubmissionDocumentsComplete:complete,externalSubmission:false,transmitted:false})]);
+      VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)`,[requirement.id,upload?.id||null,requirement.satisfaction_status,packageRow?(requirement.approval_relevant?"NEW_PACKAGE_REVISION_REQUIRED":"SUPPLEMENT_BOUND_TO_IMMUTABLE_PACKAGE"):"BID_PACKAGE_NOT_AVAILABLE",portalMappingStatus,gateStatus,JSON.stringify({pipeline:["REQUIRED_DOCUMENT_RECHECK","BID_PACKAGE_RECHECK","PORTAL_MAPPING_RECHECK","SUBMISSION_GATE_RECHECK"],allMandatorySubmissionDocumentsComplete:complete,manualSubmissionRelevanceOverride:requirement.manual_submission_relevance_override??null,externalSubmission:false,transmitted:false})]);
     await client.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'REQUIRED_DOCUMENT_RECHECK_COMPLETED',$2,$3::jsonb)",[actorId,requirement.tender_id,JSON.stringify({requiredDocumentId:requirement.id,uploadId:upload?.id||null,gateStatus,portalMappingStatus,bidPackageId:packageRow?.id||null,transmitted:false})]);
     return {complete,gateStatus,portalMappingStatus,bidPackageId:packageRow?.id||null};
   };
@@ -319,9 +388,9 @@ export function registerAutopilotRoutes(
       await client.query("COMMIT");return {enqueued:inserted.length,items:inserted};
     }catch(error){await client.query("ROLLBACK");throw error}finally{client.release()}
   };
-  const retryTimer=setInterval(()=>reconcileDocumentRetries().catch((error)=>app.log.error({error:error.message},"automatic document retry reconciliation failed")),15000);
-  retryTimer.unref?.();setTimeout(()=>reconcileDocumentRetries().catch((error)=>app.log.error({error:error.message},"initial document retry reconciliation failed")),1000).unref?.();
-  app.addHook("onClose",async()=>clearInterval(retryTimer));
+  const readOnlyCandidate=process.env.WB_TENDER_READ_ONLY_CANDIDATE==="true",retryTimer=readOnlyCandidate?null:setInterval(()=>reconcileDocumentRetries().catch((error)=>app.log.error({error:error.message},"automatic document retry reconciliation failed")),15000);
+  retryTimer?.unref?.();if(!readOnlyCandidate)setTimeout(()=>reconcileDocumentRetries().catch((error)=>app.log.error({error:error.message},"initial document retry reconciliation failed")),1000).unref?.();
+  app.addHook("onClose",async()=>{if(retryTimer)clearInterval(retryTimer)});
   const reconcileFinalPreflight = async ({ tenderId = null, limit = 500 } = {}) => {
     const client=await pool.connect();
     try{
@@ -345,7 +414,7 @@ export function registerAutopilotRoutes(
       LEFT JOIN LATERAL(SELECT * FROM tender.company_profiles x WHERE x.company_id=r.company_id AND x.lifecycle_status='ACTIVE' AND x.valid_from<=now() AND (x.valid_until IS NULL OR x.valid_until>now()) ORDER BY x.version DESC LIMIT 1)profile ON true
       LEFT JOIN tender.final_preflight_contexts f ON f.tender_id=r.tender_id AND f.company_id=r.company_id AND f.lot_key=coalesce(r.lot_key,'') AND f.is_current
       WHERE t.data_class='PUBLIC_REAL' AND t.offer_deadline>now() AND r.primary_company AND ($1::uuid IS NULL OR r.tender_id=$1)
-        AND (f.id IS NULL OR f.schema_version<6 OR f.tender_version_id<>tv.id OR f.document_revision_sha256 IS DISTINCT FROM coalesce(bp.document_revision_sha256,ev.payload_sha256)
+        AND (f.id IS NULL OR f.schema_version<7 OR f.tender_version_id<>tv.id OR f.document_revision_sha256 IS DISTINCT FROM coalesce(bp.document_revision_sha256,ev.payload_sha256)
           OR f.calculation_id IS DISTINCT FROM calc.id OR f.management_output_id IS DISTINCT FROM mo.id OR f.approval_request_id IS DISTINCT FROM approval.id
           OR f.bid_package_id IS DISTINCT FROM bp.id OR f.submission_context_id IS DISTINCT FROM sc.id OR f.company_profile_id IS DISTINCT FROM profile.id)
       ORDER BY t.offer_deadline LIMIT $2`,[tenderId,limit])).rows;
@@ -354,11 +423,21 @@ export function registerAutopilotRoutes(
         await client.query(`UPDATE tender.final_preflight_contexts SET is_current=false,updated_at=now()
           WHERE tender_id=$1 AND lot_key=$2 AND company_id=$3 AND is_current AND tender_version_id<>$4`,[context.tender_id,context.lot_key,context.company_id,context.tender_version_id]);
         const saved=(await client.query(`INSERT INTO tender.final_preflight_contexts(tender_id,tender_version_id,lot_key,company_id,service_line,document_revision_sha256,calculation_id,management_output_id,approval_request_id,bid_package_id,submission_context_id,portal_session_id,company_profile_id,binding_valid,schema_version,transmitted)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,6,false)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,7,false)
           ON CONFLICT(tender_id,lot_key,company_id) WHERE is_current DO UPDATE SET tender_version_id=excluded.tender_version_id,service_line=excluded.service_line,document_revision_sha256=excluded.document_revision_sha256,calculation_id=excluded.calculation_id,management_output_id=excluded.management_output_id,approval_request_id=excluded.approval_request_id,bid_package_id=excluded.bid_package_id,submission_context_id=excluded.submission_context_id,portal_session_id=excluded.portal_session_id,company_profile_id=excluded.company_profile_id,binding_valid=excluded.binding_valid,schema_version=excluded.schema_version,updated_at=now() RETURNING *`,[context.tender_id,context.tender_version_id,context.lot_key,context.company_id,context.service_line,context.document_revision_sha256,context.calculation_id,context.management_output_id,context.approval_request_id,context.bid_package_id,context.submission_context_id,context.portal_session_id,context.company_profile_id,context.binding_valid])).rows[0];
-        if(Number(context.prior_schema_version||0)<6){
+        const existingMissing=(await client.query(`SELECT r.*,d.payload_sha256 source_sha256 FROM tender.required_documents r LEFT JOIN tender.enrichment_documents d ON d.id=r.source_document_id
+          WHERE r.tender_id=$1 AND r.tender_version_id=$2 AND r.lot_key=$3 AND r.company_id=$4 AND r.satisfaction_status='MISSING' AND r.current_upload_id IS NULL FOR UPDATE OF r`,[context.tender_id,context.tender_version_id,context.lot_key,context.company_id])).rows;
+        for(const requirement of existingMissing){
+          const classification=classifyRequirementEvidence(requirement.requirement_description);
+          if(!["POST_AWARD_EVIDENCE","CONTRACT_PERFORMANCE_CLAUSE"].includes(classification.classification))continue;
+          await client.query(`UPDATE tender.required_documents SET requirement_classification=$2,classification_reason=$3,
+            classification_provenance=$4::jsonb,mandatory=false,submission_relevant=false,satisfaction_status='NOT_REQUIRED',
+            not_required_reason=$5,updated_at=now() WHERE id=$1`,[requirement.id,classification.classification,classification.reason,JSON.stringify({classifierVersion:"wb-bid-time-requirement/1.0.0",rule:classification.rule,deterministic:true,sourceDocumentId:requirement.source_document_id,sourceSha256:requirement.source_sha256,sourcePage:requirement.source_page}),`${classification.classification}: ${classification.reason}`]);
+          await client.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES(NULL,'REQUIRED_DOCUMENT_CLASSIFICATION_REPAIRED',$1,$2::jsonb)",[requirement.tender_id,JSON.stringify({requiredDocumentId:requirement.id,companyId:requirement.company_id,lotKey:requirement.lot_key,sourceDocumentId:requirement.source_document_id,sourceSha256:requirement.source_sha256,sourcePage:requirement.source_page,previousStatus:requirement.satisfaction_status,status:"NOT_REQUIRED",classification:classification.classification,rule:classification.rule,reason:classification.reason,automatedDeterministicRepair:true,externalWrite:false,transmitted:false})]);
+        }
+        if(Number(context.prior_schema_version||0)<7){
           await client.query("UPDATE tender.final_preflight_requirements SET status='SUPERSEDED',updated_at=now() WHERE context_id=$1",[saved.id]);
-          await client.query("UPDATE tender.required_documents SET satisfaction_status='SUPERSEDED',updated_at=now() WHERE tender_id=$1 AND tender_version_id=$2 AND lot_key=$3 AND company_id=$4 AND source_type='TENDER_DOCUMENT' AND current_upload_id IS NULL",[context.tender_id,context.tender_version_id,context.lot_key,context.company_id]);
+          await client.query("UPDATE tender.required_documents SET satisfaction_status='SUPERSEDED',updated_at=now() WHERE tender_id=$1 AND tender_version_id=$2 AND lot_key=$3 AND company_id=$4 AND source_type='TENDER_DOCUMENT' AND current_upload_id IS NULL AND satisfaction_status<>'NOT_REQUIRED'",[context.tender_id,context.tender_version_id,context.lot_key,context.company_id]);
         }
         const documents=(await client.query(`SELECT d.id,d.filename,d.extracted_data,d.provenance,l.external_id document_lot_key
           FROM tender.enrichment_documents d JOIN tender.enrichment_versions e ON e.id=d.enrichment_version_id
@@ -373,12 +452,12 @@ export function registerAutopilotRoutes(
           discovered.push(...items);
         }
         for(const item of discovered){
-          await client.query(`INSERT INTO tender.final_preflight_requirements(context_id,requirement_key,requirement_kind,title,description,source_type,source_document_id,source_page,source_reference,source_excerpt,source_evidence_sha256,scope_type,category,mandatory,submission_relevant,human_action_required,legal_confirmation_required,action_group,status,due_at)
-            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-            ON CONFLICT(context_id,requirement_key,source_evidence_sha256) DO UPDATE SET title=excluded.title,description=excluded.description,due_at=excluded.due_at,status=excluded.status,updated_at=now()`,[saved.id,item.requirementKey,item.requirementKind,item.title,item.description,item.sourceType,item.sourceDocumentId,item.sourcePage,item.sourceReference,item.sourceExcerpt,item.sourceEvidenceSha256,item.scopeType,item.category,item.mandatory,item.submissionRelevant,item.humanActionRequired,item.legalConfirmationRequired,item.actionGroup,item.status,item.dueAt]);
-          if(["REQUIRED_DOCUMENT","PORTAL_FORM"].includes(item.requirementKind)) await client.query(`INSERT INTO tender.required_documents(tender_id,tender_version_id,lot_key,company_id,requirement_code,requirement_title,requirement_description,source_document_id,source_page,source_reference,category,document_type,mandatory,submission_relevant,accepted_formats,max_file_size,satisfaction_status,source_type,reusable_company_evidence)
-            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$13,ARRAY['application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],20971520,'MISSING',$15,$14)
-            ON CONFLICT(tender_id,tender_version_id,lot_key,company_id,requirement_code) DO UPDATE SET requirement_title=excluded.requirement_title,requirement_description=excluded.requirement_description,source_document_id=excluded.source_document_id,source_page=excluded.source_page,source_reference=excluded.source_reference,source_type=excluded.source_type,satisfaction_status=CASE WHEN tender.required_documents.satisfaction_status='SUPERSEDED' THEN 'MISSING' ELSE tender.required_documents.satisfaction_status END,updated_at=now()`,[context.tender_id,context.tender_version_id,context.lot_key,context.company_id,item.requirementKey,item.title,item.description,item.sourceDocumentId,item.sourcePage,item.sourceReference,item.category,item.mandatory,item.submissionRelevant,["INSURANCE","REGISTER","CERTIFICATE"].includes(item.category),item.requirementKind==="PORTAL_FORM"?"PORTAL_FORM":"TENDER_DOCUMENT"]);
+          await client.query(`INSERT INTO tender.final_preflight_requirements(context_id,requirement_key,requirement_kind,title,description,source_type,source_document_id,source_page,source_reference,source_excerpt,source_evidence_sha256,scope_type,category,mandatory,submission_relevant,human_action_required,legal_confirmation_required,action_group,status,due_at,requirement_classification,classification_reason,classification_provenance)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb)
+            ON CONFLICT(context_id,requirement_key,source_evidence_sha256) DO UPDATE SET title=excluded.title,description=excluded.description,due_at=excluded.due_at,status=excluded.status,requirement_classification=excluded.requirement_classification,classification_reason=excluded.classification_reason,classification_provenance=excluded.classification_provenance,updated_at=now()`,[saved.id,item.requirementKey,item.requirementKind,item.title,item.description,item.sourceType,item.sourceDocumentId,item.sourcePage,item.sourceReference,item.sourceExcerpt,item.sourceEvidenceSha256,item.scopeType,item.category,item.mandatory,item.submissionRelevant,item.humanActionRequired,item.legalConfirmationRequired,item.actionGroup,item.status,item.dueAt,item.requirementClassification,item.classificationReason,JSON.stringify(item.classificationProvenance)]);
+          if(["REQUIRED_DOCUMENT","PORTAL_FORM"].includes(item.requirementKind)) await client.query(`INSERT INTO tender.required_documents(tender_id,tender_version_id,lot_key,company_id,requirement_code,requirement_title,requirement_description,source_document_id,source_page,source_reference,category,document_type,mandatory,submission_relevant,accepted_formats,max_file_size,satisfaction_status,source_type,reusable_company_evidence,requirement_classification,classification_reason,classification_provenance)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$13,ARRAY['application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],20971520,'MISSING',$15,$14,$16,$17,$18::jsonb)
+            ON CONFLICT(tender_id,tender_version_id,lot_key,company_id,requirement_code) DO UPDATE SET requirement_title=excluded.requirement_title,requirement_description=excluded.requirement_description,source_document_id=excluded.source_document_id,source_page=excluded.source_page,source_reference=excluded.source_reference,source_type=excluded.source_type,requirement_classification=excluded.requirement_classification,classification_reason=excluded.classification_reason,classification_provenance=excluded.classification_provenance,satisfaction_status=CASE WHEN tender.required_documents.satisfaction_status='SUPERSEDED' THEN 'MISSING' ELSE tender.required_documents.satisfaction_status END,updated_at=now()`,[context.tender_id,context.tender_version_id,context.lot_key,context.company_id,item.requirementKey,item.title,item.description,item.sourceDocumentId,item.sourcePage,item.sourceReference,item.category,item.mandatory,item.submissionRelevant,["INSURANCE","REGISTER","CERTIFICATE"].includes(item.category),item.requirementKind==="PORTAL_FORM"?"PORTAL_FORM":"TENDER_DOCUMENT",item.requirementClassification,item.classificationReason,JSON.stringify(item.classificationProvenance)]);
         }
         await client.query(`WITH matches AS(SELECT r.id,e.id evidence_id FROM tender.required_documents r JOIN tender.evidence_items e ON e.company_id=r.company_id
           WHERE r.tender_id=$1 AND r.tender_version_id=$2 AND r.lot_key=$3 AND r.company_id=$4 AND r.reusable_company_evidence
@@ -386,13 +465,18 @@ export function registerAutopilotRoutes(
             AND upper(e.evidence_type)=upper(r.category)),links AS(INSERT INTO tender.required_document_company_evidence_links(required_document_id,evidence_item_id,matched_by)
           SELECT id,evidence_id,'GENERIC_EXACT_COMPANY_AND_EVIDENCE_TYPE' FROM matches ON CONFLICT DO NOTHING)
           UPDATE tender.required_documents r SET satisfaction_status='VALIDATED',source_type='COMPANY_EVIDENCE',updated_at=now() WHERE r.id IN(SELECT id FROM matches)`,[context.tender_id,context.tender_version_id,context.lot_key,context.company_id]);
-        await client.query(`UPDATE tender.final_preflight_requirements f SET status='VALIDATED',updated_at=now() FROM tender.required_documents r
-          WHERE f.context_id=$1 AND f.requirement_key=r.requirement_code AND r.tender_id=$2 AND r.tender_version_id=$3 AND r.lot_key=$4 AND r.company_id=$5 AND r.satisfaction_status='VALIDATED'`,[saved.id,context.tender_id,context.tender_version_id,context.lot_key,context.company_id]);
+        await client.query(`UPDATE tender.final_preflight_requirements f SET status=r.satisfaction_status,manual_submission_relevance_override=r.manual_submission_relevance_override,requirement_classification=r.requirement_classification,classification_reason=r.classification_reason,classification_provenance=r.classification_provenance,mandatory=r.mandatory,submission_relevant=r.submission_relevant,updated_at=now() FROM tender.required_documents r
+          WHERE f.context_id=$1 AND f.requirement_key=r.requirement_code AND r.tender_id=$2 AND r.tender_version_id=$3 AND r.lot_key=$4 AND r.company_id=$5
+            AND r.satisfaction_status IN('MISSING','AVAILABLE','UPLOADED_PENDING_VALIDATION','MANUAL_REVIEW_REQUIRED','VALIDATED','REJECTED','NOT_REQUIRED','SUPERSEDED')`,[saved.id,context.tender_id,context.tender_version_id,context.lot_key,context.company_id]);
         requirementCount+=discovered.length;
         const requirements=(await client.query("SELECT * FROM tender.final_preflight_requirements WHERE context_id=$1 AND status<>'SUPERSEDED'",[saved.id])).rows,
-          requiredDocumentsForReadiness=(await client.query("SELECT id,requirement_title title,satisfaction_status status,mandatory,submission_relevant,false human_action_required,'REQUIRED_DOCUMENT' requirement_kind FROM tender.required_documents WHERE tender_id=$1 AND tender_version_id=$2 AND lot_key=$3 AND company_id=$4 AND satisfaction_status<>'SUPERSEDED'",[context.tender_id,context.tender_version_id,context.lot_key,context.company_id])).rows,
+          requiredDocumentsForReadiness=(await client.query(`SELECT r.id,r.requirement_title title,
+            CASE WHEN r.satisfaction_status='MISSING' AND (coalesce(w.editor_provenance->>'materiallyEdited','false')='true' OR EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(w.overlay_data,'[]'::jsonb)) e WHERE e->>'type'='mark' OR (e->>'type'='checkbox' AND e->>'checked'='true') OR (e->>'type' IN('text','note') AND btrim(coalesce(e->>'text',''))<>''))) THEN 'MANUAL_REVIEW_REQUIRED' ELSE r.satisfaction_status END status,
+            r.mandatory,r.submission_relevant,r.manual_submission_relevance_override,false human_action_required,'REQUIRED_DOCUMENT' requirement_kind
+            FROM tender.required_documents r LEFT JOIN LATERAL(SELECT overlay_data,editor_provenance FROM tender.required_document_working_copies x WHERE x.required_document_id=r.id AND x.is_current LIMIT 1)w ON true
+            WHERE r.tender_id=$1 AND r.tender_version_id=$2 AND r.lot_key=$3 AND r.company_id=$4 AND r.satisfaction_status<>'SUPERSEDED'`,[context.tender_id,context.tender_version_id,context.lot_key,context.company_id])).rows,
           allReadinessRequirements=[...requirements,...requiredDocumentsForReadiness];
-        for(const requirement of requirements.filter(x=>x.human_action_required && !["VALIDATED","NOT_REQUIRED"].includes(x.status))){
+        for(const requirement of requirements.filter(x=>x.human_action_required && x.manual_submission_relevance_override!==false && !["VALIDATED","NOT_REQUIRED"].includes(x.status))){
           await client.query(`INSERT INTO tender.final_preflight_user_actions(context_id,requirement_id,action_type,display_title,instruction,priority,due_at)
             VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(requirement_id,action_type) DO UPDATE SET display_title=excluded.display_title,instruction=excluded.instruction,due_at=excluded.due_at,updated_at=now()`,[saved.id,requirement.id,requirement.action_group,requirement.title,requirement.legal_confirmation_required?'Bewusste Bestätigung durch eine berechtigte Person erforderlich.':'Fehlende Angabe oder Unterlage fachlich bearbeiten.',context.offer_deadline&&new Date(context.offer_deadline)-Date.now()<172800000?'CRITICAL':'NORMAL',context.offer_deadline]);
         }
@@ -407,9 +491,9 @@ export function registerAutopilotRoutes(
       await client.query("COMMIT");return {processed:contexts.length,requirements:requirementCount};
     }catch(error){await client.query("ROLLBACK");throw error}finally{client.release()}
   };
-  const preflightTimer=setInterval(()=>reconcileFinalPreflight().catch((error)=>app.log.error({error:error.message},"generic final preflight reconciliation failed")),60000);
-  preflightTimer.unref?.();setTimeout(()=>reconcileFinalPreflight().catch((error)=>app.log.error({error:error.message},"initial generic final preflight reconciliation failed")),2500).unref?.();
-  app.addHook("onClose",async()=>clearInterval(preflightTimer));
+  const preflightTimer=readOnlyCandidate?null:setInterval(()=>reconcileFinalPreflight().catch((error)=>app.log.error({error:error.message},"generic final preflight reconciliation failed")),60000);
+  preflightTimer?.unref?.();if(!readOnlyCandidate)setTimeout(()=>reconcileFinalPreflight().catch((error)=>app.log.error({error:error.message},"initial generic final preflight reconciliation failed")),2500).unref?.();
+  app.addHook("onClose",async()=>{if(preflightTimer)clearInterval(preflightTimer)});
   app.get("/api/final-preflight/contexts",{preHandler:read},async(req)=>{
     const tenderId=String(req.query?.tenderId||"").trim();
     if(tenderId&&!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(tenderId))return {items:[],transmitted:false,externalSubmission:false};
@@ -418,96 +502,45 @@ export function registerAutopilotRoutes(
       (SELECT status FROM tender.calculations calculation WHERE calculation.id=c.calculation_id) calculation_status,
       (SELECT status FROM tender.management_outputs management WHERE management.id=c.management_output_id) management_output_status,
       (SELECT status FROM tender.approval_requests approval WHERE approval.id=c.approval_request_id) approval_status,
-      coalesce(jsonb_agg(jsonb_build_object('group',r.action_group,'title',r.title,'status',r.status,'source',r.source_reference,'page',r.source_page,'dueAt',r.due_at,'humanActionRequired',r.human_action_required)) FILTER(WHERE r.id IS NOT NULL),'[]'::jsonb) requirements
+      coalesce(jsonb_agg(jsonb_build_object('group',r.action_group,'title',r.title,'status',CASE WHEN r.manual_submission_relevance_override=false THEN 'MANUALLY_NOT_REQUIRED' WHEN r.status='MISSING' AND rd.satisfaction_status='MISSING' AND (coalesce(w.editor_provenance->>'materiallyEdited','false')='true' OR EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(w.overlay_data,'[]'::jsonb)) e WHERE e->>'type'='mark' OR (e->>'type'='checkbox' AND e->>'checked'='true') OR (e->>'type' IN('text','note') AND btrim(coalesce(e->>'text',''))<>''))) THEN 'MANUAL_REVIEW_REQUIRED' ELSE r.status END,'manualSubmissionRelevanceOverride',r.manual_submission_relevance_override,'source',r.source_reference,'page',r.source_page,'dueAt',r.due_at,'humanActionRequired',r.human_action_required)) FILTER(WHERE r.id IS NOT NULL),'[]'::jsonb) requirements
       FROM tender.current_final_preflight_contexts c JOIN tender.current_registered_tender_company_portals registered ON registered.tender_id=c.tender_id AND registered.company_id=c.company_id LEFT JOIN tender.final_preflight_requirements r ON r.context_id=c.id AND r.status<>'SUPERSEDED'
+      LEFT JOIN tender.required_documents rd ON rd.tender_id=c.tender_id AND rd.company_id=c.company_id AND rd.lot_key=c.lot_key AND rd.requirement_code=r.requirement_key AND rd.source_document_id=r.source_document_id
+      LEFT JOIN LATERAL(SELECT overlay_data,editor_provenance FROM tender.required_document_working_copies wc WHERE wc.required_document_id=rd.id AND wc.is_current LIMIT 1)w ON true
       WHERE ($1::uuid IS NULL OR c.tender_id=$1) AND ($2::uuid[] IS NULL OR c.company_id=ANY($2)) GROUP BY c.id,c.tender_id,c.tender_version_id,c.lot_key,c.company_id,c.service_line,c.document_revision_sha256,c.calculation_id,c.management_output_id,c.approval_request_id,c.bid_package_id,c.submission_context_id,c.portal_session_id,c.binding_valid,c.schema_version,c.schema_sha256,c.readiness_status,c.transmitted,c.is_current,c.discovered_at,c.created_at,c.updated_at,c.title,c.offer_deadline,c.company_name ORDER BY c.offer_deadline`,[tenderId||null,companyIds])).rows;
     return {items:rows,transmitted:false,externalSubmission:false};
   });
   app.get("/api/management/final-preflight-actions",{preHandler:read},async(req)=>{const companyIds=req.identity.permissions.includes("tender.admin")?null:req.identity.companyIds;return {items:(await pool.query(`SELECT a.id,a.display_title,a.instruction,a.priority,a.status,a.due_at,c.title tender_title,c.tender_id,c.lot_key,c.company_id,c.company_name,c.service_line,r.action_group,r.source_reference,r.source_page,p.display_name portal_name
       FROM tender.final_preflight_user_actions a JOIN tender.final_preflight_requirements r ON r.id=a.requirement_id JOIN tender.current_final_preflight_contexts c ON c.id=a.context_id JOIN tender.current_registered_tender_company_portals registered ON registered.tender_id=c.tender_id AND registered.company_id=c.company_id JOIN tender.portal_registry p ON p.id=registered.portal_id
-      WHERE a.status IN('OPEN','IN_PROGRESS') AND r.status<>'SUPERSEDED' AND ($1='' OR c.service_line=$1) AND ($2='' OR r.action_group=$2)
+      WHERE a.status IN('OPEN','IN_PROGRESS') AND r.status<>'SUPERSEDED' AND r.manual_submission_relevance_override IS DISTINCT FROM false AND ($1='' OR c.service_line=$1) AND ($2='' OR r.action_group=$2)
         AND ($3='' OR c.company_id::text=$3) AND ($4='' OR c.tender_id::text=$4) AND ($5='' OR c.lot_key=$5) AND ($6='' OR a.priority=$6) AND ($7::uuid[] IS NULL OR c.company_id=ANY($7))
       ORDER BY a.due_at NULLS LAST,a.priority DESC`,[String(req.query?.serviceLine||''),String(req.query?.blockerType||''),String(req.query?.company||''),String(req.query?.tender||''),String(req.query?.lot||''),String(req.query?.priority||''),companyIds])).rows};});
   const list = (path, permission, sql) =>
     app.get(path, { preHandler: requirePermission(permission) }, async () => ({
       items: (await pool.query(sql)).rows,
     }));
-  const xmlText = (value) =>
-    Buffer.isBuffer(value) ? value.toString("utf8") : String(value || "");
-  const xmlValue = (xml, tag) =>
-    xml
-      .match(new RegExp(`<[^>]*${tag}[^>]*>([^<]+)</[^>]*${tag}>`, "i"))?.[1]
-      ?.trim() || null;
   const noticeLifecycles = async (tenderIds) => {
     if (!tenderIds.length) return new Map();
-    const latest = (
-      await pool.query(
-        `SELECT DISTINCT ON(e.tender_id) e.tender_id,e.notice_type,e.historical,e.raw_payload,t.external_id,t.offer_deadline
-      FROM tender.enrichment_versions e JOIN tender.tenders t ON t.id=e.tender_id
-      WHERE e.tender_id=ANY($1::uuid[]) ORDER BY e.tender_id,e.version DESC`,
-        [tenderIds],
-      )
-    ).rows;
-    const awards = latest.filter(
-        (row) => row.notice_type === "AWARD_NOTICE" && row.historical,
-      ),
-      procedureIds = new Set(
-        awards
-          .map((row) => xmlValue(xmlText(row.raw_payload), "ContractFolderID"))
-          .filter(Boolean),
-      );
-    const originals = procedureIds.size
-      ? (
-          await pool.query(`SELECT DISTINCT ON(e.tender_id) e.tender_id,e.notice_type,e.raw_payload,t.external_id,t.offer_deadline,t.title
-      FROM tender.enrichment_versions e JOIN tender.tenders t ON t.id=e.tender_id
-      WHERE e.notice_type<>'AWARD_NOTICE' ORDER BY e.tender_id,e.version DESC`)
-        ).rows
-      : [];
-    const originalByProcedure = new Map();
-    for (const row of originals) {
-      const procedureId = xmlValue(
-        xmlText(row.raw_payload),
-        "ContractFolderID",
-      );
-      if (procedureIds.has(procedureId))
-        originalByProcedure.set(procedureId, row);
-    }
-    return new Map(
-      latest.map((row) => {
-        if (row.notice_type !== "AWARD_NOTICE" || !row.historical)
-          return [String(row.tender_id), null];
-        const xml = xmlText(row.raw_payload),
-          procedureId = xmlValue(xml, "ContractFolderID"),
-          original = originalByProcedure.get(procedureId);
-        return [
-          String(row.tender_id),
-          {
-            status: "COMPLETED",
-            statusLabel: "Verfahren abgeschlossen",
-            noticeType: "AWARD_NOTICE",
-            noticeTypeLabel: "Zuschlagsbekanntmachung",
-            resultLabel: "Zuschlag veröffentlicht",
-            offerLabel: "Nicht mehr möglich",
-            calculationLabel: "Nicht erforderlich – Verfahren bereits vergeben",
-            portalAccessLabel: "Für Angebotsbearbeitung nicht erforderlich",
-            documentStatusLabel:
-              "Für dieses abgeschlossene Verfahren keine Angebotsunterlagen erforderlich",
-            monitoringLabel: "Abgeschlossen / Ergebnis erfasst",
-            awardDate: xmlValue(xml, "AwardDate"),
-            procedureId,
-            noticeSubtype: xmlValue(xml, "NoticeSubTypeCode"),
-            original: original
-              ? {
-                  tenderId: original.tender_id,
-                  noticeId: original.external_id,
-                  offerDeadline: original.offer_deadline,
-                  title: original.title,
-                }
-              : null,
-          },
-        ];
-      }),
-    );
+    const rows=(await pool.query(`SELECT t.id tender_id,t.external_id,t.notice_classification,t.source_lifecycle_status,t.participation_status,t.participation_block_reason,t.notice_type_code,t.notice_subtype,t.procedure_identifier,
+      related.id original_tender_id,related.external_id original_external_id,related.offer_deadline original_offer_deadline,related.title original_title
+      FROM tender.tenders t LEFT JOIN LATERAL(
+        SELECT original.id,original.external_id,original.offer_deadline,original.title FROM tender.tender_notice_relationships relation
+        JOIN tender.tenders original ON original.id=relation.related_tender_id
+        WHERE relation.source_tender_id=t.id AND original.notice_classification IN('COMPETITION','CORRIGENDUM')
+        ORDER BY original.publication_date DESC NULLS LAST LIMIT 1
+      )related ON true WHERE t.id=ANY($1::uuid[])`,[tenderIds])).rows;
+    return new Map(rows.map((row)=>{
+      if(row.source_lifecycle_status==="ACTIVE"&&row.participation_status==="ELIGIBLE")return [String(row.tender_id),null];
+      const labels={RESULT:"Ergebnisbekanntmachung",CONTRACT_MODIFICATION:"Auftragsänderung",CANCELLATION:"Aufhebung oder Widerruf",VOLUNTARY_EX_ANTE:"Freiwillige Ex-ante-Bekanntmachung",PRIOR_INFORMATION:"Vorinformation",UNKNOWN:"Klassifizierung zu prüfen",CORRIGENDUM:"Berichtigung"};
+      return [String(row.tender_id),{
+        status:row.source_lifecycle_status,statusLabel:row.notice_classification==="RESULT"?"Ergebnisbekanntmachung – Verfahren abgeschlossen":row.source_lifecycle_status==="REVIEW_REQUIRED"?"Fachliche Prüfung erforderlich":"Verfahren abgeschlossen",
+        noticeType:row.notice_classification,noticeTypeLabel:labels[row.notice_classification]||row.notice_classification,
+        resultLabel:row.notice_classification==="RESULT"?"Ergebnis veröffentlicht":"Keine Teilnahmeaktion",offerLabel:"Nicht möglich",
+        calculationLabel:"Für diese Bekanntmachung nicht freigegeben",portalAccessLabel:"Für Teilnahmeaktionen nicht freigegeben",
+        documentStatusLabel:"Historische Unterlagen bleiben unverändert erhalten",monitoringLabel:"Abgeschlossen / nur Historie",
+        procedureId:row.procedure_identifier,noticeSubtype:row.notice_subtype,blockReason:row.participation_block_reason,
+        original:row.original_tender_id?{tenderId:row.original_tender_id,noticeId:row.original_external_id,offerDeadline:row.original_offer_deadline,title:row.original_title}:null,
+      }];
+    }));
   };
   app.get(
     "/api/internal-acceptance",
@@ -620,6 +653,7 @@ export function registerAutopilotRoutes(
     { preHandler: [requirePermission("tender.calculation.create"), csrf] },
     async (req, reply) => {
       if (!(await visibleTender(req, reply, req.params.id))) return;
+      if (!(await requireParticipationEligible(reply,req.params.id,req.body?.lotKey))) return;
       const companyId = String(req.body?.companyId || ""),
         lotKey = String(req.body?.lotKey || ""),
         fieldKey = String(req.body?.fieldKey || ""),
@@ -676,6 +710,26 @@ export function registerAutopilotRoutes(
     },
   );
   app.get(
+    "/api/completed-procedures",
+    {preHandler:read},
+    async(req)=>{
+      const companies=await accessibleCompanies(req.identity),companyIds=companies.map((row)=>row.company_id),pageSize=Math.max(1,Math.min(100,Number(req.query?.pageSize)||50)),page=Math.max(1,Number(req.query?.page)||1),offset=(page-1)*pageSize;
+      if(!companyIds.length)return {items:[],total:0,page,pageSize,hasMore:false};
+      const params=[companyIds,pageSize+1,offset,String(req.query?.q||"").slice(0,200)];
+      const result=await pool.query(`WITH scoped AS(
+        SELECT DISTINCT ON(t.id,relevance.company_id) t.*,relevance.company_id,company.legal_name company_name,relevance.service_line,relevance.lot_key
+        FROM tender.tenders t JOIN tender.current_service_relevance relevance ON relevance.tender_id=t.id AND relevance.company_id=ANY($1::uuid[])
+        JOIN tender.enterprise_company_links company ON company.company_id=relevance.company_id
+        WHERE t.data_class='PUBLIC_REAL' AND (t.source_lifecycle_status IN('CLOSED','WITHDRAWN') OR t.notice_classification IN('RESULT','CONTRACT_MODIFICATION','CANCELLATION','VOLUNTARY_EX_ANTE'))
+          AND ($4='' OR t.search_document@@plainto_tsquery('german',$4))
+        ORDER BY t.id,relevance.company_id,relevance.evaluation_version DESC
+      ) SELECT scoped.*,count(*) OVER()::int total_count,original.id original_tender_id,original.external_id original_external_id,original.title original_title
+        FROM scoped LEFT JOIN LATERAL(SELECT related.id,related.external_id,related.title FROM tender.tender_notice_relationships relation JOIN tender.tenders related ON related.id=relation.related_tender_id WHERE relation.source_tender_id=scoped.id AND related.notice_classification IN('COMPETITION','CORRIGENDUM') ORDER BY related.publication_date DESC NULLS LAST LIMIT 1)original ON true
+        ORDER BY scoped.publication_date DESC NULLS LAST,scoped.id LIMIT $2 OFFSET $3`,params);
+      const rows=result.rows,total=Number(rows[0]?.total_count||0);return {items:rows.slice(0,pageSize),total,page,pageSize,hasMore:rows.length>pageSize,externalActions:false};
+    },
+  );
+  app.get(
     "/api/autopilot/navigation/overview",
     { preHandler: read },
     async (req) => {
@@ -693,15 +747,14 @@ export function registerAutopilotRoutes(
                 : ["RELEVANT", "POTENTIALLY_RELEVANT"];
       const rawItems = (
         await pool.query(
-          `WITH candidates AS(SELECT r.*,t.title,t.external_id,t.notice_number,t.procurement_number,t.ted_id,t.buyer,t.cpv_codes,t.source_code,t.regions,t.offer_deadline,t.created_at tender_created_at,c.legal_name,
+          `WITH candidates AS(SELECT r.*,t.title,t.external_id,t.notice_number,t.procurement_number,t.ted_id,t.buyer,t.cpv_codes,t.source_code,t.source_url,t.regions,t.offer_deadline,t.created_at tender_created_at,c.legal_name,
+        EXISTS(SELECT 1 FROM tender.current_registered_tender_company_portals registered WHERE registered.tender_id=r.tender_id AND registered.company_id=r.company_id) portal_scope_registered,
         row_number() OVER(PARTITION BY r.tender_id,r.lot_key ORDER BY r.primary_company DESC,r.relevance_status,r.company_id) canonical_rank,
         bool_or(r.primary_company) OVER(PARTITION BY r.tender_id,r.lot_key) has_primary
       FROM tender.current_service_relevance r
-      JOIN tender.current_registered_tender_company_portals registered
-        ON registered.tender_id=r.tender_id AND registered.company_id=r.company_id
       JOIN tender.tenders t ON t.id=r.tender_id JOIN tender.enterprise_company_links c ON c.company_id=r.company_id
-      WHERE r.company_id=ANY($1::uuid[]) AND t.data_class='PUBLIC_REAL')
-      SELECT rm.tender_id,rm.title,rm.external_id,rm.notice_number,rm.procurement_number,rm.ted_id,rm.buyer,rm.cpv_codes,rm.source_code,rm.company_id,CASE WHEN rm.primary_company THEN rm.legal_name ELSE 'Keine' END company,
+      WHERE r.company_id=ANY($1::uuid[]) AND t.data_class='PUBLIC_REAL' AND t.source_lifecycle_status='ACTIVE' AND t.participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE') AND EXISTS(SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=t.id))
+      SELECT rm.tender_id,rm.title,rm.external_id,rm.notice_number,rm.procurement_number,rm.ted_id,rm.buyer,rm.cpv_codes,rm.source_code,rm.source_url,rm.portal_scope_registered,rm.company_id,CASE WHEN rm.primary_company THEN rm.legal_name ELSE 'Keine' END company,
         rm.lot_key,l.id lot_id,l.external_id lot_number,l.title lot_title,rm.regions,rm.offer_deadline,rm.evaluation_version relevance_version,rm.relevance_status,rm.service_scope_gate,
         rm.service_line,rm.reason relevance_reason,rm.recommendation relevance_recommendation,
         ar.result_version,ev.version enrichment_version,ar.created_at,ar.stage_status,ar.review,ar.prepared_tasks,
@@ -774,8 +827,9 @@ export function registerAutopilotRoutes(
             error: "company_scope_forbidden",
             message: "Die ausgewählte Gesellschaft ist nicht zulässig.",
           });
-      const registeredScope = await requireRegisteredScope(reply, tender.id, company.company_id);
-      if (!registeredScope) return;
+      const participationEligible=tender.source_lifecycle_status==="ACTIVE"&&tender.participation_status==="ELIGIBLE"&&tender.offer_deadline&&new Date(tender.offer_deadline)>new Date();
+      const registeredScope = participationEligible?await resolveDocumentScope(reply, tender.id, company.company_id):null;
+      if (participationEligible&&!registeredScope) return;
       const lotKey = String(req.query?.lot || ""),
         resultVersion =
           Number.parseInt(String(req.query?.version || ""), 10) || null;
@@ -791,8 +845,12 @@ export function registerAutopilotRoutes(
       const enrichment =
         (
           await pool.query(
-            "SELECT id,version,notice_version,notice_type,change_state,retrieved_at,quality_summary,mapper_version,parser_version,created_at FROM tender.enrichment_versions WHERE tender_id=$1 AND ($2::uuid IS NULL OR id=$2) ORDER BY version DESC LIMIT 1",
-            [tender.id, result?.enrichment_version_id || null],
+            `SELECT ev.id,ev.version,ev.notice_version,ev.notice_type,ev.change_state,ev.retrieved_at,ev.quality_summary,ev.mapper_version,ev.parser_version,ev.created_at
+             FROM tender.enrichment_versions ev
+             LEFT JOIN tender.enrichment_context_bindings binding ON binding.enrichment_version_id=ev.id
+             WHERE ev.tender_id=$1 AND (($2::uuid IS NOT NULL AND ev.id=$2) OR ($2::uuid IS NULL AND binding.tenant_id=$3 AND binding.company_id=$4 AND binding.source_lot_id=$5))
+             ORDER BY ev.version DESC LIMIT 1`,
+            [tender.id, result?.enrichment_version_id || null,company.tenant_id,company.company_id,lotKey],
           )
         ).rows[0] || null;
       const enrichmentId = enrichment?.id || null;
@@ -1149,11 +1207,14 @@ export function registerAutopilotRoutes(
         company = companies.find((row) => String(row.company_id) === companyId);
       if (!company)
         return reply.code(403).send({ error: "company_scope_forbidden" });
-      const registeredScope = await requireRegisteredScope(reply, req.params.id, companyId);
+      const registeredScope = await resolveDocumentScope(reply, req.params.id, companyId);
       if (!registeredScope) return;
       const relevance = (
         await pool.query(
-          "SELECT service_line FROM tender.current_service_relevance WHERE tender_id=$1 AND company_id=$2 AND lot_key IS NOT DISTINCT FROM nullif($3,'') LIMIT 1",
+          `SELECT service_line FROM tender.current_service_relevance WHERE tender_id=$1 AND company_id=$2
+           AND (lot_key IS NOT DISTINCT FROM nullif($3,'') OR (lot_key IS NULL AND $3<>'' AND EXISTS(
+             SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=$1 AND eligible.lot_key=$3)))
+           ORDER BY (lot_key IS NOT DISTINCT FROM nullif($3,'')) DESC LIMIT 1`,
           [req.params.id, companyId, lotKey],
         )
       ).rows[0];
@@ -1183,7 +1244,7 @@ export function registerAutopilotRoutes(
         pool.query(
           `SELECT id,requirement_title,satisfaction_status,source_type FROM tender.required_documents
           WHERE tender_id=$1 AND company_id=$2 AND lot_key=$3 AND mandatory=true AND submission_relevant=true
-            AND satisfaction_status NOT IN('VALIDATED','NOT_REQUIRED','SUPERSEDED') ORDER BY requirement_title`,
+            AND satisfaction_status NOT IN('VALIDATED','NOT_REQUIRED','SUPERSEDED') AND manual_submission_relevance_override IS DISTINCT FROM false ORDER BY requirement_title`,
           [req.params.id, companyId, lotKey],
         ),
       ]);
@@ -1193,7 +1254,7 @@ export function registerAutopilotRoutes(
           pageSize: req.query?.pageSize,
         }),
         job = queue.rows[0] || null,
-        portalId = registeredScope.portal_id,
+        portalId = registeredScope.portal_id || null,
         processing = ["PENDING", "CLAIMED", "QUEUED", "RETRY", "RUNNING"].includes(job?.status),
         actions = [];
       if (!processing && workbench.summary.openOrFailed) {
@@ -1268,20 +1329,136 @@ export function registerAutopilotRoutes(
         .send(document.content);
     },
   );
-  list(
-    "/api/profiles",
-    "tender.view_assigned",
-    `SELECT p.id,p.company_id,c.legal_name,p.version,p.name,p.status,p.lifecycle_status,p.valid_from,p.valid_until,p.profile_sha256,p.service_lines,p.regions,p.field_provenance,p.capabilities,p.certifications,p.reference_profile,p.commercial_profile,p.approved_at,p.approved_by,
-      CASE WHEN jsonb_typeof(p.capabilities::jsonb->'missing')='array' THEN p.capabilities::jsonb->'missing' ELSE '[]'::jsonb END missing_required,
-      coalesce((p.capabilities::jsonb->>'completenessPercent')::int,0) completeness_percent
-      FROM tender.company_profiles p LEFT JOIN tender.enterprise_company_links c ON c.company_id=p.company_id ORDER BY c.legal_name,p.version DESC`,
-  );
-  app.post("/api/profiles/:id/activate",{preHandler:[requirePermission(["tender.config.approve","tender.config.self_approve_activate"]),csrf]},async(req,reply)=>{if(!validUuid(req.params.id))return reply.code(400).send({error:"profile_id_invalid"});const expectedHash=String(req.body?.profileSha256||""),confirmation=String(req.body?.confirmation||"");const client=await pool.connect();let companyId;try{await client.query("BEGIN");const profile=(await client.query("SELECT * FROM tender.company_profiles WHERE id=$1 FOR UPDATE",[req.params.id])).rows[0];if(!profile){await client.query("ROLLBACK");return reply.code(404).send({error:"profile_not_found"})}companyId=profile.company_id;if(profile.lifecycle_status!=="READY_FOR_APPROVAL"||profile.profile_sha256!==expectedHash||confirmation!=="Ich bestätige diese konkrete Gesellschaftsprofilversion und ihre Quellen."){await client.query("ROLLBACK");return reply.code(422).send({error:"profile_approval_binding_invalid"})}const missing=Array.isArray(profile.capabilities?.missing)?profile.capabilities.missing:[],commercial=JSON.stringify(profile.commercial_profile||{});if(missing.length||/NOCH ZU PFLEGEN|GESPERRT/i.test(commercial)){await client.query("ROLLBACK");return reply.code(422).send({error:"profile_mandatory_fields_incomplete",missingFields:missing})}await client.query("UPDATE tender.company_profiles SET lifecycle_status='SUPERSEDED' WHERE company_id=$1 AND lifecycle_status='ACTIVE'",[companyId]);await client.query("UPDATE tender.company_profiles SET lifecycle_status='ACTIVE',approved_at=now(),approved_by=$2 WHERE id=$1",[profile.id,req.identity.userId]);await client.query("INSERT INTO tender.company_profile_approvals(company_profile_id,profile_sha256,approved_by,approval_scope) VALUES($1,$2,$3,$4::jsonb)",[profile.id,profile.profile_sha256,req.identity.userId,JSON.stringify({companyId,version:profile.version,serviceLines:profile.service_lines||[]})]);await client.query("INSERT INTO tender.audit_events(actor_id,action,metadata) VALUES($1,'COMPANY_PROFILE_ACTIVATED',$2::jsonb)",[req.identity.userId,JSON.stringify({companyProfileId:profile.id,companyId,version:profile.version,profileSha256:profile.profile_sha256})]);await client.query("COMMIT")}catch(error){await client.query("ROLLBACK");throw error}finally{client.release()}const recheck=await reconcileFinalPreflight({limit:500});return {status:"ACTIVE",companyId,recheck,transmitted:false}});
-  list(
-    "/api/regions",
-    "tender.view_assigned",
-    "SELECT id,code,version,name,active FROM tender.region_zones ORDER BY code,version DESC",
-  );
+  app.get("/api/profiles",{preHandler:read},async(req)=>{
+    const companies=req.identity.permissions.includes("tender.admin")?(await pool.query("SELECT company_id,legal_name,sector_slug FROM tender.enterprise_company_links WHERE active=true ORDER BY legal_name")).rows:await accessibleCompanies(req.identity),ids=companies.map(x=>x.company_id);
+    if(!ids.length)return {items:[],groups:[],fieldDefinitions:profileFieldDefinitions,sourceTypes:profileSourceTypeLabels};
+    const rows=(await pool.query(`SELECT p.*,c.legal_name,scope.canonical_service,
+      CASE scope.canonical_service WHEN 'facility_management' THEN 'facility-management' WHEN 'emergency_services' THEN 'emergency-services' ELSE scope.canonical_service END service_line
+      FROM tender.company_profiles p JOIN tender.enterprise_company_links c ON c.company_id=p.company_id
+      LEFT JOIN tender.configuration_scopes scope ON scope.company_id=p.company_id AND scope.profile_id=c.tender_profile_id
+      WHERE p.company_id=ANY($1::uuid[]) ORDER BY c.legal_name,p.version DESC`,[ids])).rows;
+    const latest=new Map();for(const row of rows)if(!latest.has(`${row.company_id}:${row.service_line}`))latest.set(`${row.company_id}:${row.service_line}`,row.id);
+    const canEdit=req.identity.permissions.includes("tender.admin")||req.identity.permissions.some(x=>["tender.config.draft.edit","tender.config.services.edit","tender.config.evidence.edit","tender.config.regions.edit","tender.config.costs.edit"].includes(x));
+    const items=rows.map(row=>{const completion=evaluateProfile(row),current=latest.get(`${row.company_id}:${row.service_line}`)===row.id,editable=current&&["DRAFT","READY_FOR_APPROVAL"].includes(row.lifecycle_status)&&!row.approved_at&&canEdit;return {...row,...completion,current,editable,history:!current,nextStep:completion.releaseReady?"Vorhandenen Freigabeprozess starten":`${completion.missingValues} fehlende Werte und ${completion.missingSources} Quellen bearbeiten`}});
+    const groups=[...new Set(items.map(x=>`${x.company_id}:${x.service_line}`))].map(key=>{const versions=items.filter(x=>`${x.company_id}:${x.service_line}`===key);return {companyId:versions[0].company_id,company:versions[0].legal_name,serviceLine:versions[0].service_line,current:versions.find(x=>x.current),history:versions.filter(x=>!x.current)}});
+    return {items,groups,fieldDefinitions:profileFieldDefinitions,sourceTypes:profileSourceTypeLabels};
+  });
+  app.put("/api/profiles/:id/fields/:fieldKey",{preHandler:[requirePermission(["tender.config.draft.edit","tender.config.services.edit","tender.config.evidence.edit","tender.config.regions.edit","tender.config.costs.edit"]),csrf]},async(req,reply)=>{
+    if(!validUuid(req.params.id)||!profileFieldByKey[req.params.fieldKey])return reply.code(400).send({error:"profile_field_context_invalid"});
+    const definition=profileFieldByKey[req.params.fieldKey],body=req.body||{},companies=req.identity.permissions.includes("tender.admin")?(await pool.query("SELECT company_id FROM tender.enterprise_company_links WHERE active=true")).rows:await accessibleCompanies(req.identity),allowedIds=companies.map(x=>String(x.company_id)),areaPermission={"Gesellschaftsstammdaten":"tender.config.services.edit","Leistungs-/Unternehmensprofil":"tender.config.services.edit","Leistungs-/Kapazitätsprofil":"tender.config.services.edit","Nachweise":"tender.config.evidence.edit","Referenzverwaltung":"tender.config.evidence.edit","Regionen & Kapazitäten":"tender.config.regions.edit","Kapazität/Wirtschaftlichkeit":"tender.config.costs.edit","Kalkulationsparameter":"tender.config.costs.edit","Risiko & Wirtschaftlichkeit":"tender.config.costs.edit"}[definition.area];
+    if(!req.identity.permissions.includes("tender.admin")&&!req.identity.permissions.includes(areaPermission))return reply.code(403).send({error:"profile_field_role_forbidden",requestId:req.id});
+    if(!String(body.reason||"").trim())return reply.code(422).send({error:"profile_change_reason_required",requestId:req.id});
+    let upload=null;if(body.upload){const filename=safeOriginalFilename(String(body.upload.filename||"Nachweis")),mediaType=String(body.upload.mediaType||"");if(!/^(application\/pdf|image\/(?:png|jpeg))$/.test(mediaType))return reply.code(422).send({error:"profile_evidence_type_invalid"});let content;try{content=Buffer.from(String(body.upload.base64||""),"base64")}catch{return reply.code(422).send({error:"profile_evidence_invalid"})}if(!content.length||content.length>10_000_000)return reply.code(422).send({error:"profile_evidence_size_invalid"});const scan=await scanDocument(content);if(scan.status!=="CLEAN")return reply.code(scan.status==="INFECTED"?422:503).send({error:scan.status==="INFECTED"?"profile_evidence_malware":"profile_evidence_scanner_unavailable",requestId:req.id});upload={filename,mediaType,content,sha256:crypto.createHash("sha256").update(content).digest("hex"),scanStatus:scan.status}}
+    const source=body.source&&typeof body.source==="object"?body.source:null,validProfileDate=value=>{if(!/^\d{4}-\d{2}-\d{2}$/.test(String(value||"")))return false;const date=new Date(`${value}T00:00:00Z`);return !Number.isNaN(date.valueOf())&&date.toISOString().slice(0,10)===value};if(source&&(!definition.source.types.includes(String(source.sourceType||""))||!String(source.sourceLabel||"").trim()||!String(source.issuer||"").trim()||!validProfileDate(source.issuedAt)||!validProfileDate(source.validFrom)||source.validUntil&&!validProfileDate(source.validUntil)||source.validUntil&&source.validUntil<source.validFrom))return reply.code(422).send({error:"profile_source_invalid",allowedSourceTypes:definition.source.types,requestId:req.id});
+    const notApplicable=body.notApplicable===true;if(notApplicable&&(!definition.notApplicableAllowed||!String(body.notApplicableReason||"").trim()||!req.identity.permissions.some(x=>["tender.admin","tender.config.approve","tender.config.self_approve_activate"].includes(x))))return reply.code(403).send({error:"profile_not_applicable_forbidden"});
+    if(!notApplicable&&body.value===undefined&&!source&&!upload)return reply.code(422).send({error:"profile_value_or_source_required"});
+    const client=await pool.connect();try{await client.query("BEGIN");await client.query("SELECT set_config('app.company_ids',$1,true),set_config('app.profile_admin',$2,true)",[allowedIds.join(","),req.identity.permissions.includes("tender.admin")?"true":"false"]);
+      const profile=(await client.query("SELECT p.* FROM tender.company_profiles p WHERE p.id=$1 FOR UPDATE",[req.params.id])).rows[0];if(!profile){await client.query("ROLLBACK");return reply.code(404).send({error:"profile_not_found"})}if(!allowedIds.includes(String(profile.company_id))){await client.query("ROLLBACK");return reply.code(403).send({error:"company_scope_forbidden"})}
+      const latest=(await client.query("SELECT id FROM tender.company_profiles WHERE company_id=$1 ORDER BY version DESC LIMIT 1",[profile.company_id])).rows[0];if(String(latest?.id)!==String(profile.id)||!["DRAFT","READY_FOR_APPROVAL"].includes(profile.lifecycle_status)||profile.approved_at){await client.query("ROLLBACK");return reply.code(409).send({error:"historical_profile_immutable",requestId:req.id})}if(String(body.expectedProfileSha256||"")!==String(profile.profile_sha256||"")){await client.query("ROLLBACK");return reply.code(409).send({error:"profile_version_conflict",requestId:req.id})}
+      let next=body.value===undefined?structuredClone(profile):setProfileField(profile,definition,body.value);const prior=next.field_provenance||{},mayVerify=req.identity.permissions.some(x=>["tender.admin","tender.config.approve","tender.config.self_approve_activate"].includes(x));
+      const provenance={...(prior[definition.key]||{}),...(source?{sourceType:String(source.sourceType),sourceLabel:String(source.sourceLabel).trim(),issuer:String(source.issuer).trim(),issuedAt:source.issuedAt||null,validFrom:source.validFrom||null,validUntil:source.validUntil||null,documentReference:String(source.documentReference||"").trim()||null,verificationStatus:mayVerify&&source.verificationStatus==="VERIFIED"?"VERIFIED":"PENDING_REVIEW",verifiedBy:mayVerify&&source.verificationStatus==="VERIFIED"?req.identity.userId:null,verifiedAt:mayVerify&&source.verificationStatus==="VERIFIED"?new Date().toISOString():null}:{}),unit:String(body.unit||"").trim()||null,changeReason:String(body.reason).trim().slice(0,2000),notApplicable,notApplicableReason:notApplicable?String(body.notApplicableReason).trim():null,updatedBy:req.identity.userId,updatedAt:new Date().toISOString(),internalNote:String(body.internalNote||"").slice(0,2000)||null};
+      if(upload){await client.query("UPDATE tender.company_profile_field_evidence SET is_current=false WHERE company_profile_id=$1 AND field_key=$2 AND is_current",[profile.id,definition.key]);const version=Number((await client.query("SELECT coalesce(max(evidence_version),0)+1 version FROM tender.company_profile_field_evidence WHERE company_profile_id=$1 AND field_key=$2",[profile.id,definition.key])).rows[0].version);const evidence=(await client.query(`INSERT INTO tender.company_profile_field_evidence(company_profile_id,company_id,field_key,evidence_version,filename,media_type,size_bytes,sha256,content,malware_scan_status,source_metadata,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12) RETURNING id,evidence_version,sha256,validation_status`,[profile.id,profile.company_id,definition.key,version,upload.filename,upload.mediaType,upload.content.length,upload.sha256,upload.content,upload.scanStatus,JSON.stringify(source||{}),req.identity.userId])).rows[0];provenance.evidence={id:evidence.id,version:evidence.evidence_version,sha256:evidence.sha256,validationStatus:evidence.validation_status,filename:upload.filename}}
+      next.field_provenance={...prior,[definition.key]:provenance};let completion=evaluateProfile(next);next.capabilities={...(next.capabilities||{}),missing:completion.fields.filter(x=>!x.complete).map(x=>x.label),completenessPercent:completion.completenessPercent};next.lifecycle_status=completion.releaseReady?"READY_FOR_APPROVAL":"DRAFT";next.profile_sha256=profileFingerprint(next);
+      const saved=(await client.query(`UPDATE tender.company_profiles SET capabilities=$2::jsonb,certifications=$3::jsonb,reference_profile=$4::jsonb,commercial_profile=$5::jsonb,field_provenance=$6::jsonb,lifecycle_status=$7,profile_sha256=$8 WHERE id=$1 RETURNING *`,[profile.id,JSON.stringify(next.capabilities),JSON.stringify(next.certifications),JSON.stringify(next.reference_profile),JSON.stringify(next.commercial_profile),JSON.stringify(next.field_provenance),next.lifecycle_status,next.profile_sha256])).rows[0];
+      await client.query("INSERT INTO tender.audit_events(actor_id,action,metadata) VALUES($1,'COMPANY_PROFILE_FIELD_DRAFT_SAVED',$2::jsonb)",[req.identity.userId,JSON.stringify({companyProfileId:profile.id,companyId:profile.company_id,profileVersion:profile.version,fieldKey:definition.key,sourceType:source?.sourceType||null,evidenceSha256:upload?.sha256||null,notApplicable,reason:String(body.reason).trim().slice(0,500),requestId:req.id})]);await client.query("COMMIT");completion=evaluateProfile(saved);return {...completion,profileId:saved.id,profileSha256:saved.profile_sha256,lifecycleStatus:saved.lifecycle_status,autoApproved:false,requestId:req.id};
+    }catch(error){try{await client.query("ROLLBACK")}catch{}req.log.error({errorCode:error?.code||"PROFILE_FIELD_SAVE_FAILED",requestId:req.id},"company profile field save failed");return reply.code(500).send({error:"profile_field_save_failed",requestId:req.id})}finally{client.release()}
+  });
+  app.post("/api/profiles/:id/activate",{preHandler:[requirePermission(["tender.config.approve","tender.config.self_approve_activate"]),csrf]},async(req,reply)=>{if(!validUuid(req.params.id))return reply.code(400).send({error:"profile_id_invalid"});const expectedHash=String(req.body?.profileSha256||""),confirmation=String(req.body?.confirmation||""),profileCompanies=req.identity.permissions.includes("tender.admin")?(await pool.query("SELECT company_id FROM tender.enterprise_company_links WHERE active=true")).rows:await accessibleCompanies(req.identity),allowedIds=profileCompanies.map(x=>String(x.company_id));const client=await pool.connect();let companyId;try{await client.query("BEGIN");const profile=(await client.query("SELECT * FROM tender.company_profiles WHERE id=$1 FOR UPDATE",[req.params.id])).rows[0];if(!profile){await client.query("ROLLBACK");return reply.code(404).send({error:"profile_not_found"})}companyId=profile.company_id;if(!allowedIds.includes(String(companyId))){await client.query("ROLLBACK");return reply.code(403).send({error:"company_scope_forbidden"})}const latest=(await client.query("SELECT id FROM tender.company_profiles WHERE company_id=$1 ORDER BY version DESC LIMIT 1",[companyId])).rows[0];if(String(latest?.id)!==String(profile.id)){await client.query("ROLLBACK");return reply.code(409).send({error:"historical_profile_immutable"})}if(profile.lifecycle_status!=="READY_FOR_APPROVAL"||profile.profile_sha256!==expectedHash||confirmation!=="Ich bestätige diese konkrete Gesellschaftsprofilversion und ihre Quellen."){await client.query("ROLLBACK");return reply.code(422).send({error:"profile_approval_binding_invalid"})}const completion=evaluateProfile(profile),missing=Array.isArray(profile.capabilities?.missing)?profile.capabilities.missing:[],commercial=JSON.stringify(profile.commercial_profile||{});if(!completion.releaseReady||missing.length||/NOCH ZU PFLEGEN|GESPERRT/i.test(commercial)){await client.query("ROLLBACK");return reply.code(422).send({error:"profile_mandatory_fields_incomplete",missingFields:completion.fields.filter(x=>!x.complete).map(x=>x.label)})}await client.query("UPDATE tender.company_profiles SET lifecycle_status='SUPERSEDED' WHERE company_id=$1 AND lifecycle_status='ACTIVE'",[companyId]);await client.query("UPDATE tender.company_profiles SET lifecycle_status='ACTIVE',approved_at=now(),approved_by=$2 WHERE id=$1",[profile.id,req.identity.userId]);await client.query("INSERT INTO tender.company_profile_approvals(company_profile_id,profile_sha256,approved_by,approval_scope) VALUES($1,$2,$3,$4::jsonb)",[profile.id,profile.profile_sha256,req.identity.userId,JSON.stringify({companyId,version:profile.version,serviceLines:profile.service_lines||[]})]);await client.query("INSERT INTO tender.audit_events(actor_id,action,metadata) VALUES($1,'COMPANY_PROFILE_ACTIVATED',$2::jsonb)",[req.identity.userId,JSON.stringify({companyProfileId:profile.id,companyId,version:profile.version,profileSha256:profile.profile_sha256})]);await client.query("COMMIT")}catch(error){await client.query("ROLLBACK");throw error}finally{client.release()}const recheck=await reconcileFinalPreflight({limit:500});return {status:"ACTIVE",companyId,recheck,transmitted:false}});
+  const regionDate = (value) => {
+      const text = String(value || "");
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+      const date = new Date(`${text}T00:00:00Z`);
+      return Number.isNaN(date.valueOf()) || date.toISOString().slice(0, 10) !== text ? null : text;
+    },
+    regionPayload = (body = {}, fallback = null) => {
+      const code = String(body.code ?? fallback?.code ?? "").trim().toUpperCase(),
+        name = String(body.name ?? fallback?.name ?? "").trim(),
+        regions = body.regions && typeof body.regions === "object" && !Array.isArray(body.regions) ? body.regions : fallback?.regions,
+        travelRules = body.travelRules && typeof body.travelRules === "object" && !Array.isArray(body.travelRules) ? body.travelRules : fallback?.travel_rules,
+        reason = String(body.reason || "").trim(),
+        effectiveFrom = regionDate(body.effectiveFrom),
+        changeType = String(body.changeType || "UPDATE").toUpperCase(),
+        relocation = body.relocation && typeof body.relocation === "object" ? body.relocation : null,
+        errors = {};
+      if (!/^[A-Z][A-Z0-9_-]{1,39}$/.test(code)) errors.code = "Zonencode muss aus 2–40 Großbuchstaben, Ziffern, _ oder - bestehen.";
+      if (!name || name.length > 160) errors.name = "Name ist erforderlich und darf höchstens 160 Zeichen enthalten.";
+      if (!regions || !Array.isArray(regions.areas) || !regions.areas.length || regions.areas.some((area) => !String(area).trim() || String(area).length > 200)) errors.regions = "Mindestens ein gültiges Gebiet ist erforderlich.";
+      if (!travelRules) errors.travelRules = "Fahrt- und Bewertungsregeln sind erforderlich.";
+      if (!reason || reason.length > 2000) errors.reason = "Eine Änderungsbegründung mit höchstens 2.000 Zeichen ist erforderlich.";
+      if (!effectiveFrom) errors.effectiveFrom = "Ein gültiges Wirksamkeitsdatum ist erforderlich.";
+      if (!["CREATE", "UPDATE", "RELOCATION", "RETIRE"].includes(changeType)) errors.changeType = "Änderungsart ist ungültig.";
+      if (changeType === "RELOCATION" && (!String(relocation?.from || "").trim() || !String(relocation?.to || "").trim() || !regionDate(relocation?.effectiveAt))) errors.relocation = "Beim Umzug sind Ausgangsort, Zielort und Wirksamkeitsdatum erforderlich.";
+      return { code, name, regions, travelRules, reason, effectiveFrom, changeType, relocation, errors };
+    },
+    regionHash = (payload, version) => crypto.createHash("sha256").update(JSON.stringify({ code:payload.code, version, name:payload.name, regions:payload.regions, travelRules:payload.travelRules })).digest("hex"),
+    regionValidationError = (reply, errors, requestId) => reply.code(422).send({ error:"region_zone_validation_failed", message:Object.values(errors)[0], fieldErrors:errors, requestId });
+  app.get("/api/regions", { preHandler: read }, async (req) => {
+    const items = (await pool.query(`SELECT zone.*,coalesce(events.events,'[]'::jsonb) events
+      FROM tender.region_zones zone LEFT JOIN LATERAL(
+        SELECT jsonb_agg(jsonb_build_object('action',event.action,'reason',event.reason,'occurredAt',event.occurred_at,'requestId',event.request_id) ORDER BY event.occurred_at DESC) events
+        FROM tender.region_zone_events event WHERE event.zone_id=zone.id
+      ) events ON true ORDER BY zone.code,zone.version DESC`)).rows;
+    const groups = [...new Set(items.map((item) => item.code))].map((code) => {
+      const versions = items.filter((item) => item.code === code);
+      return { code, current:versions.find((item) => item.lifecycle_status === "ACTIVE") || versions[0], history:versions.slice(1) };
+    });
+    return { items, groups, canManage:req.identity.permissions.includes("tender.admin") || req.identity.permissions.includes("tender.config.regions.edit"), deleteProtected:true, versioned:true, externalWrite:false };
+  });
+  app.post("/api/regions", { preHandler:[requirePermission(["tender.config.regions.edit","tender.admin"]),csrf] }, async (req, reply) => {
+    const payload = regionPayload({ ...req.body, changeType:"CREATE" });
+    if (Object.keys(payload.errors).length) return regionValidationError(reply,payload.errors,req.id);
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`REGION_ZONE:${payload.code}`]);
+      if ((await client.query("SELECT 1 FROM tender.region_zones WHERE code=$1 LIMIT 1",[payload.code])).rowCount) { await client.query("ROLLBACK"); return reply.code(409).send({ error:"region_zone_code_exists", message:"Für diesen Zonencode existiert bereits eine Versionshistorie.", requestId:req.id }); }
+      const id=crypto.randomUUID(),hash=regionHash(payload,1),row=(await client.query(`INSERT INTO tender.region_zones(id,code,version,name,regions,travel_rules,active,created_by,lifecycle_status,effective_from,change_type,change_reason,content_sha256)
+        VALUES($1,$2,1,$3,$4::jsonb,$5::jsonb,true,$6,'ACTIVE',$7,'CREATE',$8,$9) RETURNING *`,[id,payload.code,payload.name,JSON.stringify(payload.regions),JSON.stringify(payload.travelRules),req.identity.userId,payload.effectiveFrom,payload.reason,hash])).rows[0];
+      await client.query("INSERT INTO tender.region_zone_events(zone_id,code,version,action,reason,content_sha256,actor_id,request_id,metadata) VALUES($1,$2,1,'CREATED',$3,$4,$5,$6,$7::jsonb)",[id,payload.code,payload.reason,hash,req.identity.userId,req.id,JSON.stringify({externalWrite:false})]);
+      await client.query("INSERT INTO tender.audit_events(actor_id,action,metadata) VALUES($1,'REGION_ZONE_CREATED',$2::jsonb)",[req.identity.userId,JSON.stringify({zoneId:id,code:payload.code,version:1,contentSha256:hash,requestId:req.id,externalWrite:false})]);
+      await client.query("COMMIT"); return reply.code(201).send({ item:row, requestId:req.id });
+    } catch (error) { await client.query("ROLLBACK").catch(()=>{}); throw error; } finally { client.release(); }
+  });
+  app.post("/api/regions/:id/versions", { preHandler:[requirePermission(["tender.config.regions.edit","tender.admin"]),csrf] }, async (req, reply) => {
+    if (!validUuid(req.params.id)) return reply.code(404).send({ error:"region_zone_not_found" });
+    const client=await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const current=(await client.query("SELECT * FROM tender.region_zones WHERE id=$1 FOR UPDATE",[req.params.id])).rows[0];
+      if (!current) { await client.query("ROLLBACK"); return reply.code(404).send({ error:"region_zone_not_found" }); }
+      if (!current.active || current.lifecycle_status!=="ACTIVE") { await client.query("ROLLBACK"); return reply.code(409).send({ error:"historical_region_zone_immutable", requestId:req.id }); }
+      if (String(req.body?.expectedContentSha256||"")!==current.content_sha256) { await client.query("ROLLBACK"); return reply.code(409).send({ error:"region_zone_version_conflict", requestId:req.id }); }
+      const payload=regionPayload(req.body,current); if (Object.keys(payload.errors).length) { await client.query("ROLLBACK"); return regionValidationError(reply,payload.errors,req.id); }
+      if (payload.code!==current.code || !["UPDATE","RELOCATION"].includes(payload.changeType)) { await client.query("ROLLBACK"); return regionValidationError(reply,{changeType:"Nur UPDATE oder RELOCATION ist für eine neue Version zulässig."},req.id); }
+      const version=current.version+1,id=crypto.randomUUID(),regions=payload.changeType==="RELOCATION"?{...payload.regions,relocation:{from:String(payload.relocation.from).trim(),to:String(payload.relocation.to).trim(),effectiveAt:payload.relocation.effectiveAt}}:payload.regions,next={...payload,regions},hash=regionHash(next,version);
+      await client.query("UPDATE tender.region_zones SET active=false,lifecycle_status='SUPERSEDED',effective_until=$2::date-1,superseded_by_id=$3,updated_at=now() WHERE id=$1",[current.id,payload.effectiveFrom,id]);
+      const row=(await client.query(`INSERT INTO tender.region_zones(id,code,version,name,regions,travel_rules,active,created_by,lifecycle_status,effective_from,change_type,change_reason,supersedes_id,content_sha256)
+        VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb,true,$7,'ACTIVE',$8,$9,$10,$11,$12) RETURNING *`,[id,current.code,version,payload.name,JSON.stringify(regions),JSON.stringify(payload.travelRules),req.identity.userId,payload.effectiveFrom,payload.changeType,payload.reason,current.id,hash])).rows[0];
+      const action=payload.changeType==="RELOCATION"?"RELOCATED":"VERSION_CREATED";
+      await client.query("INSERT INTO tender.region_zone_events(zone_id,code,version,action,reason,prior_zone_id,content_sha256,actor_id,request_id,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)",[id,current.code,version,action,payload.reason,current.id,hash,req.identity.userId,req.id,JSON.stringify({relocation:payload.changeType==="RELOCATION"?payload.relocation:null,externalWrite:false})]);
+      await client.query("INSERT INTO tender.audit_events(actor_id,action,metadata) VALUES($1,$2,$3::jsonb)",[req.identity.userId,payload.changeType==="RELOCATION"?"REGION_ZONE_RELOCATED":"REGION_ZONE_VERSION_CREATED",JSON.stringify({zoneId:id,priorZoneId:current.id,code:current.code,version,contentSha256:hash,requestId:req.id,externalWrite:false})]);
+      await client.query("COMMIT"); return reply.code(201).send({ item:row, requestId:req.id });
+    } catch(error) { await client.query("ROLLBACK").catch(()=>{}); throw error; } finally { client.release(); }
+  });
+  app.post("/api/regions/:id/retire", { preHandler:[requirePermission(["tender.config.regions.edit","tender.admin"]),csrf] }, async (req, reply) => {
+    if (!validUuid(req.params.id)) return reply.code(404).send({ error:"region_zone_not_found" });
+    const client=await pool.connect();
+    try {
+      await client.query("BEGIN"); const current=(await client.query("SELECT * FROM tender.region_zones WHERE id=$1 FOR UPDATE",[req.params.id])).rows[0];
+      if (!current) { await client.query("ROLLBACK"); return reply.code(404).send({ error:"region_zone_not_found" }); }
+      if (!current.active || current.lifecycle_status!=="ACTIVE" || String(req.body?.expectedContentSha256||"")!==current.content_sha256) { await client.query("ROLLBACK"); return reply.code(409).send({ error:"region_zone_version_conflict", requestId:req.id }); }
+      const payload=regionPayload({ ...req.body, code:current.code, name:current.name, regions:current.regions, travelRules:current.travel_rules, changeType:"RETIRE" },current);
+      if (Object.keys(payload.errors).length) { await client.query("ROLLBACK"); return regionValidationError(reply,payload.errors,req.id); }
+      const version=current.version+1,id=crypto.randomUUID(),hash=regionHash(payload,version);
+      await client.query("UPDATE tender.region_zones SET active=false,lifecycle_status='SUPERSEDED',effective_until=$2::date-1,superseded_by_id=$3,updated_at=now() WHERE id=$1",[current.id,payload.effectiveFrom,id]);
+      const row=(await client.query(`INSERT INTO tender.region_zones(id,code,version,name,regions,travel_rules,active,created_by,lifecycle_status,effective_from,effective_until,change_type,change_reason,supersedes_id,content_sha256)
+        VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb,false,$7,'RETIRED',$8,$8,'RETIRE',$9,$10,$11) RETURNING *`,[id,current.code,version,current.name,JSON.stringify(current.regions),JSON.stringify(current.travel_rules),req.identity.userId,payload.effectiveFrom,payload.reason,current.id,hash])).rows[0];
+      await client.query("INSERT INTO tender.region_zone_events(zone_id,code,version,action,reason,prior_zone_id,content_sha256,actor_id,request_id,metadata) VALUES($1,$2,$3,'RETIRED',$4,$5,$6,$7,$8,$9::jsonb)",[id,current.code,version,payload.reason,current.id,hash,req.identity.userId,req.id,JSON.stringify({externalWrite:false,deleteProtected:true})]);
+      await client.query("INSERT INTO tender.audit_events(actor_id,action,metadata) VALUES($1,'REGION_ZONE_RETIRED',$2::jsonb)",[req.identity.userId,JSON.stringify({zoneId:id,priorZoneId:current.id,code:current.code,version,contentSha256:hash,requestId:req.id,externalWrite:false})]);
+      await client.query("COMMIT"); return { item:row, requestId:req.id };
+    } catch(error) { await client.query("ROLLBACK").catch(()=>{}); throw error; } finally { client.release(); }
+  });
+  app.delete("/api/regions/:id", { preHandler:[requirePermission(["tender.config.regions.edit","tender.admin"]),csrf] }, async (req,reply) => reply.code(409).send({ error:"region_zone_delete_protected", message:"Regionale Zonen werden aus Nachweis- und Bindungsgründen niemals gelöscht. Verwenden Sie Stilllegen.", requestId:req.id }));
   list(
     "/api/matching",
     "tender.view_assigned",
@@ -1299,7 +1476,15 @@ export function registerAutopilotRoutes(
   const activeCredentialForCompany = async (portalId, companyId) =>
     !validUuid(companyId) ? null : (
       await pool.query(
-        `SELECT credential.* FROM tender.portal_credential_secrets credential
+        `SELECT credential.*,
+                CASE WHEN scope.metadata_configured THEN scope.internal_label ELSE credential.internal_label END internal_label,
+                CASE WHEN scope.metadata_configured THEN scope.contact_person ELSE credential.contact_person END contact_person,
+                CASE WHEN scope.metadata_configured THEN scope.notes ELSE credential.notes END notes,
+                CASE WHEN scope.metadata_configured THEN scope.registration_status ELSE credential.registration_status END registration_status,
+                CASE WHEN scope.metadata_configured THEN scope.login_status ELSE credential.login_status END login_status,
+                CASE WHEN scope.metadata_configured THEN scope.mfa_required_state ELSE credential.mfa_required_state END mfa_required_state,
+                CASE WHEN scope.metadata_configured THEN scope.last_manual_check_at ELSE credential.last_manual_check_at END last_manual_check_at
+         FROM tender.portal_credential_secrets credential
          JOIN tender.portal_credential_companies scope ON scope.credential_id=credential.id
          WHERE credential.portal_id=$1 AND credential.status='ACTIVE' AND scope.company_id=$2 AND scope.active=true
          ORDER BY credential.version DESC LIMIT 1`,
@@ -1317,6 +1502,292 @@ export function registerAutopilotRoutes(
       "INSERT INTO tender.portal_connection_events(portal_id,actor_id,action,result_code,safe_detail) VALUES($1,$2,$3,$4,$5::jsonb)",
       [portalId, actorId, action, resultCode, JSON.stringify(detail)],
     );
+  const portalNavigationUiBase =
+      process.env.TENDER_UI_BASE || "/admin/ausschreibungen",
+    portalNavigationApiBase = process.env.TENDER_API_BASE || "/api/tender",
+    portalNavigationEscape = (value) =>
+      String(value ?? "").replace(
+        /[&<>"']/g,
+        (character) =>
+          ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+            "'": "&#39;",
+          })[character],
+      ),
+    portalNavigationPage = ({ title, body, returnTo }) =>
+      `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="wb-portal-navigation-release" content="${PORTAL_NAVIGATION_RELEASE}"><title>${portalNavigationEscape(title)} · WB Plattform</title><link rel="stylesheet" href="${portalNavigationUiBase}/ui.css"><script src="${portalNavigationUiBase}/portalzugaenge/assets/${PORTAL_NAVIGATION_RELEASE}/portal-navigation.js" defer></script></head><body data-api="${portalNavigationApiBase}" data-return-to="${portalNavigationEscape(returnTo)}"><header><span class="brand"><img src="${portalNavigationUiBase}/wb-holding-logo.png" alt="WB-Holding AG"><strong>WB Plattform · Portalzugänge</strong></span><a href="${portalNavigationEscape(returnTo)}">Zur Ausschreibung zurück</a></header><main><h1>${portalNavigationEscape(title)}</h1>${body}</main></body></html>`,
+    portalNavigationContext = async (
+      req,
+      reply,
+      { requestedPortalId = null, tenderId: suppliedTenderId, companyId: suppliedCompanyId, returnTo: suppliedReturnTo } = {},
+    ) => {
+      const tenderId = String(suppliedTenderId || req.query?.tenderId || ""),
+        companyId = String(suppliedCompanyId || req.query?.companyId || ""),
+        service = String(req.query?.service || ""),
+        version = String(req.query?.version || ""),
+        lot = String(req.query?.lotId || req.query?.lot || "");
+      if (![tenderId, companyId].every(validPortalNavigationUuid)) {
+        reply.code(400).send({ error: "portal_navigation_scope_invalid" });
+        return null;
+      }
+      const tender = await visibleTender(req, reply, tenderId);
+      if (!tender) return null;
+      const company = (await accessibleCompanies(req.identity)).find(
+        (row) => String(row.company_id) === companyId,
+      );
+      if (!company) {
+        reply.code(403).send({ error: "company_scope_forbidden" });
+        return null;
+      }
+      const companyBound = (
+        await pool.query(
+          `SELECT EXISTS(
+             SELECT 1 FROM tender.current_service_relevance relevance
+             WHERE relevance.tender_id=$1 AND relevance.company_id=$2
+           ) OR EXISTS(
+             SELECT 1 FROM tender.tenders bound
+             WHERE bound.id=$1 AND bound.company_id=$2
+           ) allowed`,
+          [tenderId, companyId],
+        )
+      ).rows[0]?.allowed;
+      if (!companyBound) {
+        reply.code(403).send({ error: "tender_company_scope_forbidden" });
+        return null;
+      }
+      const boundContext = (
+        await pool.query(
+          `SELECT ($3='' OR EXISTS(
+             SELECT 1 FROM tender.current_service_relevance relevance
+             WHERE relevance.tender_id=$1 AND relevance.company_id=$2 AND relevance.service_line=$3
+           )) service_allowed,
+           ($4='' OR EXISTS(
+             SELECT 1 FROM tender.tender_versions version
+             WHERE version.tender_id=$1 AND (version.id::text=$4 OR version.version::text=$4)
+           )) version_allowed,
+           ($5='' OR EXISTS(
+             SELECT 1 FROM tender.lots lot WHERE lot.tender_id=$1 AND (lot.id::text=$5 OR lot.external_id=$5)
+             UNION ALL
+             SELECT 1 FROM tender.enrichment_lots lot JOIN tender.enrichment_versions enrichment ON enrichment.id=lot.enrichment_version_id
+             WHERE enrichment.tender_id=$1 AND (lot.id::text=$5 OR lot.lot_key=$5)
+           )) lot_allowed`,
+          [tenderId, companyId, service, version, lot],
+        )
+      ).rows[0];
+      if (!boundContext?.service_allowed) {
+        reply.code(403).send({ error: "tender_service_scope_forbidden" });
+        return null;
+      }
+      if (!boundContext.version_allowed || !boundContext.lot_allowed) {
+        reply.code(404).send({ error: "tender_context_not_found" });
+        return null;
+      }
+      const evidence = (await loadTenderLinkEvidence(pool, [tenderId])).get(tenderId),
+        confirmed = (
+          await pool.query(
+            `SELECT metadata->>'portalId' portal_id
+             FROM tender.audit_events
+             WHERE action='tender_portal_mapping_confirmed' AND tender_id=$1
+               AND metadata->>'companyId'=$2
+             ORDER BY id DESC LIMIT 1`,
+            [tenderId, companyId],
+          )
+        ).rows[0]?.portal_id,
+        truth = (
+          await pool.query(
+            "SELECT portal_id,mapping_status FROM tender.current_tender_portal_mapping_truth WHERE tender_id=$1",
+            [tenderId],
+          )
+        ).rows[0],
+        evidencePortalId =
+          evidence?.portalMapping?.status === "EINDEUTIG_ZUGEORDNET"
+            ? evidence.portalMapping.portalId
+            : null,
+        candidatePortalId = confirmed || evidencePortalId ||
+          (truth?.mapping_status === "UNIQUE_CANONICAL_PROFILE" ? truth.portal_id : null);
+      let portalId=candidatePortalId;
+      if(portalId){const candidatePortal=await portalRow(portalId),profile=portalCatalogProfile(candidatePortal||{});if(!candidatePortal||profile.isTedService||isTechnicalPublicationSource(candidatePortal))portalId=null;}
+      if (requestedPortalId) {
+        if (!validPortalNavigationUuid(requestedPortalId)) {
+          reply.code(400).send({ error: "portal_id_invalid" });
+          return null;
+        }
+        const requestedPortal = await portalRow(requestedPortalId);
+        if (!requestedPortal) {
+          reply.code(404).send({ error: "portal_not_found" });
+          return null;
+        }
+        if (!portalId || String(portalId) !== String(requestedPortalId)) {
+          reply.code(403).send({ error: "tender_portal_scope_forbidden" });
+          return null;
+        }
+      }
+      return {
+        tender,
+        company,
+        evidence,
+        portalId: portalId ? String(portalId) : null,
+        returnTo: safePortalReturnTo(String(suppliedReturnTo || req.query?.returnTo || ""), portalNavigationUiBase),
+      };
+    };
+
+  const portalNavigationScript = `(()=>{"use strict";const body=document.body,api=body.dataset.api,status=(message,error=false)=>{const node=document.querySelector("[data-portal-navigation-status]");if(node){node.textContent=message;node.classList.toggle("error",error)}},csrf=()=>decodeURIComponent(document.cookie.split("; ").find(item=>item.startsWith("wb_csrf="))?.split("=").slice(1).join("=")||""),request=async(path,method,payload)=>{const response=await fetch(api+path,{method,credentials:"same-origin",headers:{"content-type":"application/json","x-csrf-token":csrf()},body:JSON.stringify(payload)}),result=await response.json();if(!response.ok)throw new Error(result.message||result.error||"Speichern fehlgeschlagen.");return result};document.querySelectorAll("[data-select-portal]").forEach(button=>button.addEventListener("click",async()=>{button.disabled=true;status("Portalzuordnung wird bestätigt …");try{const result=await request("/portal-navigation/confirm","POST",{portalId:button.dataset.selectPortal,companyId:button.dataset.companyId,tenderId:button.dataset.tenderId,returnTo:body.dataset.returnTo});location.assign(result.href)}catch(error){button.disabled=false;status(error.message,true)}}));document.querySelector("[data-record-candidate]")?.addEventListener("click",async event=>{const input=document.querySelector('input[name="q"]'),candidate=input?.value.trim();if(!candidate)return input?.focus();event.currentTarget.disabled=true;try{await request("/portal-access/registry-candidates","POST",{candidate,companyId:event.currentTarget.dataset.companyId,tenderId:event.currentTarget.dataset.tenderId});event.currentTarget.textContent="Als Prüfungskandidat erfasst"}catch(error){event.currentTarget.disabled=false;status(error.message,true)}});const form=document.querySelector("#portal-direct-credential-form");if(form)form.addEventListener("submit",async event=>{event.preventDefault();const submit=form.querySelector('[type="submit"]'),data=new FormData(form),username=String(data.get("username")||"").trim(),password=String(data.get("password")||"");submit.disabled=true;status("Zugang wird sicher gespeichert …");try{if(Boolean(username)!==Boolean(password))throw new Error("Benutzername und neues Passwort müssen gemeinsam eingegeben werden.");if(!form.dataset.configured&&!username)throw new Error("Für einen neuen Zugang sind Benutzername und Passwort erforderlich.");if(username)await request("/portal-access/"+encodeURIComponent(form.dataset.portalId)+"/credentials","POST",{companyId:form.dataset.companyId,username,password,mfaMethod:data.get("mfaMethod"),contactPerson:data.get("contactPerson"),notes:data.get("notes"),accountType:"SUBMISSION_ACCOUNT",authorizedCapabilities:["BIDDER_LOGIN","TENDER_DOCUMENT_DOWNLOAD","BID_SUBMISSION"],accountConfirmed:true,submissionCapable:true,idempotencyKey:form.dataset.pendingIdempotencyKey||(form.dataset.pendingIdempotencyKey=crypto.randomUUID())});await request("/portal-access/"+encodeURIComponent(form.dataset.portalId)+"/credential-metadata","PATCH",{companyId:form.dataset.companyId,internalLabel:form.dataset.internalLabel||"",contactPerson:data.get("contactPerson"),notes:data.get("notes"),registrationStatus:form.dataset.registrationStatus||"NICHT_REGISTRIERT",loginStatus:form.dataset.loginStatus||"LOGIN_UNGEPRUEFT",mfaRequired:data.get("mfaRequired")===""?null:data.get("mfaRequired")==="true",manualCheckConfirmed:false});delete form.dataset.pendingIdempotencyKey;form.dataset.configured="true";form.elements.password.value="";status("Portalzugang sicher gespeichert. Das Passwort wird nicht angezeigt.")}catch(error){status(error.message,true)}finally{submit.disabled=false}})})();`;
+  app.get(
+    `/portalzugaenge/assets/${PORTAL_NAVIGATION_RELEASE}/portal-navigation.js`,
+    { preHandler: requirePermission(["tender.portal.manage", "tender.admin"]) },
+    async (_, reply) => reply
+      .header("cache-control", "private, max-age=31536000, immutable")
+      .header("x-wb-portal-navigation-release", PORTAL_NAVIGATION_RELEASE)
+      .type("text/javascript")
+      .send(portalNavigationScript),
+  );
+  app.get(
+    "/portalzugaenge/bearbeiten",
+    { preHandler: requirePermission(["tender.portal.manage", "tender.admin"]) },
+    async (req, reply) => {
+      const portalId = String(req.query?.portalId || ""),requestedPortal=await portalRow(portalId);
+      if(requestedPortal&&!tenderCredentialPortalEligibility(requestedPortal).eligible){
+        const context=await portalNavigationContext(req,reply);if(!context)return;
+        return reply.redirect(portalNavigationHref({uiBase:portalNavigationUiBase,tenderId:context.tender.id,companyId:context.company.company_id,service:req.query?.service,version:req.query?.version,lot:req.query?.lotId||req.query?.lot,returnTo:context.returnTo}));
+      }
+      const
+        context = await portalNavigationContext(req, reply, { requestedPortalId: portalId });
+      if (!context) return;
+      const portal = await portalRow(portalId),
+        credentials = (
+          await pool.query(
+            `SELECT credential.id,credential.username_masked,credential.mfa_method,
+                    credential.account_confirmed,credential.submission_capable,
+                    credential.internal_label,credential.contact_person,credential.notes,credential.mfa_required_state,
+                    credential.registration_status,credential.login_status,
+                    session.session_effective_status,job.status job_status,job.result_code job_result_code
+             FROM tender.portal_credential_secrets credential
+             JOIN tender.portal_credential_companies scope
+               ON scope.credential_id=credential.id AND scope.active=true
+             LEFT JOIN LATERAL(
+               SELECT tender.portal_session_effective_status(status,expires_at,revoked_at,verification_status) session_effective_status
+               FROM tender.portal_read_sessions session
+               WHERE session.portal_id=credential.portal_id AND session.company_id=scope.company_id AND session.credential_id=credential.id
+               ORDER BY session.created_at DESC LIMIT 1
+             ) session ON true
+             LEFT JOIN LATERAL(
+               SELECT status,coalesce(error_code,portal_access_status) result_code FROM tender.autopilot_queue job
+               WHERE job.portal_id=credential.portal_id AND job.company_id=scope.company_id AND job.credential_id=credential.id
+                 AND job.action_type IN ('TEST_PORTAL_CONNECTION','TEST_DOCUMENT_FETCH')
+               ORDER BY job.created_at DESC,job.id DESC LIMIT 1
+             ) job ON true
+             WHERE credential.portal_id=$1 AND scope.company_id=$2
+               AND credential.status='ACTIVE' AND credential.revoked_at IS NULL
+               AND (credential.valid_until IS NULL OR credential.valid_until>now())
+             ORDER BY credential.version DESC`,
+            [portalId, context.company.company_id],
+          )
+        ).rows;
+      if (credentials.length > 1)
+        return reply.code(403).send({ error: "credential_scope_ambiguous" });
+      const credential = credentials[0] || null,
+        accessStatus = canonicalPortalAccessStatus({ configured:Boolean(credential), sessionEffectiveStatus:credential?.session_effective_status, jobStatus:credential?.job_status, jobResultCode:credential?.job_result_code, mfaRequired:credential?.mfa_required_state }),
+        accessLabels = {NO_ACCESS:"Kein Portalzugang hinterlegt",ACCESS_CONFIGURED:"Zugang hinterlegt",CHECK_RUNNING:"Prüfung läuft",LOGGED_IN:"Angemeldet",RELOGIN_REQUIRED:"Re-Login erforderlich",MFA_REQUIRED:"MFA erforderlich",LOGIN_FAILED:"Anmeldung fehlgeschlagen",PORTAL_UNREACHABLE:"Portal nicht erreichbar",STATUS_UNKNOWN:"Status unbekannt"},
+        body = `<section class="panel" aria-label="Direkte Zugangsdatenmaske"><dl><dt>Ausschreibung</dt><dd>${portalNavigationEscape(context.tender.title)}</dd><dt>Gesellschaft</dt><dd><strong>${portalNavigationEscape(context.company.legal_name)}</strong></dd><dt>Portal</dt><dd><strong>${portalNavigationEscape(portal.display_name)}</strong></dd><dt>Betreiber</dt><dd>${portalNavigationEscape(portal.display_name)}</dd><dt>Domain</dt><dd>${portalNavigationEscape(portal.canonical_domain)}</dd><dt>Validierte Loginadresse</dt><dd>${portalNavigationEscape(safeExternalPortalUrl(portal.authentication_entry_url,portal) || "Nicht hinterlegt")}</dd><dt>Zugangsstatus</dt><dd><strong>${portalNavigationEscape(accessLabels[accessStatus] || "Status unbekannt")}</strong></dd></dl></section><form id="portal-direct-credential-form" class="panel" autocomplete="off" data-configured="${Boolean(credential)}" data-portal-id="${portalNavigationEscape(portal.id)}" data-company-id="${portalNavigationEscape(context.company.company_id)}" data-internal-label="${portalNavigationEscape(credential?.internal_label || "")}" data-registration-status="${portalNavigationEscape(credential?.registration_status || "NICHT_REGISTRIERT")}" data-login-status="${portalNavigationEscape(credential?.login_status || "LOGIN_UNGEPRUEFT")}" data-account-confirmed="${credential?.account_confirmed === true}" data-submission-capable="${credential?.submission_capable === true}"><h2>Zugangsdaten</h2>${credential ? `<p><strong>Passwort ist sicher hinterlegt.</strong> Gespeicherter Benutzername: ${portalNavigationEscape(credential.username_masked || "sicher maskiert")}. Ein leeres Passwortfeld verändert das Passwort nicht.</p>` : `<p>Für diese Gesellschaft ist an diesem Portal noch kein Zugang hinterlegt.</p>`}<label>Benutzername oder E-Mail<input name="username" autocomplete="username" inputmode="email"></label><label>Passwort (Write-only)<input name="password" type="password" autocomplete="new-password"></label><label>MFA erforderlich<select name="mfaRequired"><option value="">Unbekannt</option><option value="true" ${credential?.mfa_required_state===true?"selected":""}>Ja</option><option value="false" ${credential?.mfa_required_state===false?"selected":""}>Nein</option></select></label><label>MFA-Art<input name="mfaMethod" value="${portalNavigationEscape(credential?.mfa_method || "")}" maxlength="80"></label><label>Verantwortliche Person<input name="contactPerson" value="${portalNavigationEscape(credential?.contact_person || "")}" maxlength="160"></label><label>Bemerkung ohne Geheimnisse<textarea name="notes" maxlength="1000">${portalNavigationEscape(credential?.notes || "")}</textarea></label><div class="review-actions"><button type="submit">Sicher speichern</button><a class="button-link" href="${portalNavigationEscape(context.returnTo)}">Abbrechen</a><a class="button-link" href="${portalNavigationEscape(context.returnTo)}">Zur Ausschreibung zurück</a></div><p data-portal-navigation-status aria-live="polite"></p></form>`;
+      return reply
+        .header("cache-control", "no-store, max-age=0, must-revalidate")
+        .header("x-wb-portal-navigation-release", PORTAL_NAVIGATION_RELEASE)
+        .type("text/html")
+        .send(portalNavigationPage({ title: credential ? "Portalzugang bearbeiten" : "Portalzugang einrichten", body, returnTo: context.returnTo }));
+    },
+  );
+  app.get(
+    "/portalzugaenge",
+    { preHandler: requirePermission(["tender.portal.manage", "tender.admin"]) },
+    async (req, reply) => {
+      if (String(req.query?.mode || "") !== "search")
+        return reply.code(400).send({ error: "portal_search_mode_required" });
+      const context = await portalNavigationContext(req, reply);
+      if (!context) return;
+      if (context.portalId) {
+        const href = portalNavigationHref({
+          uiBase: portalNavigationUiBase,
+          tenderId: context.tender.id,
+          companyId: context.company.company_id,
+          portalId: context.portalId,
+          returnTo: context.returnTo,
+        });
+        return reply.redirect(href);
+      }
+      const query = String(req.query?.q || "").trim().slice(0, 160),
+        allPortals = withTedServiceCatalog((
+          await pool.query(
+            `SELECT id,display_name,canonical_domain,adapter_id,adapter_enabled,tender.canonical_portal_adapter_validation_status(adapter_validation_status) adapter_validation_status,allowed_subdomains,authentication_domains,download_domains,authentication_entry_url,registration_entry_url,capabilities
+             FROM tender.portal_registry ORDER BY display_name,canonical_domain`,
+          )
+        ).rows),
+        results = searchPortalResults(allPortals.map(portal => {const profile=portal.catalog_profile||portalCatalogProfile(portal);return { portalId:portal.id,portalName:profile.officialName,operator:profile.operator,domain:profile.host,adapterId:portal.adapter_id,aliases:[...(portal.allowed_subdomains||[]),...(portal.authentication_domains||[]),...(portal.download_domains||[])],loginEntryUrl:portal.authentication_entry_url,registrationEntryUrl:portal.registration_entry_url,access:{configured:false},purpose:profile.purpose,serviceCapabilities:profile.capabilities,serviceRoles:profile.roles,credentialAccountTypes:profile.accountTypes,isTedService:profile.isTedService,knownTedService:profile.knownTedService,loginAvailable:profile.loginAvailable,registrationAvailable:profile.registrationAvailable,openUrl:profile.openUrl,noticeSearchUrl:profile.noticeSearchUrl,validationStatus:profile.validationStatus,catalogVirtual:Boolean(portal.catalog_virtual),tenderPortalSelectable:!portal.catalog_virtual&&!profile.isTedService&&!isTechnicalPublicationSource(portal)};}), { q:query, portalRole:req.query?.portalRole, page:req.query?.page, pageSize:req.query?.pageSize }),
+        searchAction = `${portalNavigationUiBase}/portalzugaenge`,
+        portalRole=String(req.query?.portalRole||""),
+        pageLink = page => `${searchAction}?companyId=${encodeURIComponent(context.company.company_id)}&tenderId=${encodeURIComponent(context.tender.id)}&mode=search&returnTo=${encodeURIComponent(context.returnTo)}&q=${encodeURIComponent(query)}&portalRole=${encodeURIComponent(portalRole)}&page=${page}&pageSize=${results.pageSize}`,
+        body = `<section class="panel"><p><strong>Gesellschaft:</strong> ${portalNavigationEscape(context.company.legal_name)}</p><p><strong>Ausschreibung:</strong> ${portalNavigationEscape(context.tender.title)}</p><p class="notice">Die Bekanntmachung wurde über TED/oeffentlichevergabe.de veröffentlicht. Das für Anmeldung und Abgabe verwendete Vergabeportal konnte nicht eindeutig ermittelt werden.</p><p>TED bleibt als Bekanntmachungsdienst sichtbar. Das tatsächliche Vergabe- und Abgabeportal dieser Ausschreibung kann von TED abweichen.</p><form method="get" action="${searchAction}"><input type="hidden" name="companyId" value="${portalNavigationEscape(context.company.company_id)}"><input type="hidden" name="tenderId" value="${portalNavigationEscape(context.tender.id)}"><input type="hidden" name="mode" value="search"><input type="hidden" name="returnTo" value="${portalNavigationEscape(context.returnTo)}"><label><strong>Vergabeportal oder Anbieter suchen</strong><input name="q" value="${portalNavigationEscape(query)}" placeholder="Portalname, Betreiber, Domain oder Alias eingeben" autofocus autocomplete="off"></label><label>Diensttyp<select name="portalRole"><option value="">Alle Portale</option><option value="publication" ${portalRole==="publication"?"selected":""}>Veröffentlichungsportale</option><option value="notices" ${portalRole==="notices"?"selected":""}>Bekanntmachungsportale</option><option value="documents" ${portalRole==="documents"?"selected":""}>Dokumentportale</option><option value="login" ${portalRole==="login"?"selected":""}>Loginportale</option><option value="submission" ${portalRole==="submission"?"selected":""}>Abgabeportale</option><option value="ted" ${portalRole==="ted"?"selected":""}>TED-Dienste</option></select></label><button type="submit">Suchen und auswählen</button><a class="button-link" href="${pageLink(1).replace(/&q=[^&]*/,"&q=").replace(/&portalRole=[^&]*/,"&portalRole=")}">Suche zurücksetzen</a></form></section><section class="panel"><h2>Portalkatalog</h2><p>${results.total} Treffer</p><div class="grid">${results.items.map((portal) => `<article class="card"><h3>${portalNavigationEscape(portal.portalName)}</h3><p><strong>${portalNavigationEscape(portal.domain)}</strong></p><p>${portalNavigationEscape(portal.purpose)}</p><p class="muted">Betreiber: ${portalNavigationEscape(portal.operator)} · Status: ${portalNavigationEscape(portal.validationStatus)}</p><p>Login: ${portal.loginAvailable?"vorhanden":"nicht belegt"} · Registrierung: ${portal.registrationAvailable?"vorhanden":"nicht belegt"}</p><p>Fähigkeiten: ${portalNavigationEscape((portal.serviceCapabilities||[]).join(", ")||"noch zu prüfen")}</p>${portal.isTedService?`<p class="notice">Das tatsächliche Vergabe- und Abgabeportal dieser Ausschreibung kann von TED abweichen.</p>`:""}<div class="review-actions">${portal.openUrl?`<a class="button-link" href="${portalNavigationEscape(portal.openUrl)}" target="_blank" rel="noopener noreferrer">${portal.domain==="ted.europa.eu"?"TED öffnen":"Dienst öffnen"}</a>`:""}${portal.noticeSearchUrl?`<a class="button-link" href="${portalNavigationEscape(portal.noticeSearchUrl)}" target="_blank" rel="noopener noreferrer">Bekanntmachungen suchen</a>`:""}${portal.tenderPortalSelectable?`<button type="button" data-select-portal="${portalNavigationEscape(portal.portalId)}" data-company-id="${portalNavigationEscape(context.company.company_id)}" data-tender-id="${portalNavigationEscape(context.tender.id)}">Als tatsächliches Vergabeportal auswählen</button>`:""}</div></article>`).join("") || `<p><strong>Kein passendes Vergabeportal gefunden.</strong></p><p><a href="${pageLink(1).replace(/&q=[^&]*/,"&q=").replace(/&portalRole=[^&]*/,"&portalRole=")}">Alle Portale anzeigen</a></p><button type="button" data-record-candidate data-company-id="${portalNavigationEscape(context.company.company_id)}" data-tender-id="${portalNavigationEscape(context.tender.id)}">Portal als Prüfungskandidat erfassen</button><p>Ein Kandidat wird nicht automatisch validiert.</p>`}</div><nav>${results.page>1?`<a class="button-link" href="${pageLink(results.page-1)}">Zurück</a>`:""}<span>Seite ${results.page} von ${results.pages}</span>${results.page<results.pages?`<a class="button-link" href="${pageLink(results.page+1)}">Weiter</a>`:""}</nav><p data-portal-navigation-status aria-live="polite"></p><a class="button-link" href="${portalNavigationEscape(context.returnTo)}">Abbrechen</a><a class="button-link" href="${portalNavigationEscape(context.returnTo)}">Zur Ausschreibung zurück</a></section>`;
+      return reply
+        .header("cache-control", "no-store, max-age=0, must-revalidate")
+        .header("x-wb-portal-navigation-release", PORTAL_NAVIGATION_RELEASE)
+        .type("text/html")
+        .send(portalNavigationPage({ title: "Portalzugang einrichten", body, returnTo: context.returnTo }));
+    },
+  );
+  app.post(
+    "/api/portal-navigation/confirm",
+    {
+      preHandler: [
+        requirePermission(["tender.portal.manage", "tender.admin"]),
+        csrf,
+      ],
+    },
+    async (req, reply) => {
+      const tenderId = String(req.body?.tenderId || ""),
+        companyId = String(req.body?.companyId || ""),
+        portalId = String(req.body?.portalId || "");
+      if (![tenderId, companyId, portalId].every(validPortalNavigationUuid))
+        return reply.code(400).send({ error: "portal_navigation_scope_invalid" });
+      const context = await portalNavigationContext(req, reply, {
+        tenderId,
+        companyId,
+        returnTo: req.body?.returnTo,
+      });
+      if (!context) return;
+      const portal = await portalRow(portalId);
+      if (!portal) return reply.code(404).send({ error: "portal_not_found" });
+      const profile=portalCatalogProfile(portal);
+      if(profile.isTedService||isTechnicalPublicationSource(portal))return reply.code(422).send({error:"PUBLICATION_SOURCE_NOT_PROCUREMENT_PORTAL",message:"TED beziehungsweise die technische Datenquelle kann nicht als tatsächliches Vergabeportal zugeordnet werden."});
+      const client=await pool.connect();
+      try{
+        await client.query("BEGIN");
+        const selection=(await client.query(`SELECT selection.*,portal.canonical_domain
+          FROM tender.tender_lot_selections selection JOIN tender.portal_registry portal ON portal.id=$3
+          WHERE selection.company_id=$1 AND selection.tender_id=$2
+            AND selection.tender_version_id=(SELECT id FROM tender.tender_versions WHERE tender_id=$2 ORDER BY version DESC LIMIT 1)
+          ORDER BY selection.updated_at DESC LIMIT 1 FOR UPDATE OF selection`,[companyId,tenderId,portalId])).rows[0];
+        if(!selection){await client.query("ROLLBACK");return reply.code(409).send({error:"lot_selection_required",message:"Bitte wählen Sie zuerst das konkrete Los; die Portalzuordnung wird los-, gesellschafts- und versionsgebunden gespeichert."})}
+        await client.query(`UPDATE tender.tender_portal_assignments SET status='SUPERSEDED',superseded_at=now()
+          WHERE tenant_id=$1 AND company_id=$2 AND tender_id=$3 AND canonical_service=$4 AND coalesce(source_lot_id,'')=coalesce($5,'') AND status='ACTIVE'`,[selection.tenant_id,companyId,tenderId,selection.canonical_service,selection.source_lot_id]);
+        await client.query(`INSERT INTO tender.tender_portal_assignments(tenant_id,company_id,tender_id,tender_version_id,lot_id,source_lot_id,canonical_service,portal_id,exact_host,assignment_source,status,evidence_sha256,assigned_by)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'MANUAL_AUDITED','ACTIVE',encode(digest($10,'sha256'),'hex'),$11)`,[selection.tenant_id,companyId,tenderId,selection.tender_version_id,selection.lot_id,selection.source_lot_id,selection.canonical_service,portalId,portal.canonical_domain,JSON.stringify({tenderId,companyId,lotId:selection.lot_id,sourceLotId:selection.source_lot_id,portalId,portalHost:portal.canonical_domain,tenderVersionId:selection.tender_version_id}),req.identity.userId]);
+        await client.query(`INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'tender_portal_mapping_confirmed',$2,$3::jsonb)`,[req.identity.userId,tenderId,JSON.stringify({companyId,portalId,lotId:selection.lot_id,sourceLotId:selection.source_lot_id,tenderVersionId:selection.tender_version_id,canonicalService:selection.canonical_service,source:"PORTAL_SEARCH_USER_CONFIRMATION",release:PORTAL_NAVIGATION_RELEASE,externalWrite:false,transmitted:false})]);
+        await client.query("COMMIT");
+      }catch(error){await client.query("ROLLBACK").catch(()=>{});throw error}finally{client.release()}
+      return {
+        href: portalNavigationHref({
+          uiBase: portalNavigationUiBase,
+          tenderId,
+          companyId,
+          portalId,
+          returnTo: context.returnTo,
+        }),
+        release: PORTAL_NAVIGATION_RELEASE,
+      };
+    },
+  );
   const portalHosts = (portal) =>
     [
       portal.canonical_domain,
@@ -1390,11 +1861,16 @@ export function registerAutopilotRoutes(
     pool.query(
       `WITH domains AS(SELECT DISTINCT lower(split_part(split_part(source_url,'://',2),'/',1)) domain FROM tender.enrichment_documents WHERE fetch_status='PORTALZUGANG_ERFORDERLICH' AND source_url LIKE 'https://%') INSERT INTO tender.portal_registry(display_name,canonical_domain,discovery_source) SELECT initcap(replace(CASE WHEN split_part(domain,'.',1)='www' THEN split_part(domain,'.',2) ELSE split_part(domain,'.',1) END,'-',' ')),domain,'PORTAL_REQUIRED_DOCUMENT' FROM domains WHERE domain<>'' AND domain !~ '(^localhost$|^127\\.|^10\\.|^192\\.168\\.|^172\\.(1[6-9]|2[0-9]|3[01])\\.)' ON CONFLICT(canonical_domain) DO NOTHING`,
     );
-  app.get("/api/portals", { preHandler: read }, async (req) => {
-    await discoverPortals();
+  app.get("/api/portals", { preHandler: read }, async (req, reply) => {
     const manage = portalManage(req.identity),
       permittedCompanies = await accessibleCompanies(req.identity),
-      permittedCompanyIds = permittedCompanies.map((row) => row.company_id),
+      requestedCompanyId = String(req.query?.company || req.query?.companyId || ""),
+      requestedCompany = requestedCompanyId
+        ? permittedCompanies.find((row) => String(row.company_id) === requestedCompanyId)
+        : permittedCompanies[0],
+      requestedTenderId = String(req.query?.tender || req.query?.tenderId || ""),
+      requestedPortalId = String(req.query?.portal || req.query?.portalId || ""),
+      permittedCompanyIds = requestedCompany ? [requestedCompany.company_id] : [],
       companyCredentialRows = permittedCompanyIds.length
         ? (
             await pool.query(
@@ -1403,9 +1879,12 @@ export function registerAutopilotRoutes(
                 credential.username_masked,credential.internal_label,credential.mfa_method,
                 credential.valid_until,credential.created_at credential_created_at,
                 credential.account_confirmed,credential.submission_capable,
-                session.status session_status,session.expires_at session_expires_at,
+                credential.account_type,credential.authorized_capabilities,credential.bound_host,
+                session.status session_status,session.expires_at session_expires_at,session.last_verified_at session_last_verified_at,
                 session.verification_status session_verification_status,
-                session.session_effective_status
+                session.session_effective_status,
+                job.status job_status,job.result_code job_result_code,
+                job.created_at job_created_at,job.finished_at job_finished_at
                FROM tender.enterprise_company_links company
                JOIN tender.portal_credential_companies scope
                  ON scope.company_id=company.company_id AND scope.active=true
@@ -1413,7 +1892,7 @@ export function registerAutopilotRoutes(
                  ON credential.id=scope.credential_id AND credential.status='ACTIVE'
                  AND (credential.valid_until IS NULL OR credential.valid_until>now())
                LEFT JOIN LATERAL(
-                 SELECT status,expires_at,verification_status,
+                 SELECT status,expires_at,verification_status,last_verified_at,
                    tender.portal_session_effective_status(status,expires_at,revoked_at,verification_status) session_effective_status
                  FROM tender.portal_read_sessions session
                  WHERE session.portal_id=credential.portal_id
@@ -1421,13 +1900,22 @@ export function registerAutopilotRoutes(
                    AND session.company_id=company.company_id
                  ORDER BY session.created_at DESC LIMIT 1
                ) session ON true
+               LEFT JOIN LATERAL(
+                 SELECT status,coalesce(error_code,portal_access_status) result_code,created_at,finished_at
+                 FROM tender.autopilot_queue job
+                 WHERE job.portal_id=credential.portal_id
+                   AND job.credential_id=credential.id
+                   AND job.company_id=company.company_id
+                   AND job.action_type IN ('TEST_PORTAL_CONNECTION','TEST_DOCUMENT_FETCH')
+                 ORDER BY job.created_at DESC,job.id DESC LIMIT 1
+               ) job ON true
                WHERE company.active=true AND company.company_id=ANY($1::uuid[])
                ORDER BY credential.portal_id,company.legal_name,credential.version DESC`,
               [permittedCompanyIds],
             )
           ).rows
         : [],
-      rows = (
+      rows = withTedServiceCatalog((
         await pool.query(`WITH detected AS(
       SELECT lower(split_part(split_part(d.source_url,'://',2),'/',1)) domain,count(DISTINCT e.tender_id)::int tenders,count(*)::int documents
       FROM tender.enrichment_documents d JOIN tender.enrichment_versions e ON e.id=d.enrichment_version_id
@@ -1443,7 +1931,43 @@ export function registerAutopilotRoutes(
       FROM tender.portal_capability_profiles profile JOIN tender.portal_capability_features feature ON feature.profile_id=profile.id GROUP BY profile.id)
       SELECT p.*,a.mode adapter_mode,a.supported_actions,a.authentication_type,coalesce(d.tenders,0) detected_tenders,coalesce(d.documents,0) affected_documents,c.id IS NOT NULL configured,c.account_confirmed,c.submission_capable,c.username_masked,c.internal_label,c.mfa_method,c.contact_person,c.notes,c.valid_until,c.created_at credential_created_at,coalesce(cs.items,'[]'::jsonb) companies,coalesce(h.login_result,le.result_code) connection_status,tender.canonical_portal_adapter_validation_status(coalesce(h.effective_status,p.adapter_validation_status)) effective_status,h.document_fetch_possible current_document_fetch_possible,h.checked_at live_checked_at,le.occurred_at last_test_at,s.company_id session_company_id,s.status session_status,s.expires_at session_expires_at,s.verification_status session_verification_status,s.session_effective_status,cap.portal_type capability_portal_type,cap.profile_version capability_profile_version,cap.capability_evidence_url,cap.evidence_label capability_evidence_label,cap.evidence_verified_at capability_evidence_verified_at,coalesce(cap.capability_features,'{}'::jsonb) capability_features
       FROM tender.portal_registry p LEFT JOIN tender.portal_adapters a ON a.portal_code=p.adapter_id LEFT JOIN detected d ON d.domain=p.canonical_domain LEFT JOIN latest_credential c ON c.portal_id=p.id LEFT JOIN companies cs ON cs.credential_id=c.id LEFT JOIN latest_event le ON le.portal_id=p.id LEFT JOIN sessions s ON s.portal_id=p.id LEFT JOIN tender.current_portal_health h ON h.portal_id=p.id LEFT JOIN capability cap ON cap.portal_id=p.id ORDER BY p.display_name,p.canonical_domain`)
-      ).rows;
+      ).rows);
+    if (requestedCompanyId && !requestedCompany)
+      return reply.code(403).send({ error: "company_scope_forbidden" });
+    if (!requestedCompany)
+      return reply.code(403).send({ error: "company_scope_required" });
+    if (requestedTenderId) {
+      if (!validUuid(requestedTenderId))
+        return reply.code(400).send({ error: "invalid_tender_id" });
+      if (!(await visibleTender(req, reply, requestedTenderId))) return;
+      const context = (
+        await pool.query(
+          `SELECT EXISTS(
+             SELECT 1 FROM tender.current_service_relevance relevance
+             WHERE relevance.tender_id=$1 AND relevance.company_id=$2
+               AND ($3='' OR relevance.service_line=$3)
+           ) company_service_allowed,
+           EXISTS(
+             SELECT 1 FROM tender.tender_versions version
+             WHERE version.tender_id=$1
+               AND ($4='' OR version.id::text=$4 OR version.version::text=$4)
+           ) version_allowed,
+           ($5='' OR EXISTS(
+             SELECT 1 FROM tender.lots lot WHERE lot.tender_id=$1
+               AND (lot.id::text=$5 OR lot.external_id=$5)
+             UNION ALL
+             SELECT 1 FROM tender.enrichment_lots lot
+             JOIN tender.enrichment_versions enrichment ON enrichment.id=lot.enrichment_version_id
+             WHERE enrichment.tender_id=$1 AND (lot.id::text=$5 OR lot.lot_key=$5)
+           )) lot_allowed`,
+          [requestedTenderId, requestedCompany.company_id, String(req.query?.service || ""), String(req.query?.version || ""), String(req.query?.lot || "")],
+        )
+      ).rows[0];
+      if (!context?.company_service_allowed)
+        return reply.code(403).send({ error: "tender_company_scope_forbidden" });
+      if (!context.version_allowed || !context.lot_allowed)
+        return reply.code(404).send({ error: "tender_context_not_found" });
+    }
     const readiness = (row) => {
       const actions = row.supported_actions || [],
         features = row.capability_features || {},
@@ -1538,9 +2062,9 @@ export function registerAutopilotRoutes(
         capabilityTruthVerified,
       };
     };
-    return {
-      items: rows.map((row) => {
-        const companyAccesses = permittedCompanies.map((company) => {
+    const allItems = rows.map((row) => {
+        const catalogProfile=row.catalog_profile||portalCatalogProfile(row);
+        const companyAccesses = [requestedCompany].map((company) => {
             const credential = companyCredentialRows.find(
               (item) =>
                 String(item.portal_id) === String(row.id) &&
@@ -1562,6 +2086,9 @@ export function registerAutopilotRoutes(
               validUntil: credential?.valid_until || null,
               createdAt: credential?.credential_created_at || null,
               bidderAccountPresent: Boolean(credential?.account_confirmed),
+              accountType: credential?.account_type||null,
+              authorizedCapabilities: credential?.authorized_capabilities||[],
+              boundHost: credential?.bound_host||null,
               readOnly: credential ? !credential.submission_capable : true,
               sessionStatus: credential?.session_status || null,
               sessionValidUntil: credential?.session_expires_at || null,
@@ -1569,6 +2096,20 @@ export function registerAutopilotRoutes(
                 credential?.session_verification_status || null,
               sessionEffectiveStatus:
                 credential?.session_effective_status || "RELOGIN_REQUIRED_INACTIVE",
+              jobStatus: credential?.job_status || null,
+              jobResultCode: credential?.job_result_code || null,
+              jobCreatedAt: credential?.job_created_at || null,
+              jobFinishedAt: credential?.job_finished_at || null,
+              lastSuccessfulCheck: credential?.session_effective_status === "ACTIVE"
+                ? credential?.session_last_verified_at || credential?.job_finished_at || null
+                : null,
+              status: canonicalPortalAccessStatus({
+                configured: Boolean(credential),
+                sessionEffectiveStatus: credential?.session_effective_status || null,
+                jobStatus: credential?.job_status || null,
+                jobResultCode: credential?.job_result_code || null,
+                mfaRequired: Boolean(credential?.mfa_method || row.mfa_required),
+              }),
             };
           }),
           configuredAccesses = companyAccesses.filter(
@@ -1598,12 +2139,27 @@ export function registerAutopilotRoutes(
           ready = readiness(scopedRow);
         return {
           portalId: row.id,
-          portalName: row.display_name,
+          portalName: catalogProfile.officialName,
           portalType:
             row.capability_portal_type ||
             row.adapter_mode ||
             "Nicht klassifiziert",
-          domain: row.canonical_domain,
+          domain: catalogProfile.host,
+          operator: catalogProfile.operator,
+          purpose: catalogProfile.purpose,
+          serviceCapabilities: catalogProfile.capabilities,
+          serviceRoles: catalogProfile.roles,
+          credentialAccountTypes: catalogProfile.accountTypes,
+          isTedService: catalogProfile.isTedService,
+          knownTedService: catalogProfile.knownTedService,
+          loginAvailable: catalogProfile.loginAvailable,
+          registrationAvailable: catalogProfile.registrationAvailable,
+          openUrl: catalogProfile.openUrl,
+          noticeSearchUrl: catalogProfile.noticeSearchUrl,
+          catalogValidationStatus: catalogProfile.validationStatus,
+          catalogVirtual: Boolean(row.catalog_virtual),
+          tenderPortalSelectable: !row.catalog_virtual&&tenderCredentialPortalEligibility(row).eligible,
+          aliases: [...new Set([...(row.allowed_subdomains || []), ...(row.authentication_domains || []), ...(row.download_domains || []), row.adapter_id].filter(Boolean))],
           allowedSubdomains: row.allowed_subdomains,
           authenticationDomains: row.authentication_domains,
           downloadDomains: row.download_domains,
@@ -1624,6 +2180,9 @@ export function registerAutopilotRoutes(
           },
           loginStrategy: row.login_strategy,
           documentStrategy: row.document_strategy,
+          loginEntryUrl: manage ? safeExternalPortalUrl(row.authentication_entry_url, row) : null,
+          registrationEntryUrl: manage ? safeExternalPortalUrl(row.registration_entry_url, row) : null,
+          entryLinksVerifiedAt: row.entry_links_verified_at || row.last_verified_at || null,
           detectedTenders: row.detected_tenders,
           affectedDocuments: row.affected_documents,
           accessRequired: row.affected_documents > 0,
@@ -1660,10 +2219,30 @@ export function registerAutopilotRoutes(
           contactPerson: null,
           notes: null,
           canManage: manage,
+          credentialEligible: credentialPortalEligibility(row).eligible,
           readOnly: !scopedRow.submission_capable,
           companyAccesses,
+          access: companyAccesses[0],
+          confirmedTenderMapping: Boolean(requestedPortalId && String(requestedPortalId) === String(row.id)),
         };
-      }),
+      });
+    const result = searchPortalResults(allItems, {
+      q: req.query?.q,
+      access: req.query?.access,
+      status: req.query?.status ? String(req.query.status).split(",") : [],
+      validated: req.query?.validated,
+      authentication: req.query?.authentication,
+      documentDownload: req.query?.documentDownload,
+      portalRole: req.query?.portalRole,
+      page: req.query?.page,
+      pageSize: req.query?.pageSize,
+      exactHost: req.query?.portalHost,
+    });
+    return {
+      ...result,
+      companies: permittedCompanies.map((company) => ({ id: company.company_id, name: company.legal_name })),
+      selectedCompany: { id: requestedCompany.company_id, name: requestedCompany.legal_name },
+      companyLocked: Boolean(requestedTenderId),
       canManage: manage,
       connectorContractVersion: "3.0.0",
       externalWritesEnabled: false,
@@ -1724,6 +2303,58 @@ export function registerAutopilotRoutes(
       };
     },
   );
+  app.get("/api/portal-submission-validations", { preHandler: read }, async (req) => {
+    const allowed=req.identity.permissions.includes("tender.admin")?null:req.identity.companyIds;
+    const rows=(await pool.query(`SELECT DISTINCT ON(validation.portal_id,validation.company_id) validation.*,portal.display_name portal_name,portal.canonical_domain,company.legal_name company_name
+      FROM tender.portal_submission_adapter_validations validation
+      JOIN tender.portal_registry portal ON portal.id=validation.portal_id
+      JOIN tender.enterprise_company_links company ON company.company_id=validation.company_id
+      ORDER BY validation.portal_id,validation.company_id,validation.validated_at DESC,validation.id DESC`)).rows
+      .filter((row)=>!allowed||allowed.includes(String(row.company_id)));
+    return { items:rows, externalWrite:false, transmitted:false };
+  });
+  app.post("/api/portal-submission-validations/run", { preHandler:[requirePermission(["tender.submission.audit","tender.admin"]),csrf] }, async (req) => {
+    const scopes=(await pool.query(`SELECT DISTINCT ON(portal.id,scope.company_id)
+        portal.id portal_id,portal.display_name portal_name,portal.canonical_domain,portal.adapter_id portal_adapter_id,portal.adapter_version portal_adapter_version,portal.adapter_enabled,portal.adapter_validation_status,
+        credential.id credential_id,credential.version credential_version,credential.account_confirmed,credential.submission_capable,credential.account_type,credential.authorized_capabilities,scope.company_id,company.legal_name company_name,
+        connector.enabled connector_enabled,connector.validation_status connector_validation_status,
+        allowlist.adapter_id allowlist_adapter_id,allowlist.adapter_version allowlist_adapter_version,allowlist.portal_host,allowlist.enabled allowlist_enabled,allowlist.kill_switch allowlist_kill_switch,allowlist.validation_status allowlist_validation_status,
+        capability.portal_support submission_portal_support,capability.autopilot_supported submission_autopilot_supported,capability.actively_configured submission_actively_configured,capability.production_tested submission_production_tested,capability.browser_acceptance_passed submission_browser_accepted,
+        settings.external_submission_enabled,settings.allow_external_submission,settings.global_kill_switch
+      FROM tender.portal_registry portal
+      JOIN tender.portal_credential_secrets credential ON credential.portal_id=portal.id AND credential.status='ACTIVE' AND credential.revoked_at IS NULL AND (credential.valid_until IS NULL OR credential.valid_until>now())
+      JOIN tender.portal_credential_companies scope ON scope.credential_id=credential.id AND scope.active=true
+      JOIN tender.enterprise_company_links company ON company.company_id=scope.company_id AND company.active=true
+      LEFT JOIN tender.portal_connector_adapters connector ON connector.canonical_domain=portal.canonical_domain AND connector.adapter_id=portal.adapter_id
+      LEFT JOIN tender.submission_portal_allowlist allowlist ON allowlist.portal_id=portal.id
+      LEFT JOIN LATERAL(SELECT feature.* FROM tender.portal_capability_profiles profile JOIN tender.portal_capability_features feature ON feature.profile_id=profile.id AND feature.feature_key='SUBMISSION' WHERE profile.portal_id=portal.id ORDER BY profile.profile_version DESC LIMIT 1) capability ON true
+      CROSS JOIN tender.submission_runtime_settings settings
+      ORDER BY portal.id,scope.company_id,credential.version DESC,connector.adapter_version DESC`)).rows;
+    const visible=scopes.filter((row)=>req.identity.permissions.includes("tender.admin")||req.identity.companyIds.includes(String(row.company_id))),items=[];
+    const client=await pool.connect();
+    try {
+      await client.query("BEGIN");
+      for(const row of visible){
+        const adapterImplemented=submissionAdapters[row.portal_adapter_id]?.productionValidated===true,
+          checks={portalHostBound:Boolean(row.canonical_domain),registryAdapterMapped:Boolean(row.portal_adapter_id&&row.adapter_enabled),connectorMapped:Boolean(row.connector_enabled),allowlistExact:Boolean(row.allowlist_adapter_id===row.portal_adapter_id&&row.portal_host===row.canonical_domain),credentialCompanyBound:Boolean(row.credential_id&&row.company_id),accountConfirmed:row.account_confirmed===true,portalSubmissionSupported:row.submission_portal_support==="SUPPORTED",autopilotSubmissionImplemented:adapterImplemented,portalProductionTested:row.submission_production_tested===true,portalBrowserAccepted:row.submission_browser_accepted===true,globalExternalSubmissionDisabled:row.external_submission_enabled===false&&row.allow_external_submission===false&&row.global_kill_switch===true,portalKillSwitchActive:row.allowlist_kill_switch!==false},
+          blockers=[];
+        if(!checks.registryAdapterMapped)blockers.push({code:"REGISTRY_ADAPTER_MISSING",message:"Kein aktivierter Connector-/Adaptervertrag."});
+        if(!checks.connectorMapped)blockers.push({code:"CONNECTOR_MAPPING_MISSING",message:"Kein kanonischer Connectorvertrag für diesen Host."});
+        if(!checks.allowlistExact)blockers.push({code:"SUBMISSION_ALLOWLIST_MISSING",message:"Keine exakt host- und adaptergebundene Submission-Allowlist."});
+        if(!checks.credentialCompanyBound)blockers.push({code:"COMPANY_CREDENTIAL_MISSING",message:"Kein aktiver gesellschaftsgebundener Zugang."});
+        if(!checks.accountConfirmed)blockers.push({code:"BIDDER_ACCOUNT_UNCONFIRMED",message:"Bieterkonto ist nicht autoritativ bestätigt."});
+        if(!checks.portalSubmissionSupported)blockers.push({code:"PORTAL_SUBMISSION_UNVERIFIED",message:"Submissionfähigkeit des Portals ist nicht autoritativ belegt."});
+        if(!checks.autopilotSubmissionImplemented)blockers.push({code:"SUBMISSION_ADAPTER_NOT_PRODUCTION_VALIDATED",message:"Externe Übertragung ist nicht produktiv validiert und bleibt gesperrt."});
+        const infrastructureComplete=checks.registryAdapterMapped&&checks.connectorMapped&&checks.credentialCompanyBound,
+          status=infrastructureComplete?"NON_BINDING_PREFLIGHT_VALIDATED":"BLOCKED_CONFIGURATION_INCOMPLETE",
+          saved=(await client.query(`INSERT INTO tender.portal_submission_adapter_validations(portal_id,company_id,credential_id,adapter_id,adapter_version,validation_status,checks,blockers,external_write,transmitted,request_id,validated_by)
+            VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,false,false,$9,$10) RETURNING id,validated_at`,[row.portal_id,row.company_id,row.credential_id,row.portal_adapter_id,row.portal_adapter_version,status,JSON.stringify(checks),JSON.stringify(blockers),req.id,req.identity.userId])).rows[0];
+        items.push({portalId:row.portal_id,portalName:row.portal_name,portalHost:row.canonical_domain,companyId:row.company_id,companyName:row.company_name,status,checks,blockers,validationId:saved.id,validatedAt:saved.validated_at,externalWrite:false,transmitted:false});
+      }
+      await client.query("INSERT INTO tender.audit_events(actor_id,action,metadata) VALUES($1,'PORTAL_SUBMISSION_ADAPTERS_NON_BINDING_VALIDATED',$2::jsonb)",[req.identity.userId,JSON.stringify({requestId:req.id,scopes:items.length,externalWrite:false,transmitted:false,globalKillSwitchPreserved:true})]);
+      await client.query("COMMIT"); return {items,externalWrite:false,transmitted:false,globalKillSwitchPreserved:true,requestId:req.id};
+    } catch(error){await client.query("ROLLBACK").catch(()=>{});throw error} finally{client.release()}
+  });
   const eligibilityLabels = {
     SUBMISSION_READY: "Bieterzugang einsatzbereit",
     DOCUMENT_ACCESS_ONLY: "Nur Dokumentzugriff bestätigt",
@@ -2056,6 +2687,45 @@ export function registerAutopilotRoutes(
       })),
     }),
   );
+  app.patch(
+    "/api/portal-access/:portalId/registry-links",
+    {
+      preHandler: [
+        requirePermission(["tender.portal.manage", "tender.admin"]),
+        csrf,
+      ],
+    },
+    async (req, reply) => {
+      const portal = await portalRow(req.params.portalId);
+      if (!portal) return reply.code(404).send({ error: "portal_not_found" });
+      if (req.body?.verifiedOfficialLinks !== true)
+        return reply.code(400).send({ error: "official_link_verification_required" });
+      const validateEntry = (value) => {
+        if (value === null || value === undefined || String(value).trim() === "") return null;
+        const genericSafe = safeExternalHttpsUrl(String(value));
+        return genericSafe ? safeExternalPortalUrl(genericSafe, portal) : null;
+      };
+      const loginUrl = validateEntry(req.body?.loginUrl),
+        registrationUrl = validateEntry(req.body?.registrationUrl);
+      if ((req.body?.loginUrl && !loginUrl) || (req.body?.registrationUrl && !registrationUrl))
+        return reply.code(400).send({ error: "portal_entry_url_not_https_or_allowlisted" });
+      const updated = (
+        await pool.query(
+          `UPDATE tender.portal_registry
+             SET authentication_entry_url=$2,registration_entry_url=$3,
+                 entry_links_verified_at=now(),entry_links_verified_by=$4,updated_at=now()
+           WHERE id=$1
+           RETURNING id,display_name,canonical_domain,authentication_entry_url,registration_entry_url,entry_links_verified_at`,
+          [portal.id, loginUrl, registrationUrl, req.identity.userId],
+        )
+      ).rows[0];
+      await pool.query(
+        "INSERT INTO tender.audit_events(actor_id,action,metadata) VALUES($1,'portal_registry_entry_links_verified',$2::jsonb)",
+        [req.identity.userId, JSON.stringify({ portalId: portal.id, canonicalHost: portal.canonical_domain, loginConfigured: Boolean(loginUrl), registrationConfigured: Boolean(registrationUrl) })],
+      );
+      return { portalId: updated.id, portalName: updated.display_name, canonicalHost: updated.canonical_domain, loginUrl: updated.authentication_entry_url, registrationUrl: updated.registration_entry_url, verifiedAt: updated.entry_links_verified_at };
+    },
+  );
   app.get(
     "/api/portal-access/for-tender/:tenderId",
     { preHandler: read },
@@ -2067,12 +2737,19 @@ export function registerAutopilotRoutes(
       const permittedCompanies = await accessibleCompanies(req.identity);
       if (!permittedCompanies.some(row => String(row.company_id) === requestedCompany))
         return reply.code(403).send({ error: "company_scope_forbidden" });
-      const registeredScope = await requireRegisteredScope(
-        reply,
-        req.params.tenderId,
-        requestedCompany,
-      );
-      if (!registeredScope) return;
+      const linkEvidence = (await loadTenderLinkEvidence(pool, [req.params.tenderId])).get(String(req.params.tenderId)),
+        exactRegisteredScope = await registeredTenderPortalScope(pool, { tenderId: req.params.tenderId, companyId: requestedCompany }),
+        evidencePortalId = linkEvidence?.portalMapping?.status === "EINDEUTIG_ZUGEORDNET" ? linkEvidence.portalMapping.portalId : null,
+        registeredScope = exactRegisteredScope || (evidencePortalId ? { portal_id: evidencePortalId, credential_id: null } : null);
+      if (!registeredScope)
+        return {
+          items: [],
+          mappingStatus: linkEvidence?.portalMapping?.status || "MANUELLE_PRUEFUNG",
+          reason: linkEvidence?.portalMapping?.reason || "Kein externer Portalhost in der Quelle",
+          canManage: portalManage(req.identity),
+        };
+      const scopedCredential = await activeCredentialForCompany(registeredScope.portal_id, requestedCompany);
+      if (!registeredScope.credential_id && scopedCredential) registeredScope.credential_id = scopedCredential.id;
       await discoverPortals();
       const rows = (
         await pool.query(
@@ -2083,8 +2760,8 @@ export function registerAutopilotRoutes(
           EXISTS(SELECT 1 FROM tender.portal_credential_secrets c WHERE c.id=$4 AND c.portal_id=p.id AND c.status='ACTIVE' AND c.revoked_at IS NULL AND (c.valid_until IS NULL OR c.valid_until>now())
             AND EXISTS(SELECT 1 FROM tender.portal_credential_companies pc WHERE pc.credential_id=c.id AND pc.company_id=$2::uuid AND pc.active=true)) configured,
           s.status session_status,s.expires_at session_expires_at,s.verification_status session_verification_status,s.session_effective_status
-        FROM latest_enrichment e JOIN tender.enrichment_documents d ON d.enrichment_version_id=e.id
-        JOIN tender.portal_registry p ON p.id=$3 AND ((nullif(d.provenance->>'portalId','') IS NOT NULL AND d.provenance->>'portalId'=p.id::text)
+        FROM tender.portal_registry p LEFT JOIN latest_enrichment e ON true
+        LEFT JOIN tender.enrichment_documents d ON d.enrichment_version_id=e.id AND ((nullif(d.provenance->>'portalId','') IS NOT NULL AND d.provenance->>'portalId'=p.id::text)
           OR (nullif(d.provenance->>'portalId','') IS NULL AND (
             lower(coalesce(d.provenance->>'targetPortal',''))=p.canonical_domain
             OR lower(coalesce(d.provenance->>'targetPortal',''))=ANY(p.allowed_subdomains)
@@ -2095,6 +2772,7 @@ export function registerAutopilotRoutes(
           WHERE x.portal_id=p.id AND x.credential_id=$4 AND x.company_id=$2::uuid
             AND EXISTS(SELECT 1 FROM tender.portal_credential_companies pc WHERE pc.credential_id=c.id AND pc.company_id=$2::uuid AND pc.active=true)
           ORDER BY x.created_at DESC LIMIT 1)s ON true
+        WHERE p.id=$3
       )
       SELECT portal_id,portal_name,coalesce(nullif(max(provenance->>'targetPortal'),''),max(canonical_domain)) domain,max(canonical_domain) canonical_domain,
         (jsonb_agg(allowed_subdomains)->0) allowed_subdomains,(jsonb_agg(authentication_domains)->0) authentication_domains,(jsonb_agg(download_domains)->0) download_domains,
@@ -2104,7 +2782,7 @@ export function registerAutopilotRoutes(
         max(source_url) FILTER(WHERE document_type='TENDER_DOCUMENT' AND source_url !~* '\\.(zip|pdf|xlsx?|docx?)([?;]|$)') portal_open_candidate,
         max(retrieved_at) last_attempt,
         max(session_status) session_status,min(session_expires_at) session_expires_at,max(session_verification_status) session_verification_status,max(session_effective_status) session_effective_status,
-        count(*)::int affected_documents,
+        count(id)::int affected_documents,
         bool_or(configured) configured,
         CASE
           WHEN max(provenance->>'accessStatus')='EXTERNAL_DOCUMENT_REQUEST_REQUIRED' THEN 'EXTERNAL_DOCUMENT_REQUEST_REQUIRED'
@@ -2112,10 +2790,11 @@ export function registerAutopilotRoutes(
           WHEN max(provenance->>'accessStatus')='PARTNER_SYSTEM_LOGIN_REQUIRED' THEN 'LOGIN_REQUIRED'
           WHEN max(fetch_status)='EXTERNAL_DOCUMENT_REQUEST_REQUIRED' OR max(resolution_status)='EXTERNAL_DOCUMENT_REQUEST_REQUIRED' THEN 'EXTERNAL_DOCUMENT_REQUEST_REQUIRED'
           WHEN max(resolution_status)='DOCUMENT_NOT_AVAILABLE' OR max(fetch_status)='DOKUMENT_NICHT_ÖFFENTLICH_ZUGÄNGLICH' THEN 'DOCUMENT_NOT_FOUND'
+          WHEN count(id)=0 THEN 'NO_BOUND_DOCUMENT_CONTEXT'
           WHEN bool_or(session_effective_status='ACTIVE') THEN 'DOWNLOAD_LINK_UNRESOLVED'
           WHEN bool_and(session_status IS NULL) THEN 'SESSION_MISSING'
           ELSE 'SESSION_EXPIRED' END access_status,
-        jsonb_agg(jsonb_build_object('documentId',id,'sourceDocumentId',coalesce(provenance->>'tenderId',filename),'filename',filename,'sourceUrl',source_url,'downloadStatus',resolution_status,'fetchStatus',fetch_status,'parserStatus',parser,'mimeType',mime_type,'lastAttempt',retrieved_at) ORDER BY filename) affected_document_items
+        coalesce(jsonb_agg(jsonb_build_object('documentId',id,'sourceDocumentId',coalesce(provenance->>'tenderId',filename),'filename',filename,'sourceUrl',source_url,'downloadStatus',resolution_status,'fetchStatus',fetch_status,'parserStatus',parser,'mimeType',mime_type,'lastAttempt',retrieved_at) ORDER BY filename) FILTER(WHERE id IS NOT NULL),'[]'::jsonb) affected_document_items
       FROM affected GROUP BY portal_id,portal_name ORDER BY portal_name`,
           [req.params.tenderId, requestedCompany, registeredScope.portal_id, registeredScope.credential_id],
         )
@@ -2123,7 +2802,7 @@ export function registerAutopilotRoutes(
       const queues =
           (
             await pool.query(
-            `SELECT DISTINCT ON(portal_id) portal_id,missing_calculation_inputs,next_attempt_at,error_code,safe_error_code,error_detail_safe,blocking_reason,status,current_step,next_step,started_at,heartbeat_at,finished_at,document_resolution_status,documents_found,documents_downloaded,documents_analyzed
+            `SELECT DISTINCT ON(portal_id) portal_id,credential_id,created_at,missing_calculation_inputs,next_attempt_at,error_code,safe_error_code,error_detail_safe,blocking_reason,status,current_step,next_step,started_at,heartbeat_at,finished_at,document_resolution_status,documents_found,documents_downloaded,documents_analyzed
              FROM tender.autopilot_queue WHERE tender_id=$1
                AND company_id=$2::uuid AND ($3='' OR coalesce(lot_key,'')=$3)
                AND portal_id IS NOT NULL
@@ -2154,6 +2833,7 @@ export function registerAutopilotRoutes(
         )
       ).rows;
       return {
+        canManage: portalManage(req.identity),
         items: rows.map((row) => {
           const access = registrations.filter(
               (item) => String(item.portal_id) === String(row.portal_id),
@@ -2173,7 +2853,13 @@ export function registerAutopilotRoutes(
                 ),
               ),
             ];
-          const downloaded = Number(queue.documents_downloaded || 0),
+          const historicalUnscopedError = Boolean(
+              exactRegisteredScope &&
+              scopedCredential &&
+              !queue.credential_id &&
+              [queue.safe_error_code,queue.error_code].includes("REGISTERED_PORTAL_SCOPE_NOT_FOUND"),
+            ),
+            downloaded = Number(queue.documents_downloaded || 0),
             found = Number(queue.documents_found || 0),
             analyzed = Number(queue.documents_analyzed || 0),
             scopedLastError =
@@ -2199,13 +2885,17 @@ export function registerAutopilotRoutes(
                 : row.bidder_area_url,
               row,
             ),
+            authenticationTargetConfigured = Boolean(
+              safeExternalPortalUrl(row.authentication_entry_url, row) &&
+                safeExternalPortalUrl(row.bidder_area_url, row),
+            ),
             loginAction = portalLoginAction({
               tenderId: req.params.tenderId,
               companyId: requestedCompany,
               portalId: row.portal_id,
               lotKey: String(req.query?.lot || ""),
               accessStatus,
-              configured: row.configured,
+              configured: Boolean(row.configured && exactRegisteredScope),
               sessionStatus: row.session_status,
               sessionEffectiveStatus: row.session_effective_status,
               lastError: scopedLastError,
@@ -2213,24 +2903,38 @@ export function registerAutopilotRoutes(
               publicDocumentAccess: row.public_document_access,
               documentsComplete: documentTruth.complete,
               portalOpenAvailable: Boolean(portalOpenUrl),
-              authenticationTargetConfigured: Boolean(
-                safeExternalPortalUrl(row.authentication_entry_url, row) &&
-                  safeExternalPortalUrl(row.bidder_area_url, row),
-              ),
+              authenticationTargetConfigured,
             });
+          const reconnectAvailable = Boolean(
+            row.configured &&
+              exactRegisteredScope &&
+              authenticationTargetConfigured &&
+              row.session_effective_status !== "ACTIVE" &&
+              ["START_LOGIN", "CONFIRM_MFA"].includes(loginAction.type),
+          );
           return {
             ...row,
+            portal_mapping_status: exactRegisteredScope ? "REGISTERED_EXACT_SCOPE" : "EVIDENCE_HOST_MATCH",
+            credential: publicCredential(scopedCredential, { manage: portalManage(req.identity) }),
+            company_id: requestedCompany,
+            login_url: safeExternalHttpsUrl(linkEvidence?.login?.url),
+            registration_url: safeExternalHttpsUrl(linkEvidence?.registration?.url),
             access_status: accessStatus,
             login_action: loginAction,
             login_action_type: loginAction.type,
             login_action_label: loginAction.label,
             login_action_reason: loginAction.reason,
+            authentication_target_configured: authenticationTargetConfigured,
+            reconnect_available: reconnectAvailable,
+            reconnect_label: reconnectAvailable ? loginAction.label : null,
             portal_open_url: portalOpenUrl,
-            document_refresh_action: {
-              type: "REFRESH_DOCUMENTS",
-              label: "Dokumente aktualisieren",
-              binding: loginAction.binding,
-            },
+            document_refresh_action: Number(row.affected_documents || 0) > 0
+              ? {
+                  type: "REFRESH_DOCUMENTS",
+                  label: "Dokumente aktualisieren",
+                  binding: loginAction.binding,
+                }
+              : { type: "NONE", label: null, binding: loginAction.binding },
             global_document_request_approval: Boolean(policy),
             global_policy_version: policy?.policy_version || null,
             global_policy_audit_id: policy?.audit_id || null,
@@ -2288,10 +2992,15 @@ export function registerAutopilotRoutes(
             document_resolution_status: documentTruth.resolutionStatus,
             missing_calculation_inputs: queue.missing_calculation_inputs || [],
             last_error:
-              documentTruth.error ||
+              (historicalUnscopedError
+                ? "Historischer Scopefehler vor der aktuell bestätigten Portal-/Accountbindung"
+                : documentTruth.error) ||
               access.find((item) => item.safe_result?.portalError)?.safe_result
                 ?.portalError ||
               null,
+            last_error_code: scopedLastError,
+            last_error_historical: historicalUnscopedError,
+            last_error_at: queue.created_at || null,
             login_required_reason:
               documentTruth.complete
                 ? "Alle erforderlichen Vergabeunterlagen sind vollständig geladen und analysiert. Kein erneuter Dokumentabruf erforderlich."
@@ -2320,6 +3029,8 @@ export function registerAutopilotRoutes(
                           "Das Zielportal ist nach DNS-/TLS-/HTTP-Prüfung technisch nicht erreichbar.",
                         DOWNLOAD_LINK_UNRESOLVED:
                           "Die Anmeldung ist gültig; der stabile Dokumentdownloadlink muss erneut aufgelöst werden.",
+                        NO_BOUND_DOCUMENT_CONTEXT:
+                          "Die Anmeldung ist gültig; für diese Ausschreibung und Gesellschaft ist derzeit keine verifizierte Dokumentreferenz gebunden. Es wird kein Abruf gestartet.",
                         EXTERNAL_DOCUMENT_REQUEST_REQUIRED:
                           "Das Portal verlangt eine dokumentbezogene Freischaltung.",
                         DOCUMENT_NOT_FOUND:
@@ -2364,6 +3075,7 @@ export function registerAutopilotRoutes(
     async (req, reply) => {
       const portal = await portalRow(req.params.portalId);
       if (!portal) return reply.code(404).send({ error: "portal_not_found" });
+      if(!credentialPortalEligibility(portal).eligible)return reply.code(422).send({error:"PORTAL_DER_AUSSCHREIBUNG_NICHT_ERMITTELT",message:"TED/oeffentlichevergabe.de ist eine Veröffentlichungsquelle und kein Credential-Portal."});
       const companyId = String(req.query?.company || ""),
         company = (await accessibleCompanies(req.identity)).find(
           (row) => String(row.company_id) === companyId,
@@ -2381,6 +3093,7 @@ export function registerAutopilotRoutes(
         configured: Boolean(credential),
         credentialId: credential?.id || null,
         credentialVersion: credential?.version || null,
+        credentialFingerprint: credential ? credentialStateFingerprint({credentialId:credential.id,version:credential.version,portalId:portal.id,companyId:company.company_id,savedAt:credential.created_at}) : null,
         readOnly: credential ? !credential.submission_capable : true,
         accountConfirmed: Boolean(credential?.account_confirmed),
       };
@@ -2397,9 +3110,14 @@ export function registerAutopilotRoutes(
     async (req, reply) => {
       const portal = await portalRow(req.params.portalId);
       if (!portal) return reply.code(404).send({ error: "portal_not_found" });
+      const eligibility=credentialPortalEligibility(portal);
+      if(!eligibility.eligible)return reply.code(422).send({error:eligibility.code,message:eligibility.code==="PORTAL_DER_AUSSCHREIBUNG_NICHT_ERMITTELT"?"Die Bekanntmachung wurde über TED/oeffentlichevergabe.de veröffentlicht. Das für Anmeldung und Abgabe verwendete Vergabeportal konnte nicht eindeutig ermittelt werden.":"Für dieses Portal ist keine validierte Credential-Nutzung möglich."});
       const body = req.body || {},
         username = String(body.username || "").trim(),
-        password = String(body.password || "");
+        password = String(body.password || ""),
+        idempotencyKey = String(body.idempotencyKey || "").trim();
+      const accountDecision=credentialAccountEligibility(portal,body.accountType,Array.isArray(body.authorizedCapabilities)?body.authorizedCapabilities:[]);
+      if(!accountDecision.eligible)return reply.code(422).send({error:accountDecision.code,message:"Kontotyp oder angeforderte Fähigkeit ist für diesen konkreten Host nicht freigegeben."});
       if (!username || !password)
         return reply
           .code(400)
@@ -2407,7 +3125,12 @@ export function registerAutopilotRoutes(
             error: "portal_credentials_required",
             message: "Benutzername und Passwort sind erforderlich.",
           });
-      const submissionCapable = body.submissionCapable === true,
+      if (!/^[A-Za-z0-9._:-]{16,120}$/.test(idempotencyKey))
+        return reply.code(400).send({
+          error: "credential_idempotency_key_required",
+          message: "Der Speichervorgang benötigt einen gültigen Idempotency-Key.",
+        });
+      const submissionCapable = accountDecision.capabilities.includes("BID_SUBMISSION"),
         readOnly = !submissionCapable;
       if (submissionCapable && body.accountConfirmed !== true)
         return reply
@@ -2457,6 +3180,39 @@ export function registerAutopilotRoutes(
       try {
         await client.query("BEGIN");
         await client.query("SELECT id FROM tender.portal_registry WHERE id=$1 FOR UPDATE",[portal.id]);
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[idempotencyKey]);
+        const repeated = (
+          await client.query(
+            `SELECT metadata FROM tender.audit_events
+             WHERE actor_id=$1 AND action='portal_credential_saved' AND metadata->>'idempotencyKey'=$2
+             ORDER BY id DESC LIMIT 1`,
+            [req.identity.userId,idempotencyKey],
+          )
+        ).rows[0]?.metadata;
+        if (repeated) {
+          if (String(repeated.portalId)!==String(portal.id) || String(repeated.companyId)!==companyId) {
+            await client.query("ROLLBACK");
+            return reply.code(409).send({error:"credential_idempotency_context_conflict",message:"Dieser Speichervorgang gehört zu einem anderen Portal- oder Gesellschaftskontext."});
+          }
+          const existing = (
+            await client.query(
+              `SELECT credential.id,credential.version,credential.created_at,credential.read_only,credential.submission_capable,
+                      credential.account_type,credential.authorized_capabilities,credential.bound_host
+               FROM tender.portal_credential_secrets credential
+               JOIN tender.portal_credential_companies scope ON scope.credential_id=credential.id
+               WHERE credential.id=$1 AND credential.portal_id=$2 AND credential.status='ACTIVE'
+                 AND scope.company_id=$3::uuid AND scope.active=true`,
+              [repeated.credentialId,portal.id,companyId],
+            )
+          ).rows[0];
+          if (!existing) {
+            const current = await activeCredentialForCompany(portal.id,companyId);
+            await client.query("ROLLBACK");
+            return reply.code(409).send({error:"CREDENTIAL_VERSION_CONFLICT",message:"Der Portalzugang wurde zwischenzeitlich erneut geändert.",currentCredentialVersion:current?.version||null});
+          }
+          await client.query("COMMIT");
+          return reply.code(200).send({saved:true,idempotent:true,replaced:Boolean(repeated.replaced),credentialId:existing.id,credentialVersion:existing.version,version:existing.version,credentialFingerprint:credentialStateFingerprint({credentialId:existing.id,version:existing.version,portalId:portal.id,companyId,savedAt:existing.created_at}),companyId,portalId:portal.id,savedAt:existing.created_at,status:"SAVED",readOnly:existing.read_only,submissionCapable:existing.submission_capable,accountType:existing.account_type,authorizedCapabilities:existing.authorized_capabilities||[],boundHost:existing.bound_host});
+        }
         const prior = (
           await client.query(
             `SELECT credential.id,credential.version FROM tender.portal_credential_secrets credential
@@ -2480,7 +3236,7 @@ export function registerAutopilotRoutes(
         );
         const saved = (
           await client.query(
-            `INSERT INTO tender.portal_credential_secrets(portal_id,version,ciphertext,iv,auth_tag,key_version,username_masked,internal_label,read_only,mfa_method,valid_until,created_by,account_confirmed,submission_capable,contact_person,notes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id,version,created_at`,
+            `INSERT INTO tender.portal_credential_secrets(portal_id,version,ciphertext,iv,auth_tag,key_version,username_masked,internal_label,read_only,mfa_method,valid_until,created_by,account_confirmed,submission_capable,contact_person,notes,account_type,authorized_capabilities,bound_host) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id,version,created_at`,
             [
               portal.id,
               Number((await client.query("SELECT coalesce(max(version),0)+1 version FROM tender.portal_credential_secrets WHERE portal_id=$1",[portal.id])).rows[0].version),
@@ -2498,9 +3254,13 @@ export function registerAutopilotRoutes(
               submissionCapable,
               String(body.contactPerson || "").slice(0, 160) || null,
               String(body.notes || "").slice(0, 1000) || null,
+              accountDecision.accountType,
+              accountDecision.capabilities,
+              accountDecision.boundHost,
             ],
           )
         ).rows[0];
+        const fingerprint = credentialStateFingerprint({credentialId:saved.id,version:saved.version,portalId:portal.id,companyId,savedAt:saved.created_at});
         await client.query(
           `UPDATE tender.portal_credential_companies scope SET active=false,replaced_at=now(),replaced_by=$3
            FROM tender.portal_credential_secrets credential
@@ -2525,11 +3285,15 @@ export function registerAutopilotRoutes(
             req.identity.userId,
             prior.length ? "CREDENTIAL_REPLACED" : "CREDENTIAL_CREATED",
             JSON.stringify({
+              credentialId: saved.id,
               version: saved.version,
               companyId,
               readOnly,
               submissionCapable,
               accountConfirmed: body.accountConfirmed === true,
+              accountType: accountDecision.accountType,
+              authorizedCapabilities: accountDecision.capabilities,
+              boundHost: accountDecision.boundHost,
             }),
           ],
         );
@@ -2539,11 +3303,18 @@ export function registerAutopilotRoutes(
             req.identity.userId,
             JSON.stringify({
               portalId: portal.id,
+              credentialId: saved.id,
               version: saved.version,
               companyId,
+              credentialFingerprint: fingerprint,
+              idempotencyKey,
+              replaced: prior.length>0,
               readOnly,
               submissionCapable,
               accountConfirmed: body.accountConfirmed === true,
+              accountType: accountDecision.accountType,
+              authorizedCapabilities: accountDecision.capabilities,
+              boundHost: accountDecision.boundHost,
             }),
           ],
         );
@@ -2552,12 +3323,22 @@ export function registerAutopilotRoutes(
           .code(prior.length ? 200 : 201)
           .send({
             saved: true,
+            idempotent: false,
             replaced: prior.length>0,
+            credentialId: saved.id,
+            credentialVersion: saved.version,
             version: saved.version,
+            credentialFingerprint: fingerprint,
             usernameMasked: maskUsername(username),
             companyId,
+            portalId: portal.id,
+            savedAt: saved.created_at,
+            status: "SAVED",
             readOnly,
             submissionCapable,
+            accountType: accountDecision.accountType,
+            authorizedCapabilities: accountDecision.capabilities,
+            boundHost: accountDecision.boundHost,
           });
       } catch (error) {
         await client.query("ROLLBACK");
@@ -2565,6 +3346,53 @@ export function registerAutopilotRoutes(
       } finally {
         client.release();
       }
+    },
+  );
+  app.patch(
+    "/api/portal-access/:portalId/credential-metadata",
+    {
+      preHandler: [
+        requirePermission(["tender.portal.manage", "tender.admin"]),
+        csrf,
+      ],
+    },
+    async (req, reply) => {
+      const portal = await portalRow(req.params.portalId);
+      if (!portal) return reply.code(404).send({ error: "portal_not_found" });
+      const companyId = String(req.body?.companyId || ""),
+        company = (await accessibleCompanies(req.identity)).find((row) => String(row.company_id) === companyId);
+      if (!company) return reply.code(403).send({ error: "company_scope_forbidden" });
+      const credential = await activeCredentialForCompany(portal.id, companyId);
+      if (!credential) return reply.code(404).send({ error: "portal_credential_not_found" });
+      const registrationStatus = canonicalPortalMetadataStatus("registrationStatus",req.body?.registrationStatus),
+        loginStatus = canonicalPortalMetadataStatus("loginStatus",req.body?.loginStatus),
+        fieldErrors = {},
+        textFields = [["internalLabel",120,"Interner Kontoname"],["contactPerson",160,"Verantwortliche Person"],["notes",1000,"Hinweise"]];
+      for(const [field,max,label] of textFields){if(req.body?.[field]!=null&&typeof req.body[field]!=="string")fieldErrors[field]=`${label} muss Text sein.`;else if(String(req.body?.[field]||"").length>max)fieldErrors[field]=`${label} darf höchstens ${max} Zeichen enthalten.`}
+      if (!registrationStatus) fieldErrors.registrationStatus="Registrierungsstatus ist ungültig.";
+      if (!loginStatus) fieldErrors.loginStatus="Loginstatus ist ungültig.";
+      if (req.body?.mfaRequired!==null&&typeof req.body?.mfaRequired!=="boolean") fieldErrors.mfaRequired="MFA erforderlich muss Ja, Nein oder Unbekannt sein.";
+      if (typeof req.body?.manualCheckConfirmed!=="boolean") fieldErrors.manualCheckConfirmed="Die Bestätigung des manuellen Prüfzeitpunkts ist ungültig.";
+      if (Object.keys(fieldErrors).length){const first=Object.values(fieldErrors)[0];reply.header("x-request-id",req.id);return reply.code(422).send({error:"portal_access_metadata_validation_failed",message:first,fieldErrors,requestId:req.id})}
+      const updatedScope = (
+        await pool.query(
+          `UPDATE tender.portal_credential_companies scope
+             SET metadata_configured=true,internal_label=$3,contact_person=$4,notes=$5,
+                 registration_status=$6,login_status=$7,mfa_required_state=$8,
+                 last_manual_check_at=CASE WHEN $9::boolean THEN now() ELSE scope.last_manual_check_at END
+           WHERE scope.credential_id=$1 AND scope.company_id=$10::uuid AND scope.active=true
+             AND EXISTS(SELECT 1 FROM tender.portal_credential_secrets credential WHERE credential.id=scope.credential_id AND credential.portal_id=$2 AND credential.status='ACTIVE')
+           RETURNING scope.credential_id`,
+          [credential.id, portal.id, String(req.body?.internalLabel || "") || null, String(req.body?.contactPerson || "") || null, String(req.body?.notes || "") || null, registrationStatus, loginStatus, req.body?.mfaRequired, req.body.manualCheckConfirmed, companyId],
+        )
+      ).rows[0];
+      if (!updatedScope) return reply.code(409).send({ error: "portal_credential_scope_changed" });
+      const updated=await activeCredentialForCompany(portal.id,companyId);
+      await pool.query(
+        "INSERT INTO tender.audit_events(actor_id,action,metadata) VALUES($1,'portal_credential_metadata_updated',$2::jsonb)",
+        [req.identity.userId, JSON.stringify({ portalId: portal.id, companyId, registrationStatus, loginStatus, mfaRequired: req.body?.mfaRequired ?? null, manualCheckConfirmed: req.body?.manualCheckConfirmed === true })],
+      );
+      return { saved: true, credential: publicCredential(updated, { manage: true }) };
     },
   );
   app.delete(
@@ -2874,17 +3702,17 @@ export function registerAutopilotRoutes(
         LEFT JOIN LATERAL(SELECT status FROM tender.management_outputs x WHERE x.tender_id=r.tender_id AND x.company_id=r.company_id AND x.lot_key=coalesce(r.lot_key,'') AND historical=false ORDER BY created_at DESC LIMIT 1)mo ON true
         LEFT JOIN tender.final_preflight_contexts pre ON pre.tender_id=r.tender_id AND pre.company_id=r.company_id AND pre.lot_key=coalesce(r.lot_key,'') AND pre.is_current
         LEFT JOIN LATERAL(SELECT
-          count(*) filter(where mandatory and submission_relevant and satisfaction_status not in('VALIDATED','NOT_REQUIRED','SUPERSEDED')) missing_documents,
+          count(*) filter(where mandatory and submission_relevant and manual_submission_relevance_override IS DISTINCT FROM false and effective_satisfaction_status not in('VALIDATED','NOT_REQUIRED','SUPERSEDED')) missing_documents,
           count(*) filter(where satisfaction_status='VALIDATED') validated_documents,
           count(*) filter(where satisfaction_status='REJECTED') rejected_documents,
           count(*) filter(where satisfaction_status='VALIDATED' and category ilike '%CERT%') validated_certificates,
           count(*) filter(where satisfaction_status='REJECTED' and category ilike '%CERT%') rejected_certificates,
           count(*) filter(where satisfaction_status='VALIDATED' and category ilike '%REFER%') validated_references,
           count(*) filter(where satisfaction_status='REJECTED' and category ilike '%REFER%') rejected_references,
-          array_agg(requirement_title order by requirement_title) filter(where mandatory and satisfaction_status not in('VALIDATED','NOT_REQUIRED','SUPERSEDED')) missing_evidence
-          FROM tender.required_documents x WHERE x.tender_id=r.tender_id AND x.company_id=r.company_id AND x.lot_key=coalesce(r.lot_key,''))rd ON true
-        LEFT JOIN LATERAL(SELECT count(*) total_requirements,count(*) filter(where status not in('VALIDATED','NOT_REQUIRED','SUPERSEDED')) open_requirements,array_agg(title order by title) requirement_titles FROM tender.final_preflight_requirements x WHERE x.context_id=pre.id)fr ON true
-        WHERE r.company_id=ANY($1::uuid[]) AND ($2::uuid IS NULL OR r.company_id=$2) AND (t.offer_deadline IS NULL OR t.offer_deadline>now())
+          array_agg(requirement_title order by requirement_title) filter(where mandatory and submission_relevant and manual_submission_relevance_override IS DISTINCT FROM false and effective_satisfaction_status not in('VALIDATED','NOT_REQUIRED','SUPERSEDED')) missing_evidence
+          FROM (SELECT x.*,CASE WHEN x.satisfaction_status='MISSING' AND (coalesce(w.editor_provenance->>'materiallyEdited','false')='true' OR EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(w.overlay_data,'[]'::jsonb)) e WHERE e->>'type'='mark' OR (e->>'type'='checkbox' AND e->>'checked'='true') OR (e->>'type' IN('text','note') AND btrim(coalesce(e->>'text',''))<>''))) THEN 'MANUAL_REVIEW_REQUIRED' ELSE x.satisfaction_status END effective_satisfaction_status FROM tender.required_documents x LEFT JOIN LATERAL(SELECT overlay_data,editor_provenance FROM tender.required_document_working_copies wc WHERE wc.required_document_id=x.id AND wc.is_current LIMIT 1)w ON true) x WHERE x.tender_id=r.tender_id AND x.company_id=r.company_id AND x.lot_key=coalesce(r.lot_key,''))rd ON true
+        LEFT JOIN LATERAL(SELECT count(*) total_requirements,count(*) filter(where status not in('VALIDATED','NOT_REQUIRED','SUPERSEDED') and manual_submission_relevance_override IS DISTINCT FROM false) open_requirements,array_agg(title order by title) requirement_titles FROM tender.final_preflight_requirements x WHERE x.context_id=pre.id)fr ON true
+        WHERE r.company_id=ANY($1::uuid[]) AND ($2::uuid IS NULL OR r.company_id=$2) AND t.source_lifecycle_status='ACTIVE' AND t.participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE') AND EXISTS(SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=t.id AND (r.lot_key IS NULL OR eligible.lot_key=r.lot_key))
           AND r.primary_company=true
         ORDER BY t.offer_deadline NULLS LAST LIMIT 5000`,[companies.map(item=>item.company_id),selected?.company_id||null])).rows;
       const candidates = rows.map(row => {
@@ -2900,7 +3728,7 @@ export function registerAutopilotRoutes(
           economics:calculationComplete && [totals.contractValue,totals.totalPrice,totals.offerPriceNet].some(value=>value!==null&&value!==undefined) ? true : null,
           deadline:row.offer_deadline ? new Date(row.offer_deadline)>new Date() : null,
           calculation:calculationComplete,submission:row.readiness_status === "PREFLIGHT_READY" && row.binding_valid ? true : null,
-          calculationTotals:totals,documentsComplete:row.missing_documents === 0 && row.validated_documents > 0,
+          calculationTotals:totals,documentsComplete:row.missing_documents === 0,
           requirementsComplete,calculationComplete,managementComplete:row.management_status === "COMPLETED" || row.management_status === "APPROVED",
           preflightComplete:row.readiness_status === "PREFLIGHT_READY",missingDocuments:row.missing_documents,
           processingEffort:row.total_requirements ? Math.min(100,row.open_requirements/row.total_requirements*100) : null,
@@ -2957,7 +3785,14 @@ export function registerAutopilotRoutes(
               : relevanceFilter === "review"
                 ? ["POTENTIALLY_RELEVANT", "MANUAL_CLASSIFICATION_REQUIRED"]
                 : ["RELEVANT", "POTENTIALLY_RELEVANT"],
-        serviceLine = String(req.query?.serviceLine || "");
+        candidateStatuses=relevanceFilter==="review"?[...statuses,"RELEVANT"]:statuses,
+        serviceLine = String(req.query?.serviceLine || ""),
+        canonicalService = serviceLine==="facility-management"||serviceLine==="facility_management"?"facility_management":serviceLine==="emergency-services"||serviceLine==="emergency_services"?"emergency_services":serviceLine;
+      const pageSize=Math.max(1,Math.min(100,Number.parseInt(String(req.query?.pageSize||"50"),10)||50)),
+        page=Math.max(1,Number.parseInt(String(req.query?.page||"1"),10)||1),
+        offset=(page-1)*pageSize;
+      if(serviceLine&&!["security","cleaning","facility_management","sicherheitstechnik","emergency_services"].includes(canonicalService))return reply.code(422).send({error:"invalid_canonical_service"});
+      if(selected&&canonicalService&&selected.canonical_service!==canonicalService)return reply.code(422).send({error:"company_service_mismatch",message:"Gesellschaft und Leistungsbereich gehören nicht zum selben aktiven Profil."});
       const regionFilter = String(req.query?.regionClass || "all"),
         allowedClasses =
           regionFilter === "all"
@@ -2978,32 +3813,153 @@ export function registerAutopilotRoutes(
                       "NOT_APPLICABLE",
                     ].includes(x),
                   );
-      const ids = companies.map((x) => x.company_id),
+      const ids = companies.map((x) => x.company_id);
+      let rows;
+      try {
         rows = (
           await pool.query(
-            `WITH relevance AS(SELECT r.*,registered.portal_id,registered.credential_id,row_number() OVER(PARTITION BY r.tender_id,r.lot_key ORDER BY r.primary_company DESC,r.relevance_status,r.company_id) canonical_rank,bool_or(r.primary_company) OVER(PARTITION BY r.tender_id,r.lot_key) has_primary FROM tender.current_service_relevance r JOIN tender.current_registered_tender_company_portals registered ON registered.tender_id=r.tender_id AND registered.company_id=r.company_id WHERE r.company_id=ANY($1::uuid[])), latest_region AS(SELECT DISTINCT ON(e.tender_id,e.company_id,e.lot_id) e.* FROM tender.region_evaluations e WHERE e.company_id=ANY($1::uuid[]) ORDER BY e.tender_id,e.company_id,e.lot_id,e.evaluation_version DESC) SELECT e.*,t.title,t.buyer,t.regions,t.offer_deadline,t.source_url,t.source_code,t.cpv_codes,l.legal_name company_name,r.portal_id,r.credential_id,r.service_line,r.relevance_status,r.service_scope_gate,r.reason relevance_reason,r.recommendation relevance_recommendation,r.lot_key,r.evaluation_version relevance_version,i.id inbox_id,i.workflow_status,i.rule_score,i.decision historical_decision,cs.id canonical_snapshot_id,cs.profile_snapshot_id,cs.payload->'calculationInput'->>'status' canonical_calculation_status,q.status pipeline_status,q.calculation_status pipeline_calculation_status,q.current_step,q.last_successful_step,q.finished_at,q.heartbeat_at,q.next_step,q.next_attempt_at,q.missing_calculation_inputs,calc.status calculation_result_status,calc.blocked_reasons,calc.totals calculation_totals,mo.status management_status,mo.created_at management_output_at,mo.payload->'recommendation' management_recommendation,ar.id approval_request_id,ar.status approval_status,ar.expires_at approval_expires_at FROM relevance r JOIN tender.tenders t ON t.id=r.tender_id JOIN tender.enterprise_company_links l ON l.company_id=r.company_id LEFT JOIN latest_region e ON e.tender_id=r.tender_id AND e.company_id=r.company_id AND e.lot_id IS NULL LEFT JOIN LATERAL(SELECT x.* FROM tender.management_inbox x WHERE x.tender_id=r.tender_id AND (x.company_id=r.company_id OR x.company_id IS NULL) ORDER BY (x.company_id=r.company_id) DESC,x.created_at DESC LIMIT 1)i ON true LEFT JOIN LATERAL(SELECT x.* FROM tender.canonical_read_snapshots x WHERE x.tender_id=r.tender_id AND x.company_id=r.company_id AND x.lot_key=coalesce(r.lot_key,'') AND x.status='CURRENT' ORDER BY x.created_at DESC LIMIT 1)cs ON true LEFT JOIN LATERAL(SELECT x.* FROM tender.autopilot_queue x WHERE x.tender_id=r.tender_id AND x.company_id=r.company_id AND x.lot_key=coalesce(r.lot_key,'') ORDER BY x.created_at DESC LIMIT 1)q ON true LEFT JOIN LATERAL(SELECT x.* FROM tender.calculations x WHERE x.tender_id=r.tender_id AND x.company_id=r.company_id AND x.lot_key=coalesce(r.lot_key,'') ORDER BY x.version DESC LIMIT 1)calc ON true LEFT JOIN LATERAL(SELECT x.* FROM tender.management_outputs x WHERE x.tender_id=r.tender_id AND x.company_id=r.company_id AND x.lot_key=coalesce(r.lot_key,'') AND x.historical=false ORDER BY x.created_at DESC LIMIT 1)mo ON true LEFT JOIN LATERAL(SELECT x.* FROM tender.approval_requests x WHERE x.tender_id=r.tender_id AND x.calculation_id=calc.id AND x.action_type='BID_SUBMISSION' ORDER BY x.created_at DESC LIMIT 1)ar ON true WHERE (($8::boolean AND ar.status='REQUESTED') OR ($3::text[] IS NULL OR r.relevance_status=ANY($3))) AND (r.primary_company OR ($7::boolean AND NOT r.has_primary AND r.canonical_rank=1)) AND ($2::uuid IS NULL OR r.company_id=$2) AND ($4='' OR r.service_line=$4) AND ($5::text[] IS NULL OR coalesce(e.classification,'REGION_UNRESOLVED')=ANY($5)) ORDER BY (ar.status='REQUESTED') DESC,t.offer_deadline NULLS LAST,t.created_at DESC,r.tender_id,r.lot_key NULLS LAST LIMIT $6`,
+            `WITH active_scope AS(
+              SELECT scope.*,company.legal_name,
+                CASE scope.canonical_service WHEN 'facility_management' THEN 'facility-management' WHEN 'emergency_services' THEN 'emergency-services' ELSE scope.canonical_service END service_line,
+                active_version.id active_configuration_version_id,recalculation.status region_recalculation_status,
+                recalculation.processed_count region_recalculation_processed,recalculation.total_count region_recalculation_total
+              FROM tender.configuration_scopes scope JOIN tender.enterprise_company_links company ON company.company_id=scope.company_id AND company.tender_profile_id=scope.profile_id
+              LEFT JOIN tender.configuration_active_parameters active ON active.company_id=scope.company_id AND active.parameter_key='A08'
+                AND (CASE active.service_line WHEN 'facility-management' THEN 'facility_management' WHEN 'emergency-services' THEN 'emergency_services' ELSE active.service_line END)=scope.canonical_service
+              LEFT JOIN tender.configuration_versions active_version ON active_version.id=active.version_id
+                AND active_version.tenant_id=scope.tenant_id AND active_version.company_id=scope.company_id
+                AND active_version.canonical_service=scope.canonical_service AND active_version.profile_id=scope.profile_id AND active_version.status='ACTIVE'
+              LEFT JOIN LATERAL(SELECT job.status,job.processed_count,job.total_count FROM tender.region_recalculation_jobs job
+                WHERE job.tenant_id=scope.tenant_id AND job.company_id=scope.company_id AND job.canonical_service=scope.canonical_service
+                  AND job.profile_id=scope.profile_id AND job.region_profile_version_id=scope.active_region_version_id
+                ORDER BY job.created_at DESC LIMIT 1)recalculation ON true
+              WHERE scope.company_id=ANY($1::uuid[]) AND ($9='' OR scope.canonical_service=$9)
+            ), unambiguous_scope AS(
+              SELECT company_id,max(tenant_id::text)::uuid tenant_id,max(canonical_service) canonical_service,max(profile_id::text)::uuid profile_id
+              FROM active_scope GROUP BY company_id HAVING count(*)=1
+            ), current_relevance AS MATERIALIZED(
+              SELECT r.id relevance_id,r.tender_id,r.company_id,r.lot_key,r.evaluation_version,r.relevance_status,r.primary_company,r.service_scope_gate,r.service_line,
+                scope.tenant_id,scope.canonical_service,scope.profile_id,scope.active_region_version_id,scope.active_configuration_version_id,
+                scope.region_recalculation_status,scope.region_recalculation_processed,scope.region_recalculation_total
+              FROM tender.service_relevance_evaluations r JOIN active_scope scope ON scope.company_id=r.company_id AND scope.service_line=r.service_line
+              WHERE NOT $7::boolean AND $3::text[] IS NOT NULL AND r.relevance_status=ANY($3)
+                AND NOT EXISTS(SELECT 1 FROM tender.service_relevance_evaluations newer
+                  WHERE newer.tender_id=r.tender_id AND newer.company_id=r.company_id
+                    AND newer.lot_key IS NOT DISTINCT FROM r.lot_key AND newer.evaluation_version>r.evaluation_version)
+              UNION ALL
+              SELECT latest.relevance_id,latest.tender_id,latest.company_id,latest.lot_key,latest.evaluation_version,latest.relevance_status,latest.primary_company,latest.service_scope_gate,scope.service_line,
+                scope.tenant_id,scope.canonical_service,scope.profile_id,scope.active_region_version_id,scope.active_configuration_version_id,
+                scope.region_recalculation_status,scope.region_recalculation_processed,scope.region_recalculation_total
+              FROM active_scope scope CROSS JOIN LATERAL(
+                SELECT DISTINCT ON(evaluation.tender_id,evaluation.company_id,evaluation.lot_key)
+                  evaluation.id relevance_id,evaluation.tender_id,evaluation.company_id,evaluation.lot_key,evaluation.evaluation_version,
+                  evaluation.relevance_status,evaluation.primary_company,evaluation.service_scope_gate
+                FROM tender.service_relevance_evaluations evaluation
+                WHERE evaluation.company_id=scope.company_id AND evaluation.service_line=scope.service_line
+                ORDER BY evaluation.tender_id,evaluation.company_id,evaluation.lot_key,evaluation.evaluation_version DESC,evaluation.created_at DESC
+              )latest
+              WHERE $7::boolean
+            ), current_primary_context AS MATERIALIZED(
+              SELECT DISTINCT primary_relevance.tender_id,coalesce(primary_relevance.lot_key,'') lot_key_norm
+              FROM tender.service_relevance_evaluations primary_relevance
+              WHERE $7::boolean AND primary_relevance.primary_company=true
+                AND NOT EXISTS(SELECT 1 FROM tender.service_relevance_evaluations primary_newer
+                  WHERE primary_newer.tender_id=primary_relevance.tender_id AND primary_newer.company_id=primary_relevance.company_id
+                    AND primary_newer.lot_key IS NOT DISTINCT FROM primary_relevance.lot_key AND primary_newer.evaluation_version>primary_relevance.evaluation_version)
+            ), relevance AS(
+              SELECT r.*,
+                row_number() OVER(PARTITION BY r.tender_id,r.lot_key ORDER BY r.primary_company DESC,r.relevance_status,r.company_id) canonical_rank,
+                primary_context.tender_id IS NOT NULL has_primary
+              FROM current_relevance r LEFT JOIN current_primary_context primary_context
+                ON primary_context.tender_id=r.tender_id AND primary_context.lot_key_norm=coalesce(r.lot_key,'')
+              WHERE ($3::text[] IS NULL OR r.relevance_status=ANY($3))
+            ), base_candidates AS MATERIALIZED(
+            SELECT e.id region_evaluation_id,e.batch_id,e.inbox_id region_inbox_id,e.evaluation_version region_evaluation_version,
+              e.classification,e.detected_states,e.detected_nuts,e.source_data,e.parameter_key,e.configuration_version_id region_configuration_version_id,
+              e.configuration_version_no,e.rule_snapshot,e.regional_decision,e.matching_status,e.explanation,e.open_conditions,e.next_action,e.created_at region_evaluated_at,
+              e.region_profile_version_id evaluated_region_version_id,e.tenant_id evaluated_tenant_id,e.canonical_service evaluated_canonical_service,e.profile_id evaluated_profile_id,
+              r.tender_id,r.company_id,r.tenant_id configuration_tenant_id,r.canonical_service,r.profile_id active_profile_id,r.active_region_version_id,r.active_configuration_version_id,
+              r.region_recalculation_status,r.region_recalculation_processed,r.region_recalculation_total,
+              t.title,t.publication_date,t.created_at tender_created_at,t.buyer,t.regions,t.offer_deadline,t.source_url,t.source_code,t.cpv_codes,t.source_lifecycle_status,t.participation_status,t.participation_block_reason,l.legal_name company_name,r.service_line,r.relevance_status,r.service_scope_gate,relevance_detail.reason relevance_reason,relevance_detail.recommendation relevance_recommendation,r.lot_key,r.evaluation_version relevance_version,calc.id calculation_id,calc.status calculation_result_status,calc.blocked_reasons,calc.totals calculation_totals,ar.id approval_request_id,ar.status approval_status,ar.expires_at approval_expires_at
+            FROM relevance r JOIN tender.tenders t ON t.id=r.tender_id AND t.data_class='PUBLIC_REAL' AND (
+              (t.source_lifecycle_status='ACTIVE' AND t.participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE') AND EXISTS(SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=t.id AND (r.lot_key IS NULL OR eligible.lot_key=r.lot_key)))
+              OR (t.source_lifecycle_status='REVIEW_REQUIRED' AND t.participation_status='REVIEW_REQUIRED')
+            ) JOIN tender.enterprise_company_links l ON l.company_id=r.company_id
+            JOIN tender.service_relevance_evaluations relevance_detail ON relevance_detail.id=r.relevance_id
+            LEFT JOIN LATERAL(SELECT region.*,scope.canonical_service stable_canonical_service
+              FROM tender.region_evaluations region JOIN unambiguous_scope scope
+                ON scope.company_id=region.company_id AND scope.canonical_service=r.canonical_service
+              WHERE region.tender_id=r.tender_id AND region.company_id=r.company_id AND region.lot_id IS NULL
+                AND region.source_data->>'pipelineVersion'='wb-daily-inbox-pipeline/1.0.0'
+              ORDER BY region.evaluation_version DESC LIMIT 1)e ON true
+            LEFT JOIN LATERAL(SELECT x.* FROM tender.calculations x WHERE x.tender_id=r.tender_id AND x.company_id=r.company_id AND x.lot_key=coalesce(r.lot_key,'') ORDER BY x.version DESC LIMIT 1)calc ON true
+            LEFT JOIN LATERAL(SELECT x.* FROM tender.approval_requests x WHERE x.tender_id=r.tender_id AND x.calculation_id=calc.id AND x.action_type='BID_SUBMISSION' ORDER BY x.created_at DESC LIMIT 1)ar ON true
+            WHERE (($8::boolean AND ar.status='REQUESTED') OR ($11::text[] IS NULL OR r.relevance_status=ANY($11))) AND (r.primary_company OR ($7::boolean AND NOT r.has_primary AND r.canonical_rank=1)) AND ($2::uuid IS NULL OR r.company_id=$2) AND ($4='' OR r.service_line=$4)
+            ), category_counts AS(
+              SELECT count(*)::int base_total,
+                count(*) FILTER(WHERE coalesce(classification,'REGION_UNRESOLVED')='CORE_REGION')::int core_count,
+                count(*) FILTER(WHERE coalesce(classification,'REGION_UNRESOLVED')='STRATEGIC_REGION')::int strategic_count,
+                count(*) FILTER(WHERE coalesce(classification,'REGION_UNRESOLVED')='OUTSIDE_CORE_REGION')::int outside_count,
+                count(*) FILTER(WHERE coalesce(classification,'REGION_UNRESOLVED')='EXCLUDED_REGION')::int excluded_count,
+                count(*) FILTER(WHERE coalesce(classification,'REGION_UNRESOLVED')='REGION_UNRESOLVED')::int unresolved_count,
+                count(*) FILTER(WHERE coalesce(classification,'REGION_UNRESOLVED')='REGION_CONFIG_CONFLICT')::int conflict_count,
+                count(*) FILTER(WHERE coalesce(classification,'REGION_UNRESOLVED')='MULTI_REGION_REVIEW')::int multi_review_count
+              FROM base_candidates
+            ), filtered_candidates AS MATERIALIZED(
+              SELECT * FROM base_candidates WHERE ($5::text[] IS NULL OR coalesce(classification,'REGION_UNRESOLVED')=ANY($5))
+            ), filtered_count AS(
+              SELECT count(*)::int filtered_total FROM filtered_candidates
+            ), paged AS MATERIALIZED(
+              SELECT * FROM filtered_candidates ORDER BY (approval_status='REQUESTED') DESC,publication_date DESC NULLS LAST,tender_created_at DESC,tender_id,lot_key NULLS LAST LIMIT $6 OFFSET $10
+            ) SELECT p.*,registered.portal_id,registered.credential_id,category_counts.*,filtered_count.filtered_total,i.id inbox_id,i.workflow_status,i.rule_score,i.decision historical_decision,
+              cs.id canonical_snapshot_id,cs.profile_snapshot_id,cs.payload->'calculationInput'->>'status' canonical_calculation_status,
+              q.status pipeline_status,q.calculation_status pipeline_calculation_status,q.current_step,q.last_successful_step,q.finished_at,q.heartbeat_at,q.next_step,q.next_attempt_at,q.missing_calculation_inputs,
+              mo.status management_status,mo.created_at management_output_at,mo.payload->'recommendation' management_recommendation
+            FROM category_counts CROSS JOIN filtered_count LEFT JOIN paged p ON true
+            LEFT JOIN LATERAL(SELECT x.portal_id,x.credential_id FROM tender.current_registered_tender_company_portals x
+              WHERE x.tender_id=p.tender_id AND x.company_id=p.company_id LIMIT 1)registered ON true
+            LEFT JOIN LATERAL(SELECT x.* FROM tender.management_inbox x WHERE x.id=p.region_inbox_id
+              AND x.tender_id=p.tender_id AND x.company_id=p.company_id AND x.service_line=p.service_line LIMIT 1)i ON true
+            LEFT JOIN LATERAL(SELECT x.* FROM tender.canonical_read_snapshots x WHERE x.tender_id=p.tender_id AND x.company_id=p.company_id AND x.lot_key=coalesce(p.lot_key,'') AND x.status='CURRENT' ORDER BY x.created_at DESC LIMIT 1)cs ON true
+            LEFT JOIN LATERAL(SELECT x.* FROM tender.autopilot_queue x WHERE x.tender_id=p.tender_id AND x.company_id=p.company_id AND x.lot_key=coalesce(p.lot_key,'') ORDER BY x.created_at DESC LIMIT 1)q ON true
+            LEFT JOIN LATERAL(SELECT x.* FROM tender.management_outputs x WHERE x.tender_id=p.tender_id AND x.company_id=p.company_id AND x.lot_key=coalesce(p.lot_key,'') AND x.historical=false ORDER BY x.created_at DESC LIMIT 1)mo ON true
+            ORDER BY (p.approval_status='REQUESTED') DESC,p.publication_date DESC NULLS LAST,p.tender_created_at DESC,p.tender_id,p.lot_key NULLS LAST`,
             [
               ids,
               selected?.company_id || null,
-              statuses,
+              candidateStatuses,
               serviceLine,
               allowedClasses,
-              5000,
+              pageSize+1,
               relevanceFilter === "excluded" || relevanceFilter === "all",
               relevanceFilter === "review",
+              canonicalService,
+              offset,
+              statuses,
             ],
           )
         ).rows;
-      const fixtureTenderIds = new Set(
-        (
-          await pool.query(
-            "SELECT id FROM tender.tenders WHERE data_class<>'PUBLIC_REAL'",
-          )
-        ).rows.map((row) => String(row.id)),
-      );
-      for (let index = rows.length - 1; index >= 0; index -= 1)
-        if (fixtureTenderIds.has(String(rows[index].tender_id)))
-          rows.splice(index, 1);
+      } catch(error) {
+        req.log.error({errorCode:error?.code||"MANAGEMENT_INBOX_QUERY_FAILED"},"management inbox query failed");
+        if(error?.code==="57014")return reply.code(503).header("retry-after","5").send({error:"management_inbox_query_timeout",message:"Die Management-Inbox wird gerade aktualisiert. Bitte versuchen Sie es erneut."});
+        return reply.code(500).send({error:"management_inbox_query_failed",message:"Die Management-Inbox konnte nicht geladen werden."});
+      }
+      const countRow=rows[0]||{},total=Number(countRow.filtered_total||0),counts={
+        CORE_REGION:Number(countRow.core_count||0),STRATEGIC_REGION:Number(countRow.strategic_count||0),
+        OUTSIDE_CORE_REGION:Number(countRow.outside_count||0),EXCLUDED_REGION:Number(countRow.excluded_count||0),
+        REGION_UNRESOLVED:Number(countRow.unresolved_count||0),REGION_CONFIG_CONFLICT:Number(countRow.conflict_count||0),
+        MULTI_REGION_REVIEW:Number(countRow.multi_review_count||0),
+      };
+      rows=rows.filter(row=>row.tender_id);
+      const hasMore=rows.length>pageSize;
+      if(hasMore)rows.pop();
+      const recalculations=(await pool.query(`SELECT job.company_id,job.canonical_service,job.profile_id,job.configuration_version_id,
+        job.region_profile_version_id,job.status,job.processed_count,job.total_count,job.started_at,job.finished_at,job.error_code
+        FROM tender.region_recalculation_jobs job JOIN tender.configuration_scopes scope
+          ON scope.tenant_id=job.tenant_id AND scope.company_id=job.company_id AND scope.canonical_service=job.canonical_service AND scope.profile_id=job.profile_id
+        WHERE job.company_id=ANY($1::uuid[]) AND scope.active_region_version_id=job.region_profile_version_id
+          AND ($2::uuid IS NULL OR job.company_id=$2) AND ($3='' OR job.canonical_service=$3)
+        ORDER BY job.created_at DESC`,[ids,selected?.company_id||null,canonicalService])).rows;
       const monitoringRows = (
           await pool.query(
             "SELECT tender_id,lot_key,status,last_checked_at,next_check_at,state FROM tender.procedure_monitoring WHERE tender_id=ANY($1::uuid[])",
@@ -3073,7 +4029,11 @@ export function registerAutopilotRoutes(
       const lifecycles = await noticeLifecycles([
         ...new Set(rows.map((row) => row.tender_id)),
       ]);
+      const linkEvidence = await loadTenderLinkEvidence(pool, rows.map((row) => row.tender_id));
       for (const row of rows) {
+        const evidence = linkEvidence.get(String(row.tender_id));
+        row.linkEvidence = evidence || null;
+        row.documentEvidence = evidence?.documentEvidence || null;
         const lifecycle = lifecycles.get(String(row.tender_id));
         if (lifecycle) {
           row.noticeLifecycle = lifecycle;
@@ -3082,17 +4042,18 @@ export function registerAutopilotRoutes(
           row.missingCalculationInputs = [];
         }
       }
-      const counts = {};
-      for (const row of rows)
-        counts[row.classification || "REGION_UNRESOLVED"] =
-          (counts[row.classification || "REGION_UNRESOLVED"] || 0) + 1;
+      rows = await decoratePortalNavigation(pool, rows, {
+        uiBase: process.env.TENDER_UI_BASE || "/admin/ausschreibungen",
+      });
       if (!all)
         return {
           items: rows,
-          total: rows.length,
+          total,
+          page,pageSize,hasMore,
           companies,
           selectedCompany: selected.company_id,
           counts,
+          recalculations,
           defaultClasses: ["CORE_REGION", "STRATEGIC_REGION"],
           filters: { relevance: relevanceFilter, serviceLine },
           semanticStatus: "SERVICE_SCOPE_GATE_ACTIVE",
@@ -3112,10 +4073,12 @@ export function registerAutopilotRoutes(
       }));
       return {
         items,
-        total: items.length,
+        total,
+        page,pageSize,hasMore,
         companies,
         selectedCompany: "all",
         counts,
+        recalculations,
         defaultClasses: ["CORE_REGION", "STRATEGIC_REGION"],
         filters: { relevance: relevanceFilter, serviceLine },
         semanticStatus: "SERVICE_SCOPE_GATE_ACTIVE",
@@ -3127,16 +4090,53 @@ export function registerAutopilotRoutes(
     { preHandler: requirePermission("tender.inbox.view") },
     async (req, reply) => {
       const companies = await accessibleCompanies(req.identity),
-        requestedLot = String(req.query?.lot || ""),
+        requestedLotInput = String(req.query?.lot || ""),
         company = companies.find(
           (x) => String(x.company_id) === String(req.query?.company || ""),
         );
       if (!company)
         return reply.code(403).send({ error: "company_scope_forbidden" });
+      const eligibleLotRows = (await pool.query(`SELECT life.lot_key,life.lifecycle_status,life.participation_status,life.deadline_quality,life.offer_deadline,
+          lot.id lot_id,life.deadline_evidence_id
+        FROM tender.tender_lot_lifecycles life
+        LEFT JOIN tender.lots lot ON lot.tender_id=life.tender_id AND lot.external_id=life.lot_key
+        WHERE life.tender_id=$1 AND life.is_current ORDER BY life.lot_key`, [req.params.tenderId])).rows;
+      const storedLot = (await pool.query(`SELECT source_lot_id FROM tender.tender_lot_selections
+        WHERE tenant_id=$1 AND company_id=$2 AND tender_id=$3`, [company.tenant_id, company.company_id, req.params.tenderId])).rows[0];
+      const lotChoice = resolveLotChoice({requestedLotKey:requestedLotInput, storedLotKey:storedLot?.source_lot_id || "", eligibleLots:eligibleLotRows});
+      if (!lotChoice.lot && requestedLotInput)
+        return reply.code(409).send({error:"INVALID_LOT_SELECTION",message:"Das ausgewählte Los ist nicht eindeutig aktiv und teilnahmefähig.",availableLots:eligibleLotRows.map(row=>row.lot_key)});
+      const requestedLot = String(lotChoice.lot?.lot_key || "");
       const evaluation = (
         await pool.query(
-          `SELECT e.*,t.title,t.buyer,t.regions,t.offer_deadline,t.source_url,t.source_code,t.notice_number,t.external_id,l.legal_name company_name,registered.portal_id,registered.credential_id,r.service_line,r.relevance_status,r.service_scope_gate,r.reason relevance_reason,r.recommendation relevance_recommendation,r.evaluation_version relevance_version,r.lot_key relevance_lot_key FROM tender.region_evaluations e JOIN tender.tenders t ON t.id=e.tender_id JOIN tender.enterprise_company_links l ON l.company_id=e.company_id JOIN tender.current_service_relevance r ON r.tender_id=e.tender_id AND r.company_id=e.company_id AND r.primary_company=true JOIN tender.current_registered_tender_company_portals registered ON registered.tender_id=e.tender_id AND registered.company_id=e.company_id WHERE e.tender_id=$1 AND e.company_id=$2 AND e.lot_id IS NULL AND coalesce(r.lot_key,'')=$3 ORDER BY e.evaluation_version DESC LIMIT 1`,
-          [req.params.tenderId, company.company_id, requestedLot],
+          `SELECT e.*,t.id tender_id,scope.company_id,coalesce(e.classification,'REGION_UNRESOLVED') classification,
+             coalesce(e.regional_decision,'REVIEW_REQUIRED') regional_decision,
+             coalesce(e.explanation,'Für diesen neuen Datensatz liegt noch keine stabile Regionsmaterialisierung vor.') explanation,
+             coalesce(e.detected_states,'[]'::jsonb) detected_states,coalesce(e.detected_nuts,'[]'::jsonb) detected_nuts,
+             t.title,t.buyer,t.regions,t.offer_deadline,t.source_url,t.source_code,t.notice_number,t.external_id,l.legal_name company_name,
+             registered.portal_id,registered.credential_id,r.service_line,r.relevance_status,r.service_scope_gate,r.reason relevance_reason,
+             r.recommendation relevance_recommendation,r.evaluation_version relevance_version,coalesce(nullif($3,''),r.lot_key) relevance_lot_key
+           FROM tender.configuration_scopes scope
+           JOIN tender.tenders t ON t.id=$1 AND t.data_class='PUBLIC_REAL' AND (
+             (t.source_lifecycle_status='ACTIVE' AND t.participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE'))
+             OR (t.source_lifecycle_status='REVIEW_REQUIRED' AND t.participation_status='REVIEW_REQUIRED'))
+           JOIN tender.enterprise_company_links l ON l.company_id=scope.company_id AND l.tender_profile_id=scope.profile_id
+           JOIN tender.current_service_relevance r ON r.tender_id=t.id AND r.company_id=scope.company_id AND r.primary_company=true
+             AND (CASE r.service_line WHEN 'facility-management' THEN 'facility_management' WHEN 'emergency-services' THEN 'emergency_services' ELSE r.service_line END)=scope.canonical_service
+           LEFT JOIN LATERAL(SELECT region.* FROM tender.region_evaluations region
+             WHERE region.tender_id=t.id AND region.company_id=scope.company_id AND region.lot_id IS NULL
+               AND region.source_data->>'pipelineVersion'='wb-daily-inbox-pipeline/1.0.0'
+             ORDER BY region.evaluation_version DESC LIMIT 1)e ON true
+           LEFT JOIN tender.current_registered_tender_company_portals registered ON registered.tender_id=t.id AND registered.company_id=scope.company_id
+           WHERE scope.company_id=$2 AND scope.canonical_service=$4
+             AND (coalesce(r.lot_key,'')=$3 OR (r.lot_key IS NULL AND $3<>'' AND EXISTS(
+               SELECT 1 FROM tender.current_participation_eligible_lots selected_lot WHERE selected_lot.tender_id=t.id AND selected_lot.lot_key=$3)))
+             AND ((t.source_lifecycle_status='ACTIVE' AND EXISTS(SELECT 1 FROM tender.current_participation_eligible_lots eligible
+               WHERE eligible.tender_id=t.id AND eligible.lot_key=coalesce(nullif($3,''),r.lot_key,eligible.lot_key)))
+               OR (t.source_lifecycle_status='REVIEW_REQUIRED' AND t.participation_status='REVIEW_REQUIRED'))
+             AND (SELECT count(*) FROM tender.configuration_scopes candidate WHERE candidate.company_id=scope.company_id)=1
+           ORDER BY e.evaluation_version DESC LIMIT 1`,
+          [req.params.tenderId, company.company_id, requestedLot,company.canonical_service],
         )
       ).rows[0];
       if (!evaluation)
@@ -3149,8 +4149,20 @@ export function registerAutopilotRoutes(
           });
       const lots = (
         await pool.query(
-          `SELECT e.*,l.external_id,l.title FROM tender.region_evaluations e JOIN tender.lots l ON l.id=e.lot_id WHERE e.tender_id=$1 AND e.company_id=$2 AND e.lot_id IS NOT NULL AND e.batch_id=$3 ORDER BY l.external_id`,
-          [req.params.tenderId, company.company_id, evaluation.batch_id],
+          `SELECT e.*,coalesce(l.id,enriched.id,life.id) id,life.lot_key external_id,coalesce(l.title,enriched.title) title,
+             life.offer_deadline deadline,life.lifecycle_status,life.participation_status,
+             life.participation_block_reason,life.deadline_quality
+           FROM tender.tender_lot_lifecycles life
+           LEFT JOIN tender.lots l ON l.tender_id=life.tender_id AND l.external_id=life.lot_key
+           LEFT JOIN LATERAL(SELECT el.id,el.title FROM tender.enrichment_lots el JOIN tender.enrichment_versions ev ON ev.id=el.enrichment_version_id
+             WHERE ev.tender_id=life.tender_id AND el.lot_key=life.lot_key ORDER BY ev.version DESC LIMIT 1)enriched ON true
+           LEFT JOIN LATERAL(SELECT region.* FROM tender.region_evaluations region
+             WHERE region.tender_id=life.tender_id AND region.company_id=$2 AND region.lot_id=l.id
+               AND region.source_data->>'pipelineVersion'='wb-daily-inbox-pipeline/1.0.0'
+             ORDER BY region.evaluation_version DESC LIMIT 1)e ON true
+           WHERE life.tender_id=$1 AND life.is_current
+           ORDER BY life.lot_key`,
+          [req.params.tenderId, company.company_id],
         )
       ).rows;
       const latest =
@@ -3177,12 +4189,19 @@ export function registerAutopilotRoutes(
           [req.params.tenderId],
         ),
         pool.query(
-          "SELECT id,version FROM tender.enrichment_versions WHERE tender_id=$1 ORDER BY version DESC LIMIT 1",
-          [req.params.tenderId],
+          `SELECT ev.id,ev.version FROM tender.enrichment_versions ev
+           JOIN tender.enrichment_context_bindings binding ON binding.enrichment_version_id=ev.id
+           WHERE ev.tender_id=$1 AND binding.tenant_id=$2 AND binding.company_id=$3 AND binding.source_lot_id=$4
+           ORDER BY ev.version DESC LIMIT 1`,
+          [req.params.tenderId,company.tenant_id,company.company_id,requestedLot],
         ),
         evaluation.relevance_lot_key
           ? pool.query(
-              "SELECT id,external_id,title,deadline FROM tender.lots WHERE tender_id=$1 AND external_id=$2 UNION ALL SELECT el.id,el.lot_key external_id,NULL::text title,NULL::timestamptz deadline FROM tender.enrichment_lots el JOIN tender.enrichment_versions ev ON ev.id=el.enrichment_version_id WHERE ev.tender_id=$1 AND el.lot_key=$2 AND NOT EXISTS(SELECT 1 FROM tender.lots WHERE tender_id=$1 AND external_id=$2) ORDER BY id LIMIT 1",
+              `SELECT l.id canonical_lot_id,coalesce(l.id,enriched.id,life.id) id,life.lot_key external_id,coalesce(l.title,enriched.title) title,life.offer_deadline deadline
+               FROM tender.tender_lot_lifecycles life LEFT JOIN tender.lots l ON l.tender_id=life.tender_id AND l.external_id=life.lot_key
+               LEFT JOIN LATERAL(SELECT el.id,el.title FROM tender.enrichment_lots el JOIN tender.enrichment_versions ev ON ev.id=el.enrichment_version_id
+                 WHERE ev.tender_id=life.tender_id AND el.lot_key=life.lot_key ORDER BY ev.version DESC LIMIT 1)enriched ON true
+               WHERE life.tender_id=$1 AND life.lot_key=$2 AND life.is_current LIMIT 1`,
               [req.params.tenderId, evaluation.relevance_lot_key],
             )
           : Promise.resolve({ rows: [] }),
@@ -3195,19 +4214,35 @@ export function registerAutopilotRoutes(
           ],
         ),
       ]);
+      if (requestedLot && lot.rows[0]?.canonical_lot_id && lotChoice.source === "SINGLE_ELIGIBLE_LOT") {
+        const inbox = (await pool.query(`SELECT id FROM tender.management_inbox WHERE tender_id=$1 AND company_id=$2 ORDER BY updated_at DESC,created_at DESC LIMIT 1`,[req.params.tenderId,company.company_id])).rows[0];
+        const region = (await pool.query(`SELECT id FROM tender.region_evaluations WHERE tender_id=$1 AND company_id=$2 ORDER BY evaluation_version DESC LIMIT 1`,[req.params.tenderId,company.company_id])).rows[0];
+        await pool.query(`INSERT INTO tender.tender_lot_selections(tenant_id,company_id,tender_id,tender_version_id,lot_id,source_lot_id,inbox_id,region_evaluation_id,canonical_service,deadline_evidence_id,selection_source,selected_by)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          ON CONFLICT(tenant_id,company_id,tender_id) DO UPDATE SET tender_version_id=excluded.tender_version_id,lot_id=excluded.lot_id,source_lot_id=excluded.source_lot_id,inbox_id=excluded.inbox_id,region_evaluation_id=excluded.region_evaluation_id,canonical_service=excluded.canonical_service,deadline_evidence_id=excluded.deadline_evidence_id,selection_source=excluded.selection_source,selected_by=excluded.selected_by,updated_at=now()`,[
+          company.tenant_id,company.company_id,req.params.tenderId,tenderVersion.rows[0].id,lot.rows[0].canonical_lot_id,requestedLot,inbox?.id||null,region?.id||null,company.canonical_service,lotChoice.lot.deadline_evidence_id,lotChoice.source,req.identity.userId,
+        ]);
+      }
       const permissions = req.identity.permissions || [],
         can = (p) =>
           permissions.includes("tender.admin") || permissions.includes(p);
+      const activeInbox=(await pool.query("SELECT id FROM tender.management_inbox WHERE tender_id=$1 AND company_id=$2 ORDER BY updated_at DESC,created_at DESC LIMIT 1",[req.params.tenderId,company.company_id])).rows[0];
       const actionContext = {
+        tenant_id: company.tenant_id,
         tender_id: req.params.tenderId,
         tender_version_id: tenderVersion.rows[0]?.id || null,
         notice_id: evaluation.notice_number || evaluation.external_id || null,
-        lot_id: lot.rows[0]?.id || null,
+        lot_id: lot.rows[0]?.canonical_lot_id || null,
         lot_key: evaluation.relevance_lot_key || null,
+        source_lot_id: evaluation.relevance_lot_key || null,
         company_id: company.company_id,
+        canonical_service: company.canonical_service,
         service_scope: evaluation.service_line || null,
+        inbox_id: activeInbox?.id || null,
+        region_evaluation_id: evaluation.id || null,
         portal_id: queue.rows[0]?.portal_id || null,
         enrichment_version_id: enrichment.rows[0]?.id || null,
+        deadline_evidence_id: lotChoice.lot?.deadline_evidence_id || null,
         assessment_version_id: evaluation.relevance_version || null,
         configuration_version_id: String(
           evaluation.configuration_version_no || "UNVERSIONED",
@@ -3232,6 +4267,7 @@ export function registerAutopilotRoutes(
         .map(([key]) => key);
       const favoriteSaved=(await pool.query("SELECT EXISTS(SELECT 1 FROM tender.favorites WHERE user_id=$1 AND tender_id=$2 AND company_id=$3 AND lot_key IS NOT DISTINCT FROM $4::text) saved",[req.identity.userId,req.params.tenderId,company.company_id,evaluation.relevance_lot_key||null])).rows[0].saved;
       const savedInternalActions=(await pool.query(managementInboxSavedActionsSql,[req.identity.userId,req.params.tenderId,String(company.company_id),String(evaluation.relevance_lot_key||"")])).rows;
+      const linkEvidence=(await loadTenderLinkEvidence(pool,[req.params.tenderId])).get(String(req.params.tenderId))||null;
       return {
         ...evaluation,
         lots,
@@ -3239,8 +4275,11 @@ export function registerAutopilotRoutes(
         autopilot,
         actionContext,
         missingContext,
+        lotSelection: {source:lotChoice.source,selectionRequired:lotChoice.selectionRequired,sourceLotId:requestedLot||null,lotId:lot.rows[0]?.id||null},
         favoriteSaved,
         savedInternalActions,
+        linkEvidence,
+        documentEvidence:linkEvidence?.documentEvidence||null,
         deadline: {
           value: lot.rows[0]?.deadline || evaluation.offer_deadline || null,
           type: lot.rows[0]?.deadline ? "Losfrist" : "Angebotsfrist",
@@ -3259,6 +4298,28 @@ export function registerAutopilotRoutes(
         rawTenderChanged: false,
         historicalInboxDecisionPreserved: true,
       };
+    },
+  );
+
+  app.post(
+    "/api/management-inbox/region-detail/:tenderId/lot-selection",
+    {preHandler:[requirePermission("tender.inbox.view"),csrf]},
+    async(req,reply)=>{
+      const companyId=String(req.body?.company_id||""),sourceLotId=String(req.body?.source_lot_id||""),companies=await accessibleCompanies(req.identity),company=companies.find(row=>String(row.company_id)===companyId);
+      if(!company)return reply.code(403).send({error:"company_scope_forbidden"});
+      const context=(await pool.query(`SELECT lot.id lot_id,version.id tender_version_id,life.deadline_evidence_id
+        FROM tender.tender_lot_lifecycles life
+        JOIN tender.lots lot ON lot.tender_id=life.tender_id AND lot.external_id=life.lot_key
+        JOIN LATERAL(SELECT id FROM tender.tender_versions WHERE tender_id=life.tender_id ORDER BY version DESC LIMIT 1)version ON true
+        WHERE life.tender_id=$1 AND life.lot_key=$2 AND life.is_current AND life.lifecycle_status='ACTIVE' AND life.participation_status='ELIGIBLE'
+          AND life.deadline_quality='EXACT' AND life.offer_deadline>now()`,[req.params.tenderId,sourceLotId])).rows[0];
+      if(!context)return reply.code(409).send({error:"INVALID_LOT_SELECTION",message:"Das Los ist nicht eindeutig aktiv und teilnahmefähig."});
+      const inbox=(await pool.query("SELECT id FROM tender.management_inbox WHERE tender_id=$1 AND company_id=$2 ORDER BY updated_at DESC,created_at DESC LIMIT 1",[req.params.tenderId,company.company_id])).rows[0],region=(await pool.query("SELECT id FROM tender.region_evaluations WHERE tender_id=$1 AND company_id=$2 ORDER BY evaluation_version DESC LIMIT 1",[req.params.tenderId,company.company_id])).rows[0];
+      await pool.query(`INSERT INTO tender.tender_lot_selections(tenant_id,company_id,tender_id,tender_version_id,lot_id,source_lot_id,inbox_id,region_evaluation_id,canonical_service,deadline_evidence_id,selection_source,selected_by)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'EXPLICIT_SELECTION',$11)
+        ON CONFLICT(tenant_id,company_id,tender_id) DO UPDATE SET tender_version_id=excluded.tender_version_id,lot_id=excluded.lot_id,source_lot_id=excluded.source_lot_id,inbox_id=excluded.inbox_id,region_evaluation_id=excluded.region_evaluation_id,canonical_service=excluded.canonical_service,deadline_evidence_id=excluded.deadline_evidence_id,selection_source='EXPLICIT_SELECTION',selected_by=excluded.selected_by,updated_at=now()`,[company.tenant_id,company.company_id,req.params.tenderId,context.tender_version_id,context.lot_id,sourceLotId,inbox?.id||null,region?.id||null,company.canonical_service,context.deadline_evidence_id,req.identity.userId]);
+      await pool.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'tender_lot_selected',$2,$3::jsonb)",[req.identity.userId,req.params.tenderId,JSON.stringify({tenantId:company.tenant_id,companyId:company.company_id,lotId:context.lot_id,sourceLotId,tenderVersionId:context.tender_version_id,externalWrite:false})]);
+      return {tender_id:req.params.tenderId,company_id:company.company_id,lot_id:context.lot_id,source_lot_id:sourceLotId,selection_source:"EXPLICIT_SELECTION"};
     },
   );
 
@@ -3464,7 +4525,10 @@ export function registerAutopilotRoutes(
     ).rows[0];
     const company = (
       await pool.query(
-        "SELECT * FROM tender.enterprise_company_links WHERE company_id=$1 AND active=true",
+        `SELECT company.*,scope.tenant_id,scope.canonical_service,scope.profile_id,scope.active_region_version_id,
+          CASE scope.canonical_service WHEN 'facility_management' THEN 'facility-management' WHEN 'emergency_services' THEN 'emergency-services' ELSE scope.canonical_service END configuration_service_line
+         FROM tender.enterprise_company_links company JOIN tender.configuration_scopes scope ON scope.company_id=company.company_id AND scope.profile_id=company.tender_profile_id
+         WHERE company.company_id=$1 AND company.active=true`,
         [companyId],
       )
     ).rows[0];
@@ -3481,8 +4545,13 @@ export function registerAutopilotRoutes(
       enrichment,
     ] = await Promise.all([
       pool.query(
-        "SELECT * FROM tender.region_evaluations WHERE tender_id=$1 AND company_id=$2 AND lot_id IS NULL ORDER BY evaluation_version DESC LIMIT 1",
-        [tenderId, companyId],
+        `SELECT evaluation.* FROM tender.configuration_active_parameters active JOIN tender.region_evaluations evaluation
+          ON evaluation.company_id=active.company_id AND evaluation.configuration_version_id=active.version_id AND evaluation.lot_id IS NULL
+         WHERE evaluation.tender_id=$1 AND active.company_id=$2 AND active.service_line=$3 AND active.parameter_key='A08'
+          AND (evaluation.tenant_id IS NULL OR evaluation.tenant_id=$4) AND (evaluation.canonical_service IS NULL OR evaluation.canonical_service=$5)
+          AND (evaluation.profile_id IS NULL OR evaluation.profile_id=$6) AND ($7::uuid IS NULL OR evaluation.region_profile_version_id=$7)
+         ORDER BY evaluation.evaluation_version DESC LIMIT 1`,
+        [tenderId, companyId,company.configuration_service_line,company.tenant_id,company.canonical_service,company.profile_id,company.active_region_version_id],
       ),
       pool.query(
         "SELECT * FROM tender.lots WHERE tender_id=$1 ORDER BY external_id",
@@ -3497,16 +4566,17 @@ export function registerAutopilotRoutes(
         [tenderId],
       ),
       pool.query(
-        `SELECT a.parameter_key,c.new_value,c.unit,c.valid_from,c.valid_until FROM tender.configuration_active_parameters a JOIN tender.configuration_changes c ON c.id=a.change_id WHERE a.company_id=$1 ORDER BY a.parameter_key`,
-        [companyId],
+        `SELECT a.parameter_key,c.new_value,c.unit,c.valid_from,c.valid_until FROM tender.configuration_active_parameters a JOIN tender.configuration_changes c ON c.id=a.change_id JOIN tender.configuration_versions v ON v.id=a.version_id
+         WHERE a.company_id=$1 AND a.service_line=$2 AND v.tenant_id=$3 AND v.canonical_service=$4 AND v.profile_id=$5 ORDER BY a.parameter_key`,
+        [companyId,company.configuration_service_line,company.tenant_id,company.canonical_service,company.profile_id],
       ),
       pool.query(
-        "SELECT p.* FROM tender.enterprise_company_links l JOIN tender.company_profiles p ON p.id=l.tender_profile_id WHERE l.company_id=$1 AND l.active=true LIMIT 1",
-        [companyId],
+        "SELECT p.* FROM tender.company_profiles p WHERE p.id=$1 LIMIT 1",
+        [company.profile_id],
       ),
       pool.query(
-        "SELECT * FROM tender.cost_configurations WHERE company_id=$1 AND status='ACTIVE' ORDER BY version DESC LIMIT 1",
-        [companyId],
+        "SELECT * FROM tender.cost_configurations WHERE company_id=$1 AND service_line=$2 AND status='ACTIVE' ORDER BY version DESC LIMIT 1",
+        [companyId,company.configuration_service_line],
       ),
       pool.query(
         "SELECT count(*)::int n FROM tender.evaluations WHERE tender_id=$1 AND explanation->>'reviewType' IN ('FULL_TENDER_REVIEW','FULL_TENDER_AUTOPILOT') AND explanation->>'companyId'=$2",
@@ -3642,6 +4712,19 @@ export function registerAutopilotRoutes(
     "EXPORT_REVIEW_REPORT",
     "EXPORT_BOARD_BRIEF",
   ]);
+  const publicDocumentActions = new Set([
+    "FETCH_DOCUMENTS",
+    "ANALYZE_DOCUMENTS",
+    "REFRESH_ENRICHMENT",
+    "VALIDATE_CALCULATION_INPUTS",
+    "START_CALCULATION",
+    "REFRESH_REVIEW",
+    "GENERATE_RECOMMENDATION",
+    "RUN_FULL_PIPELINE",
+    "GENERATE_BOARD_REPORT",
+    "EXPORT_REVIEW_REPORT",
+    "EXPORT_BOARD_BRIEF",
+  ]);
   app.get("/api/autopilot/dlq-summary", { preHandler: read }, async () => {
     const summary = (
         await pool.query("SELECT * FROM tender.current_dlq_operational_summary")
@@ -3666,6 +4749,27 @@ export function registerAutopilotRoutes(
       rawHistoricalEvents: Number(summary.historical_audit_total || 0),
     };
   });
+  const publicLoginJobStatus=(row)=>{
+    if(["PENDING","QUEUED","CLAIMED","RUNNING","RETRY"].includes(row.status))return "LOGIN_PRUEFUNG_LAEUFT";
+    const result=String(row.result_summary?.resultCode||row.terminal_result||row.error_code||"");
+    if(result==="LOGIN_ERFOLGREICH"||result==="LOGIN_SUCCEEDED")return "LOGIN_ERFOLGREICH";
+    if(result==="MFA_BESTÄTIGUNG_ERFORDERLICH"||result==="MFA_ERFORDERLICH")return "MFA_ERFORDERLICH";
+    return ["FAILED","DEAD_LETTER"].includes(row.status)?"LOGIN_FEHLGESCHLAGEN":null;
+  };
+  const documentWorkflowStatus=(row)=>{
+    if(!row)return "NOT_REQUESTED";
+    if(String(row.error_code||"").includes("MALWARE"))return "MALWARE_REJECTED";
+    if(/MFA/i.test(String(row.portal_access_status||row.error_code||"")))return "MFA_REQUIRED";
+    if(/LOGIN|PORTAL_ACCESS|SESSION/i.test(String(row.portal_access_status||row.document_resolution_status||row.error_code||"")))return "LOGIN_REQUIRED";
+    if(row.status==="RETRY")return "FAILED_RETRYABLE";
+    if(["DEAD_LETTER","FAILED","CANCELLED"].includes(row.status))return "FAILED_FINAL";
+    if(["PENDING","QUEUED","CLAIMED"].includes(row.status))return "QUEUED";
+    if(row.status==="RUNNING")return /ANALY|EXTRACT|REVIEW/i.test(String(row.current_step||""))?"EXTRACTION_RUNNING":"DOWNLOADING";
+    if(Number(row.documents_analyzed)>0&&Number(row.documents_analyzed)>=Number(row.documents_downloaded))return "ANALYZED";
+    if(Number(row.documents_downloaded)>0&&Number(row.documents_downloaded)<Number(row.documents_found))return "PARTIAL_FAILURE";
+    if(Number(row.documents_downloaded)>0)return "DOWNLOADED";
+    return "NOT_REQUESTED";
+  };
   const publicJob = (row) => ({
     job_id: row.id,
     request_id: row.request_id,
@@ -3678,6 +4782,8 @@ export function registerAutopilotRoutes(
         DEAD_LETTER: "FAILED",
       }[row.status] || row.status,
     queue_status: row.status,
+    document_workflow_status: documentWorkflowStatus(row),
+    login_status: ["TEST_PORTAL_CONNECTION","START_PORTAL_AUTHENTICATION"].includes(row.action_type)?publicLoginJobStatus(row):null,
     current_step: row.current_step,
     progress_percent: row.progress_percent,
     last_successful_step: row.last_successful_step,
@@ -3731,8 +4837,9 @@ export function registerAutopilotRoutes(
       if (!portal || !portal.adapter_enabled)
         return reply.code(409).send({ error: "PORTAL_ADAPTER_NOT_AVAILABLE" });
       if (
-        portal.login_strategy === "PUBLIC_DOCUMENT_ACCESS" ||
-        (portal.capabilities || []).includes("PUBLIC_DOCUMENTS_POSSIBLE")
+        !credential &&
+        (portal.login_strategy === "PUBLIC_DOCUMENT_ACCESS" ||
+          (portal.capabilities || []).includes("PUBLIC_DOCUMENTS_POSSIBLE"))
       )
         return reply.code(409).send({
           error: "PORTAL_AUTHENTICATION_NOT_REQUIRED",
@@ -3760,6 +4867,18 @@ export function registerAutopilotRoutes(
           transmitted: false,
         });
       const lotKey = String(req.body?.lot_key || "") || null;
+      const blockedAction = String(req.body?.blocked_action || "DOCUMENT_FETCH").toUpperCase(),
+        allowedBlockedActions = new Set([
+          "DOCUMENT_FETCH",
+          "PARTICIPATION_PREPARE",
+          "PORTAL_MESSAGES",
+          "DRAFT_ACTION",
+        ]);
+      if (!allowedBlockedActions.has(blockedAction))
+        return reply.code(422).send({
+          error: "BLOCKED_ACTION_INVALID",
+          fieldErrors: { blocked_action: "Nicht unterstützte Fortsetzungsaktion." },
+        });
       if (
         lotKey &&
         !(
@@ -3770,8 +4889,8 @@ export function registerAutopilotRoutes(
         ).rowCount
       )
         return reply.code(409).send({ error: "LOT_CONTEXT_INVALID" });
-      const domains = portalHosts(portal),
-        document = (
+      const domains = portalHosts(portal);
+      let document = (
           await pool.query(
             `SELECT d.source_url,d.provenance,e.id enrichment_version_id,e.notice_version,t.notice_number,t.external_id,tv.id tender_version_id
       FROM tender.enrichment_documents d JOIN tender.enrichment_versions e ON e.id=d.enrichment_version_id JOIN tender.tenders t ON t.id=e.tender_id JOIN LATERAL(SELECT id FROM tender.tender_versions WHERE tender_id=t.id ORDER BY version DESC LIMIT 1)tv ON true
@@ -3781,10 +4900,26 @@ export function registerAutopilotRoutes(
           )
         ).rows[0];
       if (!document)
+        document = (
+          await pool.query(
+            `SELECT enrichment.id enrichment_version_id,NULL::integer notice_version,t.notice_number,t.external_id,tv.id tender_version_id
+             FROM tender.tenders t
+             JOIN LATERAL(SELECT id FROM tender.tender_versions WHERE tender_id=t.id ORDER BY version DESC LIMIT 1) tv ON true
+             LEFT JOIN LATERAL(SELECT id FROM tender.enrichment_versions WHERE tender_id=t.id AND historical=false ORDER BY version DESC LIMIT 1) enrichment ON true
+             WHERE t.id=$1`,
+            [tender.id],
+          )
+        ).rows[0];
+      if (!document)
         return reply
           .code(409)
           .send({ error: "KEINE_PASSENDE_AUSSCHREIBUNG_GEFUNDEN" });
       const target = externalLoginTarget(portal),
+        correlationToken = crypto.randomBytes(32).toString("base64url"),
+        correlationTokenHash = crypto
+          .createHash("sha256")
+          .update(correlationToken)
+          .digest("hex"),
         auditId = crypto.randomUUID(),
         client = await pool.connect();
       try {
@@ -3873,8 +5008,8 @@ export function registerAutopilotRoutes(
         }
         const row = (
           await client.query(
-            `INSERT INTO tender.portal_login_continuations(tender_id,notice_id,lot_key,company_id,portal_id,portal_adapter_id,credential_id,expected_portal_host,expected_partner_host,portal_login_url,portal_tender_url,partner_system_url,user_id,status,audit_id,login_job_id)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'LOGIN_STARTED',$14,$15) RETURNING *`,
+            `INSERT INTO tender.portal_login_continuations(tender_id,notice_id,lot_key,company_id,portal_id,portal_adapter_id,credential_id,expected_portal_host,expected_partner_host,portal_login_url,portal_tender_url,partner_system_url,user_id,status,audit_id,login_job_id,tender_version_id,enrichment_version_id,blocked_action,correlation_token_hash)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'LOGIN_STARTED',$14,$15,$16,$17,$18,$19) RETURNING *`,
             [
               tender.id,
               document.notice_number ||
@@ -3894,6 +5029,10 @@ export function registerAutopilotRoutes(
               req.identity.userId,
               auditId,
               loginJob.id,
+              document.tender_version_id,
+              document.enrichment_version_id,
+              blockedAction,
+              correlationTokenHash,
             ],
           )
         ).rows[0];
@@ -3915,6 +5054,9 @@ export function registerAutopilotRoutes(
               expectedPortalHost: target.expectedPortalHost,
               expectedPartnerHost: target.expectedPartnerHost,
               desiredAction: "VERIFY_SESSION_THEN_FANOUT",
+              blockedAction,
+              tenderVersionId: document.tender_version_id,
+              enrichmentVersionId: document.enrichment_version_id,
               auditId,
               externalWrite: false,
             }),
@@ -3935,10 +5077,13 @@ export function registerAutopilotRoutes(
             portalLoginUrl: target.portalLoginUrl,
             portalTenderUrl: target.portalTenderUrl,
             partnerSystemUrl: target.partnerSystemUrl,
-            externalUrl: target.externalUrl,
+            portalReferenceUrl: target.externalUrl,
             status: row.status,
             expiresAt: row.expires_at,
             auditId,
+            correlationToken,
+            interactionMode: "MANAGED_CONNECTOR",
+            verificationAction: "Anmeldung abgeschlossen – Verbindung prüfen",
           });
       } catch (error) {
         await client.query("ROLLBACK");
@@ -3957,18 +5102,29 @@ export function registerAutopilotRoutes(
       ],
     },
     async (req, reply) => {
+      const correlationToken = String(req.body?.correlationToken || ""),
+        correlationTokenHash = correlationToken
+          ? crypto.createHash("sha256").update(correlationToken).digest("hex")
+          : "";
+      if (!correlationTokenHash)
+        return reply.code(400).send({ error: "LOGIN_CORRELATION_REQUIRED" });
       const continuation = (
         await pool.query(
-          "SELECT * FROM tender.portal_login_continuations WHERE id=$1 AND (user_id=$2 OR $3::boolean)",
+          "SELECT * FROM tender.portal_login_continuations WHERE id=$1 AND correlation_token_hash=$4 AND (user_id=$2 OR $3::boolean)",
           [
             req.params.continuationId,
             req.identity.userId,
             req.identity.permissions.includes("tender.admin"),
+            correlationTokenHash,
           ],
         )
       ).rows[0];
       if (!continuation)
         return reply.code(404).send({ error: "LOGIN_CONTINUATION_NOT_FOUND" });
+      await pool.query(
+        "UPDATE tender.portal_login_continuations SET last_verification_at=now(),verification_attempts=verification_attempts+1 WHERE id=$1",
+        [continuation.id],
+      );
       if (
         !continuation.company_id ||
         (!req.identity.permissions.includes("tender.admin") &&
@@ -3986,6 +5142,10 @@ export function registerAutopilotRoutes(
         return {
           continuationId: continuation.id,
           status: "SESSION_EXPIRED",
+          sessionValid: false,
+          errorId: req.id,
+          message: "Der korrelierte Loginvorgang ist abgelaufen. Starten Sie die Anmeldung sicher erneut.",
+          recoveryAction: { type: "START_LOGIN", label: "Erneut anmelden" },
           expiresAt: continuation.expires_at,
         };
       }
@@ -3999,7 +5159,7 @@ export function registerAutopilotRoutes(
         const loginJob = continuation.login_job_id
           ? (
               await pool.query(
-                "SELECT status,current_step,error_code FROM tender.autopilot_queue WHERE id=$1",
+                "SELECT status,current_step,error_code,error_detail_safe,request_id,next_attempt_at FROM tender.autopilot_queue WHERE id=$1",
                 [continuation.login_job_id],
               )
             ).rows[0]
@@ -4012,6 +5172,8 @@ export function registerAutopilotRoutes(
                 ? "WRONG_ACCOUNT_CONTEXT"
                 : loginJob.error_code === "LOGIN_FORMULAR_GEAENDERT"
                   ? "LOGIN_FORM_CHANGED"
+                  : loginJob.error_code === "PORTAL_NICHT_ERREICHBAR"
+                    ? "PORTAL_UNREACHABLE"
                   : "LOGIN_FAILED";
           await pool.query(
             "UPDATE tender.portal_login_continuations SET status=$2 WHERE id=$1",
@@ -4022,20 +5184,75 @@ export function registerAutopilotRoutes(
             status,
             loginJobStatus: loginJob.status,
             errorClass: loginJob.error_code,
+            errorId: loginJob.request_id || req.id,
+            detail: loginJob.error_detail_safe || null,
+            clientContractVersion: "reconnect-v36",
+            message:
+              loginJob.error_code === "LOGIN_TEST_TIMEOUT"
+                ? "Die Portalprüfung hat innerhalb des sicheren Zeitfensters keinen bestätigten Sitzungsstatus geliefert."
+                : loginJob.error_code === "REGISTERED_PORTAL_SCOPE_NOT_FOUND"
+                  ? "Die Portal-, Account- oder Gesellschaftsbindung konnte für diesen Vorgang nicht bestätigt werden."
+                  : loginJob.error_code === "MFA_BESTÄTIGUNG_ERFORDERLICH"
+                    ? "Die persönliche MFA-Bestätigung ist erforderlich."
+                    : loginJob.error_code === "BENUTZERNAME_ODER_PASSWORT_FALSCH"
+                      ? "Das Portal hat die Anmeldung für den gebundenen Account abgelehnt."
+                      : loginJob.error_code === "LOGIN_FORMULAR_GEAENDERT"
+                        ? "Das verifizierte Portalformular hat sich geändert und muss technisch geprüft werden."
+                        : loginJob.error_code === "PORTAL_NICHT_ERREICHBAR"
+                          ? "Das Portal ist wegen Wartung oder eines vorübergehenden technischen Ausfalls derzeit nicht erreichbar. Der Vorgang kann sicher erneut gestartet werden."
+                        : "Die Portalverbindung konnte nicht bestätigt werden.",
+            recoveryAction:
+              status === "MFA_REQUIRED"
+                ? { type: "CONFIRM_MFA", label: "MFA-Anmeldung erneut starten" }
+                : { type: "START_LOGIN", label: "Erneut anmelden" },
             expiresAt: continuation.expires_at,
           };
         }
+        if (loginJob?.status === "RETRY")
+          return {
+            continuationId: continuation.id,
+            status: "LOGIN_RETRY_SCHEDULED",
+            sessionValid: false,
+            loginJobStatus: loginJob.status,
+            currentStep: loginJob.current_step,
+            retryAt: loginJob.next_attempt_at,
+            errorClass: loginJob.error_code,
+            errorId: loginJob.request_id || req.id,
+            message: "Die erste technische Portalprüfung war nicht erfolgreich; ein begrenzter Wiederholungsversuch ist eingeplant.",
+            detail: loginJob.error_detail_safe || null,
+            clientContractVersion: "reconnect-v36",
+            expiresAt: continuation.expires_at,
+          };
+        if (loginJob && ["PENDING", "QUEUED", "CLAIMED", "RUNNING"].includes(loginJob.status))
+          return {
+            continuationId: continuation.id,
+            status: "LOGIN_STARTED",
+            sessionValid: false,
+            loginJobStatus: loginJob.status,
+            currentStep: loginJob.current_step,
+            expiresAt: continuation.expires_at,
+          };
         await pool.query("UPDATE tender.portal_login_continuations SET status='SESSION_EXPIRED' WHERE id=$1 AND status IN('LOGIN_STARTED','WAITING_FOR_USER','LOGIN_SUCCESSFUL')",[continuation.id]);
         return {
           continuationId: continuation.id,
           status: "SESSION_EXPIRED",
           sessionValid: false,
           recoveryAction: { type: "START_LOGIN", label: "Erneut anmelden" },
+          errorId: loginJob?.request_id || req.id,
+          message: "Der Loginvorgang ist abgelaufen oder besitzt keinen aktiven Prüfjob.",
           loginJobStatus: loginJob?.status || null,
           currentStep: loginJob?.current_step || null,
           expiresAt: continuation.expires_at,
         };
       }
+      await pool.query(
+        "UPDATE tender.portal_credential_companies SET login_status='LOGIN_BESTAETIGT',last_manual_check_at=now() WHERE credential_id=$1 AND company_id=$2 AND active=true",
+        [continuation.credential_id, continuation.company_id],
+      );
+      await pool.query(
+        "UPDATE tender.portal_registry SET last_successful_login_at=now(),last_error_code=NULL,updated_at=now() WHERE id=$1",
+        [continuation.portal_id],
+      );
       await enqueueVerifiedSessionFanout(pool,session.id);
       const fanout = (
         await pool.query(
@@ -4054,14 +5271,39 @@ export function registerAutopilotRoutes(
         String(item.tender_id) === String(continuation.tender_id) &&
         String(item.lot_key || "") === String(continuation.lot_key || ""),
       );
-      if (!job)
+      if (!job) {
+        const loginJob = continuation.login_job_id
+          ? (
+              await pool.query(
+                "SELECT status,current_step,error_code,result_summary FROM tender.autopilot_queue WHERE id=$1",
+                [continuation.login_job_id],
+              )
+            ).rows[0]
+          : null;
+        if (loginJob?.status === "SUCCEEDED") {
+          await pool.query(
+            "UPDATE tender.portal_login_continuations SET status='LOGIN_SUCCESSFUL',completed_at=coalesce(completed_at,now()),correlation_consumed_at=coalesce(correlation_consumed_at,now()) WHERE id=$1",
+            [continuation.id],
+          );
+          return {
+            continuationId: continuation.id,
+            status: "LOGIN_SUCCESSFUL",
+            sessionValid: true,
+            nextState: "PORTAL_SESSION_ESTABLISHED",
+            resumeAction: "AWAIT_BOUND_DOCUMENT_REFERENCE",
+            documentContinuation: "NO_BOUND_DOCUMENT_CONTEXT",
+            loginJobStatus: loginJob.status,
+            affectedContexts: fanout.map(item => publicJob({ ...item, id: item.job_id })),
+          };
+        }
         return reply.code(409).send({
           error: "CONTINUATION_CONTEXT_INVALID",
           sessionValid: true,
           affectedContexts: fanout.map(publicJob),
         });
+      }
       await pool.query(
-        "UPDATE tender.portal_login_continuations SET status='LOGIN_SUCCESSFUL',job_id=$2,completed_at=coalesce(completed_at,now()) WHERE id=$1",
+        "UPDATE tender.portal_login_continuations SET status='LOGIN_SUCCESSFUL',job_id=$2,completed_at=coalesce(completed_at,now()),correlation_consumed_at=coalesce(correlation_consumed_at,now()) WHERE id=$1",
         [continuation.id,job.job_id],
       );
       await pool.query(
@@ -4138,11 +5380,10 @@ export function registerAutopilotRoutes(
         );
       if (!company)
         return reply.code(403).send({ error: "company_scope_forbidden" });
-      const registeredScope = await requireRegisteredScope(
-        reply,
-        req.params.tenderId,
-        company.company_id,
-      );
+      if (!(await requireParticipationEligible(reply,req.params.tenderId,body.lot_key||body.lotKey||req.query?.lot))) return;
+      const registeredScope = publicDocumentActions.has(action)
+        ? await resolveDocumentScope(reply, req.params.tenderId, company.company_id)
+        : await requireRegisteredScope(reply, req.params.tenderId, company.company_id);
       if (!registeredScope) return;
       const tender = (
         await pool.query(
@@ -4154,7 +5395,7 @@ export function registerAutopilotRoutes(
         return reply.code(404).send({ error: "FEHLENDER_TENDERKONTEXT" });
       const tenderVersion = (
         await pool.query(
-          "SELECT id FROM tender.tender_versions WHERE tender_id=$1 ORDER BY version DESC LIMIT 1",
+          "SELECT id,source_sha256 FROM tender.tender_versions WHERE tender_id=$1 ORDER BY version DESC LIMIT 1",
           [tender.id],
         )
       ).rows[0];
@@ -4204,7 +5445,10 @@ export function registerAutopilotRoutes(
         credential = { id: registeredScope.credential_id };
       const relevance = (
         await pool.query(
-          "SELECT * FROM tender.current_service_relevance WHERE tender_id=$1 AND company_id=$2 AND lot_key IS NOT DISTINCT FROM $3",
+          `SELECT * FROM tender.current_service_relevance WHERE tender_id=$1 AND company_id=$2
+           AND (lot_key IS NOT DISTINCT FROM $3 OR (lot_key IS NULL AND $3 IS NOT NULL AND EXISTS(
+             SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=$1 AND eligible.lot_key=$3)))
+           ORDER BY (lot_key IS NOT DISTINCT FROM $3) DESC LIMIT 1`,
           [tender.id, company.company_id, body.lot_key ?? null],
         )
       ).rows[0];
@@ -4271,11 +5515,17 @@ export function registerAutopilotRoutes(
         parts =
           action === "RUN_FULL_PIPELINE"
             ? [
+                action,
                 tender.id,
+                tenderVersion.id,
                 body.lot_key || "_tender",
+                lot?.id || "-",
+                company.tenant_id,
                 company.company_id,
+                tenderVersion.source_sha256,
+                assessment || "-",
+                configurationVersion,
                 PIPELINE_SCHEMA_VERSION,
-                nextCanonicalStep,
               ]
             : [
                 action,
@@ -4294,7 +5544,7 @@ export function registerAutopilotRoutes(
         await client.query("BEGIN");
         const existing = (
           await client.query(
-            "SELECT * FROM tender.autopilot_queue WHERE idempotency_key=$1 AND status IN ('PENDING','CLAIMED','RETRY','QUEUED','RUNNING') FOR UPDATE",
+            "SELECT * FROM tender.autopilot_queue WHERE idempotency_key=$1 ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
             [key],
           )
         ).rows[0];
@@ -4363,7 +5613,7 @@ export function registerAutopilotRoutes(
         ) {
           const row = (
             await pool.query(
-              "SELECT * FROM tender.autopilot_queue WHERE idempotency_key=$1 AND status IN ('PENDING','CLAIMED','RETRY','QUEUED','RUNNING')",
+              "SELECT * FROM tender.autopilot_queue WHERE idempotency_key=$1 ORDER BY created_at DESC LIMIT 1",
               [key],
             )
           ).rows[0];
@@ -4407,8 +5657,51 @@ export function registerAutopilotRoutes(
         !companies.some((x) => String(x.company_id) === String(row.company_id))
       )
         return reply.code(403).send({ error: "company_scope_forbidden" });
-      if (row.company_id && !(await requireRegisteredScope(reply, row.tender_id, row.company_id))) return;
+      if (row.company_id && !(await resolveDocumentScope(reply, row.tender_id, row.company_id))) return;
       return publicJob(row);
+    },
+  );
+  app.get(
+    "/api/portal-access/jobs/:jobId",
+    { preHandler: read },
+    async (req, reply) => {
+      if (!validUuid(req.params.jobId))
+        return reply.code(400).send({ error: "job_id_invalid" });
+      const row = (
+        await pool.query(
+          `SELECT * FROM tender.autopilot_queue
+           WHERE id=$1 AND action_type IN ('TEST_PORTAL_CONNECTION','TEST_DOCUMENT_FETCH')`,
+          [req.params.jobId],
+        )
+      ).rows[0];
+      if (!row) return reply.code(404).send({ error: "portal_job_not_found" });
+      const companies = await accessibleCompanies(req.identity);
+      if (!companies.some((company) => String(company.company_id) === String(row.company_id)))
+        return reply.code(403).send({ error: "company_scope_forbidden" });
+      const current = await activeCredentialForCompany(row.portal_id, row.company_id);
+      if (!current || String(current.id) !== String(row.credential_id))
+        return reply.code(410).send({ error: "credential_version_superseded" });
+      return {...publicJob(row),credential_id:current.id,credential_version:current.version,portal_id:row.portal_id,company_id:row.company_id};
+    },
+  );
+  app.post(
+    "/api/portal-access/registry-candidates",
+    { preHandler: [requirePermission(["tender.portal.manage", "tender.admin"]), csrf] },
+    async (req, reply) => {
+      const companyId = String(req.body?.companyId || ""),
+        tenderId = String(req.body?.tenderId || ""),
+        candidate = String(req.body?.candidate || "").trim().slice(0, 160),
+        company = (await accessibleCompanies(req.identity)).find(row => String(row.company_id) === companyId);
+      if (!company) return reply.code(403).send({ error: "company_scope_forbidden" });
+      if (tenderId && (!validUuid(tenderId) || !(await visibleTender(req, reply, tenderId)))) return;
+      if (candidate.length < 3 || /(?:password|passwort|token|secret|totp|mfa.?code|recovery|session|cookie)|@/i.test(candidate))
+        return reply.code(400).send({ error: "portal_candidate_invalid" });
+      await pool.query(
+        `INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata)
+         VALUES($1,'PORTAL_REGISTRY_CANDIDATE_RECORDED',$2,$3::jsonb)`,
+        [req.identity.userId,tenderId||null,JSON.stringify({candidate,companyId,validationStatus:"REVIEW_REQUIRED",automaticallyValidated:false,externalWrite:false,transmitted:false})],
+      );
+      return reply.code(202).send({ recorded:true, validationStatus:"REVIEW_REQUIRED", automaticallyValidated:false });
     },
   );
   app.get(
@@ -4448,10 +5741,8 @@ export function registerAutopilotRoutes(
       const portal = await portalRow(req.params.portalId);
       if (!portal)
         return reply.code(404).send({ error: "FEHLENDER_PORTALKONTEXT" });
-      if (!portal.adapter_enabled)
-        return reply
-          .code(409)
-          .send({ error: "UNKNOWN_PORTAL_ADAPTER_REQUIRED" });
+      const eligibility=credentialPortalEligibility(portal);
+      if(!eligibility.eligible)return reply.code(422).send({error:eligibility.code,message:eligibility.code==="PORTAL_DER_AUSSCHREIBUNG_NICHT_ERMITTELT"?"Die Bekanntmachung wurde über TED/oeffentlichevergabe.de veröffentlicht. Das für Anmeldung und Abgabe verwendete Vergabeportal konnte nicht eindeutig ermittelt werden.":eligibility.code==="KEIN_ADAPTER_VERFUEGBAR"?"Für dieses Portal ist kein freigegebener Anmeldeadapter verfügbar.":"Das ausgewählte Vergabeportal ist nicht validiert."});
       const companies = await accessibleCompanies(req.identity),
         requestedCompany = String(req.body?.company_id || ""),
         company = companies.find(
@@ -4464,8 +5755,15 @@ export function registerAutopilotRoutes(
         return reply.code(403).send({ error: "company_scope_forbidden" });
       if (!credential)
         return reply
-          .code(409)
-          .send({ error: "PORTALZUGANG_NICHT_KONFIGURIERT" });
+          .code(404)
+          .send({ error: "PORTALZUGANG_NICHT_KONFIGURIERT",message:"Für diese Gesellschaft ist kein Portalzugang hinterlegt." });
+      const jobEligibility=credentialJobEligibility(portal,credential,action);
+      if(!jobEligibility.eligible)return reply.code(422).send({error:jobEligibility.code,message:"Dieser gesellschafts- und hostgebundene Kontotyp ist für die angeforderte Funktion nicht freigegeben."});
+      const expectedCredentialId=String(req.body?.credential_id||"").trim(),expectedCredentialVersion=req.body?.credential_version==null?null:Number(req.body.credential_version);
+      if ((expectedCredentialId&&!validUuid(expectedCredentialId)) || (expectedCredentialVersion!==null&&(!Number.isInteger(expectedCredentialVersion)||expectedCredentialVersion<1)))
+        return reply.code(400).send({error:"credential_version_binding_invalid"});
+      if ((expectedCredentialId&&expectedCredentialId!==String(credential.id)) || (expectedCredentialVersion!==null&&expectedCredentialVersion!==Number(credential.version)))
+        return reply.code(409).send({error:"CREDENTIAL_VERSION_CONFLICT",message:"Der Portalzugang wurde zwischenzeitlich durch einen neueren Vorgang geändert.",currentCredentialVersion:credential.version});
       const domains = [
           portal.canonical_domain,
           ...portal.allowed_subdomains,
@@ -4473,31 +5771,37 @@ export function registerAutopilotRoutes(
           ...portal.download_domains,
         ],
         requestedTenderRaw = String(req.body?.tender_id || "").trim(),
-        requestedTender = requestedTenderRaw&&validUuid(requestedTenderRaw)?requestedTenderRaw:null;
-      if (requestedTenderRaw && !requestedTender)
+        requestedTender = requestedTenderRaw&&validUuid(requestedTenderRaw)?requestedTenderRaw:null,
+        requestedLot=String(req.body?.lot_id||req.body?.lot_key||"").trim();
+      if (!requestedTenderRaw)
+        return reply.code(422).send({error:"PORTAL_DER_AUSSCHREIBUNG_NICHT_ERMITTELT",message:"Für die Anmeldeprüfung fehlt die exakt gebundene Ausschreibung. Der gespeicherte Portalzugang wurde nicht verändert."});
+      if (!requestedTender)
         return reply.code(400).send({ error: "invalid_tender_id" });
-      if (requestedTender && !(await visibleTender(req, reply, requestedTender)))
+      if (!(await visibleTender(req, reply, requestedTender)))
         return;
+      if (!(await requireParticipationEligible(reply,requestedTender,requestedLot))) return;
       const target = (
           await pool.query(
-            `SELECT e.tender_id,tv.id tender_version_id,e.id enrichment_version_id,t.assigned_user_id,t.sector_id,t.company_id FROM tender.enrichment_documents d JOIN tender.enrichment_versions e ON e.id=d.enrichment_version_id JOIN tender.tenders t ON t.id=e.tender_id JOIN LATERAL(SELECT id FROM tender.tender_versions WHERE tender_id=e.tender_id ORDER BY version DESC LIMIT 1)tv ON true WHERE ($3::uuid IS NULL OR e.tender_id=$3) AND EXISTS(SELECT 1 FROM tender.current_service_relevance relevance WHERE relevance.tender_id=e.tender_id AND relevance.company_id=$4 AND relevance.relevance_status='RELEVANT' AND relevance.service_scope_gate='PASSED') AND ($5::boolean OR EXISTS(SELECT 1 FROM tender.current_registered_tender_company_portals registered WHERE registered.tender_id=e.tender_id AND registered.company_id=$4 AND registered.portal_id=$6 AND registered.credential_id=$7)) AND (lower(split_part(split_part(d.source_url,'://',2),'/',1))=ANY($1::text[]) OR lower(coalesce(d.provenance->>'targetPortal',''))=ANY($1::text[]) OR d.provenance->>'portalId'=$2) ORDER BY e.created_at DESC LIMIT 100`,
-            [domains, String(portal.id), requestedTender, company.company_id, action === "TEST_PORTAL_CONNECTION", portal.id, credential.id],
+            `SELECT DISTINCT e.tender_id,tv.id tender_version_id,e.id enrichment_version_id,t.assigned_user_id,t.sector_id,t.company_id
+             FROM tender.enrichment_documents d
+             JOIN tender.enrichment_versions e ON e.id=d.enrichment_version_id AND e.historical=false
+             JOIN tender.tenders t ON t.id=e.tender_id
+             JOIN LATERAL(SELECT id FROM tender.tender_versions WHERE tender_id=e.tender_id ORDER BY version DESC LIMIT 1)tv ON true
+             WHERE e.tender_id=$3
+               AND EXISTS(SELECT 1 FROM tender.current_service_relevance relevance WHERE relevance.tender_id=e.tender_id AND relevance.company_id=$4 AND relevance.relevance_status='RELEVANT' AND relevance.service_scope_gate='PASSED' AND ($7='' OR relevance.lot_key IS NOT DISTINCT FROM nullif($7,'')))
+               AND EXISTS(SELECT 1 FROM tender.current_tender_company_portal_credential_scopes registered WHERE registered.tender_id=e.tender_id AND registered.company_id=$4 AND registered.portal_id=$5 AND registered.credential_id=$6)
+               AND (lower(split_part(split_part(d.source_url,'://',2),'/',1))=ANY($1::text[]) OR lower(coalesce(d.provenance->>'targetPortal',''))=ANY($1::text[]) OR d.provenance->>'portalId'=$2)
+               AND ($7='' OR d.lot_id IN(SELECT lot.id FROM tender.enrichment_lots lot WHERE lot.enrichment_version_id=e.id AND (lot.id::text=$7 OR lot.lot_key=$7)))
+             LIMIT 2`,
+            [domains, String(portal.id), requestedTender, company.company_id, portal.id, credential.id,requestedLot],
           )
-        ).rows.find((candidate) => mayView(req.identity, candidate));
-      if (!target)
+        ).rows;
+      if(target.length!==1)
         return reply
-          .code(409)
-          .send({ error: "KEINE_PASSENDE_AUSSCHREIBUNG_GEFUNDEN" });
-      const key = [
-          action,
-          target.tender_id,
-          target.tender_version_id,
-          "-",
-          company.company_id,
-          portal.id,
-          target.enrichment_version_id,
-          "-",
-        ].join(":"),
+          .code(422)
+          .send({ error: "PORTAL_DER_AUSSCHREIBUNG_NICHT_ERMITTELT",message:"Das für Anmeldung und Abgabe verwendete Vergabeportal konnte für diese Ausschreibung nicht eindeutig ermittelt werden. Der gespeicherte Portalzugang wurde nicht verändert." });
+      const exactTarget=target[0];
+      const key = portalCredentialJobKey({actionType:action,portalId:portal.id,companyId:company.company_id,credentialId:credential.id,credentialVersion:credential.version}),
         requestId = crypto.randomUUID();
       const row = (
         await pool.query(
@@ -4505,12 +5809,12 @@ export function registerAutopilotRoutes(
           [
             requestId,
             action,
-            target.tender_id,
-            target.tender_version_id,
+            exactTarget.tender_id,
+            exactTarget.tender_version_id,
             company.company_id,
             portal.id,
             credential.id,
-            target.enrichment_version_id,
+            exactTarget.enrichment_version_id,
             portal.adapter_id,
             portal.adapter_version,
             key,
@@ -4523,12 +5827,14 @@ export function registerAutopilotRoutes(
         "INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'autopilot_portal_test_queued',$2,$3::jsonb)",
         [
           req.identity.userId,
-          target.tender_id,
+          exactTarget.tender_id,
           JSON.stringify({
             jobId: row.id,
             actionType: action,
             portalId: portal.id,
             companyId: company.company_id,
+            credentialId: credential.id,
+            credentialVersion: credential.version,
             automaticContinuation: action === "TEST_DOCUMENT_FETCH",
             externalWrite: false,
           }),
@@ -4536,7 +5842,7 @@ export function registerAutopilotRoutes(
       );
       return reply
         .code(row.request_id === requestId ? 202 : 200)
-        .send(publicJob(row));
+        .send({...publicJob(row),credential_id:credential.id,credential_version:credential.version,portal_id:portal.id,company_id:company.company_id,idempotent:row.request_id!==requestId});
     },
   );
   app.get(
@@ -4677,6 +5983,42 @@ export function registerAutopilotRoutes(
     },
   );
   app.get(
+    "/api/tenders/:id/participation-readiness",
+    { preHandler: read },
+    async (req,reply) => {
+      if (!(await visibleTender(req,reply,req.params.id))) return;
+      const company=(await accessibleCompanies(req.identity)).find((row)=>String(row.company_id)===String(req.query?.company||""));
+      if(!company)return reply.code(403).send({error:"company_scope_forbidden"});
+      const lotKey=String(req.query?.lot||"");
+      const [tenderResult,versionResult,lotLifecycleResult,portalResult,regionResult,documentsResult,requirementsResult,profileResult,calculationResult,managementResult,approvalResult,packageResult]=await Promise.all([
+        pool.query("SELECT id,source_code,title,offer_deadline,source_lifecycle_status,participation_status,participation_block_reason,notice_classification FROM tender.tenders WHERE id=$1",[req.params.id]),
+        pool.query("SELECT id,version FROM tender.tender_versions WHERE tender_id=$1 ORDER BY version DESC LIMIT 1",[req.params.id]),
+        pool.query("SELECT lot_key,lifecycle_status,participation_status,participation_block_reason,offer_deadline,deadline_quality FROM tender.tender_lot_lifecycles WHERE tender_id=$1 AND lot_key=$2 AND is_current",[req.params.id,lotKey]),
+        pool.query(`SELECT mapping.portal_id,mapping.mapping_status,portal.display_name,portal.canonical_domain,portal.capabilities,credential.credential_id,secret.version credential_version,secret.account_type
+          FROM tender.current_tender_portal_mapping_truth mapping JOIN tender.portal_registry portal ON portal.id=mapping.portal_id
+          LEFT JOIN tender.current_tender_company_portal_credential_scopes credential ON credential.tender_id=mapping.tender_id AND credential.portal_id=mapping.portal_id AND credential.company_id=$2
+          LEFT JOIN tender.portal_credential_secrets secret ON secret.id=credential.credential_id
+          WHERE mapping.tender_id=$1 ORDER BY (mapping.mapping_status='MANUAL_CONFIRMED') DESC,portal.display_name`,[req.params.id,company.company_id]),
+        pool.query("SELECT classification,evaluation_version,region_profile_version_id FROM tender.region_evaluations WHERE tender_id=$1 AND company_id=$2 ORDER BY evaluation_version DESC LIMIT 1",[req.params.id,company.company_id]),
+        pool.query(`SELECT count(*)::int found,count(*) FILTER(WHERE resolution_status='DOWNLOAD_SUCCEEDED' OR fetch_status='VORHANDEN')::int downloaded,count(*) FILTER(WHERE coalesce(procurement_verification_status,'') IN('VERIFIED','TENDER_AND_LOT_VERIFIED','TENDER_VERIFIED_LOT_GLOBAL'))::int clean,count(*) FILTER(WHERE extracted_data IS NOT NULL)::int analyzed
+          FROM tender.enrichment_documents WHERE enrichment_version_id=(SELECT id FROM tender.enrichment_versions WHERE tender_id=$1 ORDER BY version DESC LIMIT 1)`,[req.params.id]),
+        pool.query("SELECT count(*)::int total,count(*) FILTER(WHERE mandatory AND submission_relevant AND satisfaction_status NOT IN('VALIDATED','NOT_REQUIRED','SUPERSEDED'))::int open FROM tender.required_documents WHERE tender_id=$1 AND company_id=$2 AND lot_key=$3",[req.params.id,company.company_id,lotKey]),
+        pool.query("SELECT * FROM tender.company_profiles WHERE company_id=$1 AND lifecycle_status IN('DRAFT','READY_FOR_APPROVAL','ACTIVE') ORDER BY (lifecycle_status IN('DRAFT','READY_FOR_APPROVAL')) DESC,version DESC LIMIT 1",[company.company_id]),
+        pool.query("SELECT id,version,status,blocked_reasons FROM tender.calculations WHERE tender_id=$1 AND company_id=$2 AND lot_key=$3 ORDER BY version DESC LIMIT 1",[req.params.id,company.company_id,lotKey]),
+        pool.query("SELECT id,status FROM tender.management_outputs WHERE tender_id=$1 AND company_id=$2 AND lot_key=$3 AND historical=false ORDER BY created_at DESC LIMIT 1",[req.params.id,company.company_id,lotKey]),
+        pool.query("SELECT id,status,expires_at FROM tender.approval_requests WHERE tender_id=$1 AND calculation_id=(SELECT id FROM tender.calculations WHERE tender_id=$1 AND company_id=$2 AND lot_key=$3 ORDER BY version DESC LIMIT 1) ORDER BY created_at DESC LIMIT 1",[req.params.id,company.company_id,lotKey]),
+        pool.query("SELECT package.id,package.status,package.manifest_sha256 FROM tender.bid_packages package JOIN tender.calculations calculation ON calculation.id=package.calculation_id AND calculation.company_id=$2 WHERE package.tender_id=$1 AND package.lot_key=$3 ORDER BY package.version DESC LIMIT 1",[req.params.id,company.company_id,lotKey]),
+      ]);
+      const tender=tenderResult.rows[0];if(!tender)return reply.code(404).send({error:"tender_not_found"});
+      const portalRows=portalResult.rows,portalRow=portalRows.length===1?portalRows[0]:null,profile=profileResult.rows[0],profileCompletion=profile?evaluateProfile(profile):null;
+      return buildParticipationReadiness({tender,tenderVersion:versionResult.rows[0]?.version||null,lotKey,lotLifecycle:lotLifecycleResult.rows[0]||null,company:{id:company.company_id,name:company.legal_name},serviceLine:company.service_line,
+        region:regionResult.rows[0]?{status:regionResult.rows[0].classification,version:regionResult.rows[0].evaluation_version}:null,portalCandidates:portalRows.length,
+        portal:portalRow?{id:portalRow.portal_id,name:portalRow.display_name,host:portalRow.canonical_domain,mapping_status:portalRow.mapping_status,capability:(portalRow.capabilities||[]).includes('BID_SUBMISSION')?'BID_SUBMISSION':'PARTICIPATION_PORTAL'}:null,
+        credential:portalRow?.credential_id?{id:portalRow.credential_id,version:portalRow.credential_version,account_type:portalRow.account_type}:null,documents:documentsResult.rows[0],requirements:requirementsResult.rows[0],
+        profile:profile?{id:profile.id,version:profile.version,release_ready:profileCompletion.releaseReady,completeness:profileCompletion.completenessPercent}:null,calculation:calculationResult.rows[0],management:managementResult.rows[0],approval:approvalResult.rows[0],bidPackage:packageResult.rows[0]});
+    },
+  );
+  app.get(
     "/api/tenders/:id/versions",
     { preHandler: read },
     async (req, reply) => {
@@ -4764,8 +6106,10 @@ export function registerAutopilotRoutes(
       return {
         items: (
           await pool.query(
-            "SELECT id,version,format,status,missing_fields,sha256,created_at FROM tender.generated_documents WHERE tender_id=$1 AND company_id=$2 ORDER BY version DESC",
-            [req.params.id, registered.company_id],
+            `SELECT generated.id,generated.version,generated.format,generated.status,generated.missing_fields,generated.sha256,generated.created_at
+             FROM tender.generated_documents generated JOIN tender.calculations calculation ON calculation.id=generated.calculation_id
+             WHERE generated.tender_id=$1 AND calculation.company_id=$2 AND calculation.lot_key=$3 ORDER BY generated.version DESC`,
+            [req.params.id, registered.company_id, String(req.query?.lot || "")],
           )
         ).rows,
       };
@@ -4953,6 +6297,7 @@ export function registerAutopilotRoutes(
     { preHandler: [requirePermission("tender.board.approve"), csrf] },
     async (req, reply) => {
       if (!(await visibleTender(req, reply, req.params.id))) return;
+      if (!(await requireParticipationEligible(reply,req.params.id,req.body?.lotKey))) return;
       const body = req.body || {},
         companies = await accessibleCompanies(req.identity),
         company = companies.find(
@@ -5443,14 +6788,14 @@ export function registerAutopilotRoutes(
       exactSources = new Map(),
       supersededRequirementIds = new Set();
     if (requirementIds.length) {
-      const sourceRows = (await pool.query(`SELECT r.id required_document_id,r.satisfaction_status,r.source_document_id,d.id document_id,d.filename,d.mime_type,d.payload_sha256,d.content,r.source_page,v.version document_version,v.tender_id source_tender_id
+      const sourceRows = (await pool.query(`SELECT r.id required_document_id,r.satisfaction_status,r.manual_submission_relevance_override,r.source_document_id,d.id document_id,d.filename,d.mime_type,d.payload_sha256,d.content,r.source_page,v.version document_version,v.tender_id source_tender_id
         FROM tender.required_documents r
         LEFT JOIN tender.enrichment_documents d ON d.id=r.source_document_id
         LEFT JOIN tender.enrichment_versions v ON v.id=d.enrichment_version_id AND v.tender_id=r.tender_id
         WHERE r.id=ANY($1::uuid[]) AND r.tender_id=$2 AND r.company_id=$3 AND r.lot_key=$4`,
         [requirementIds,tenderId,companyId,lotKey || ""])).rows;
       for (const row of sourceRows) {
-        if (row.satisfaction_status === "SUPERSEDED") { supersededRequirementIds.add(String(row.required_document_id)); continue; }
+        if (row.satisfaction_status === "SUPERSEDED" || row.manual_submission_relevance_override === false) { supersededRequirementIds.add(String(row.required_document_id)); continue; }
         if (!row.document_id) continue;
         const source = resolveRequiredSourceDocument({id:row.required_document_id,tender_id:tenderId,company_id:companyId,lot_key:lotKey || "",source_document_id:row.source_document_id,source_page:row.source_page,satisfaction_status:"MISSING"},[{id:row.document_id,tender_id:row.source_tender_id,required_document_id:row.required_document_id,company_id:companyId,lot_key:lotKey || "",filename:row.filename,mime_type:row.mime_type,payload_sha256:row.payload_sha256,content:row.content,document_version:row.document_version}]);
         if (source.available) exactSources.set(String(row.required_document_id),{available:true,requiredDocumentId:row.required_document_id,documentId:source.documentId,page:source.page,mimeType:source.mimeType});
@@ -5501,6 +6846,7 @@ export function registerAutopilotRoutes(
     { preHandler: [requirePermission("tender.submission.prepare"), csrf] },
     async (req, reply) => {
       if (!(await visibleTender(req, reply, req.params.id))) return;
+      if (!(await requireParticipationEligible(reply,req.params.id,req.body?.lotKey))) return;
       const companyId = String(req.body?.companyId || ""),
         lotKey = String(req.body?.lotKey || ""),
         companies = await accessibleCompanies(req.identity);
@@ -5663,6 +7009,7 @@ export function registerAutopilotRoutes(
     { preHandler: [requirePermission("tender.submission.prepare"), csrf] },
     async (req, reply) => {
       if (!(await visibleTender(req, reply, req.params.id))) return;
+      if (!(await requireParticipationEligible(reply,req.params.id,req.body?.lotKey))) return;
       const companyId = String(req.body?.companyId || ""),
         lotKey = String(req.body?.lotKey || "");
       if (!(await requireRegisteredScope(reply, req.params.id, companyId))) return;
@@ -5695,8 +7042,10 @@ export function registerAutopilotRoutes(
         ).rows,
         requiredDocuments = await requiredDocumentContext(req.params.id,companyId,lotKey),
         requiredDocumentGatePassed = submissionDocumentsComplete(requiredDocuments),
-        genericReadiness = (await pool.query(`SELECT c.id,c.readiness_status,c.binding_valid,coalesce(jsonb_agg(jsonb_build_object('id',r.id,'requirementKey',r.requirement_key,'code',r.requirement_kind,'title',r.title,'status',r.status,'source',r.source_reference,'page',r.source_page,'sourceDocumentId',r.source_document_id)) FILTER(WHERE r.id IS NOT NULL AND r.submission_relevant AND r.mandatory AND r.status NOT IN('VALIDATED','NOT_REQUIRED','SUPERSEDED')),'[]'::jsonb) open_requirements
+        genericReadiness = (await pool.query(`SELECT c.id,c.readiness_status,c.binding_valid,coalesce(jsonb_agg(jsonb_build_object('id',r.id,'requirementKey',r.requirement_key,'code',r.requirement_kind,'title',r.title,'status',CASE WHEN r.status='MISSING' AND rd.satisfaction_status='MISSING' AND (coalesce(w.editor_provenance->>'materiallyEdited','false')='true' OR EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(w.overlay_data,'[]'::jsonb)) e WHERE e->>'type'='mark' OR (e->>'type'='checkbox' AND e->>'checked'='true') OR (e->>'type' IN('text','note') AND btrim(coalesce(e->>'text',''))<>''))) THEN 'MANUAL_REVIEW_REQUIRED' ELSE r.status END,'source',r.source_reference,'page',r.source_page,'sourceDocumentId',r.source_document_id)) FILTER(WHERE r.id IS NOT NULL AND r.submission_relevant AND r.mandatory AND r.manual_submission_relevance_override IS DISTINCT FROM false AND r.status NOT IN('VALIDATED','NOT_REQUIRED','SUPERSEDED')),'[]'::jsonb) open_requirements
           FROM tender.final_preflight_contexts c LEFT JOIN tender.final_preflight_requirements r ON r.context_id=c.id
+          LEFT JOIN tender.required_documents rd ON rd.tender_id=c.tender_id AND rd.company_id=c.company_id AND rd.lot_key=c.lot_key AND rd.requirement_code=r.requirement_key AND rd.source_document_id=r.source_document_id
+          LEFT JOIN LATERAL(SELECT overlay_data,editor_provenance FROM tender.required_document_working_copies wc WHERE wc.required_document_id=rd.id AND wc.is_current LIMIT 1)w ON true
           WHERE c.tender_id=$1 AND c.company_id=$2 AND c.lot_key=$3 AND c.is_current GROUP BY c.id`,[req.params.id,companyId,lotKey])).rows[0],
         preflight = evaluateEnterprisePreflight({
           managementApprovalValid: context.management_approval_valid === true,
@@ -5734,7 +7083,7 @@ export function registerAutopilotRoutes(
         });
       if(!requiredDocumentGatePassed){
         preflight.blockers=preflight.blockers.filter(x=>x.code!=="REQUIRED_DOCUMENTS_INCOMPLETE");
-        for(const requirement of requiredDocuments.filter(x=>x.mandatory&&x.submission_relevant&&!["VALIDATED","NOT_REQUIRED","SUPERSEDED"].includes(x.satisfaction_status)))
+        for(const requirement of requiredDocuments.filter(x=>x.mandatory&&x.submission_relevant&&x.manual_submission_relevance_override!==false&&!["VALIDATED","NOT_REQUIRED","SUPERSEDED"].includes(x.satisfaction_status)))
           preflight.blockers.push({code:"REQUIRED_DOCUMENT_INCOMPLETE",requiredDocumentId:requirement.id,message:`${requirement.requirement_title}: ${requirement.status_label}.`});
         preflight.status="PREFLIGHT_BLOCKED";
       }
@@ -6081,8 +7430,33 @@ export function registerAutopilotRoutes(
     const companyId=String(req.query?.company||""),lotKey=String(req.query?.lot||"");
     if(!req.identity.permissions.includes("tender.admin")&&!req.identity.companyIds.includes(companyId))return reply.code(403).send({error:"company_scope_forbidden"});
     if(!(await requireRegisteredScope(reply,req.params.id,companyId)))return;
-    const items=await requiredDocumentContext(req.params.id,companyId,lotKey),missing=items.filter(x=>x.mandatory&&x.submission_relevant&&!["VALIDATED","NOT_REQUIRED","SUPERSEDED"].includes(x.satisfaction_status));
-    return {items,summary:{total:items.length,missing:missing.length,available:items.filter(x=>x.satisfaction_status==="AVAILABLE").length,uploaded:items.filter(x=>x.current_upload_id).length,validated:items.filter(x=>x.satisfaction_status==="VALIDATED").length,manualReview:items.filter(x=>x.satisfaction_status==="MANUAL_REVIEW_REQUIRED").length,rejected:items.filter(x=>x.satisfaction_status==="REJECTED").length,complete:items.length>0&&missing.length===0,discoveryComplete:items.length>0},transmitted:false};
+    const items=await requiredDocumentContext(req.params.id,companyId,lotKey),missing=items.filter(isRequiredDocumentMissing),blockers=items.filter(isRequiredDocumentBlocker);
+    return {items,summary:{total:items.length,missing:missing.length,blockers:blockers.length,available:items.filter(x=>x.satisfaction_status==="AVAILABLE").length,uploaded:items.filter(x=>x.current_upload_id).length,validated:items.filter(x=>x.satisfaction_status==="VALIDATED").length,manualReview:items.filter(x=>x.satisfaction_status==="MANUAL_REVIEW_REQUIRED").length,rejected:items.filter(x=>x.satisfaction_status==="REJECTED").length,complete:items.length>0&&blockers.length===0,discoveryComplete:items.length>0},transmitted:false};
+  });
+  app.post("/api/tenders/:id/required-documents/:requiredDocumentId/submission-relevance",{preHandler:[requirePermission("tender.document.analyze"),csrf]},async(req,reply)=>{
+    if(!(await visibleTender(req,reply,req.params.id)))return;
+    if(!(await requireParticipationEligible(reply,req.params.id,req.body?.lot)))return;
+    const companyId=String(req.body?.company||""),lotKey=String(req.body?.lot??""),decision=String(req.body?.decision||"");
+    if(!validUuid(req.params.id)||!validUuid(req.params.requiredDocumentId)||!validUuid(companyId)||!["REQUIRED","NOT_REQUIRED"].includes(decision))return reply.code(400).send({error:"required_document_submission_relevance_contract_invalid"});
+    if(!req.identity.permissions.includes("tender.admin")&&!req.identity.companyIds.includes(companyId))return reply.code(403).send({error:"company_scope_forbidden"});
+    if(!(await requireRegisteredScope(reply,req.params.id,companyId)))return;
+    const client=await pool.connect();
+    try{
+      await client.query("BEGIN");
+      const previous=(await client.query("SELECT * FROM tender.required_documents WHERE id=$1 AND tender_id=$2 AND company_id=$3 AND lot_key=$4 FOR UPDATE",[req.params.requiredDocumentId,req.params.id,companyId,lotKey])).rows[0];
+      if(!previous){await client.query("ROLLBACK");return reply.code(404).send({error:"required_document_not_found"})}
+      if(!previous.mandatory||!previous.submission_relevant||["NOT_REQUIRED","SUPERSEDED"].includes(previous.satisfaction_status)){await client.query("ROLLBACK");return reply.code(409).send({error:"required_document_submission_relevance_state_invalid"})}
+      const wasExcluded=previous.manual_submission_relevance_override===false,nextOverride=decision==="NOT_REQUIRED"?false:null,changed=wasExcluded!== (nextOverride===false),decisionAt=new Date().toISOString();
+      const requirement=changed?(await client.query(`UPDATE tender.required_documents SET manual_submission_relevance_override=$2,
+        manual_submission_relevance_override_at=CASE WHEN $2::boolean=false THEN now() ELSE NULL END,
+        manual_submission_relevance_override_by=CASE WHEN $2::boolean=false THEN $3 ELSE NULL END,updated_at=now()
+        WHERE id=$1 RETURNING *`,[previous.id,nextOverride,req.identity.userId])).rows[0]:previous;
+      const action=changed?(nextOverride===false?"REQUIRED_DOCUMENT_MANUALLY_EXCLUDED_FROM_SUBMISSION":"REQUIRED_DOCUMENT_MANUAL_SUBMISSION_EXCLUSION_RESTORED"):"REQUIRED_DOCUMENT_SUBMISSION_RELEVANCE_CONFIRMED_UNCHANGED";
+      await client.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,$2,$3,$4::jsonb)",[req.identity.userId,action,previous.tender_id,JSON.stringify({requiredDocumentId:previous.id,companyId:previous.company_id,lotKey:previous.lot_key,previousStatus:previous.satisfaction_status,previousClassification:previous.requirement_classification||null,previousManualSubmissionRelevanceOverride:previous.manual_submission_relevance_override??null,decision,answer:decision==="REQUIRED"?"Ja":"Nein",decisionAt,reason:"MANUAL_BID_SUBMISSION_RELEVANCE_OVERRIDE",source:"MANUAL_BID_SUBMISSION_RELEVANCE_OVERRIDE",changed,externalWrite:false,transmitted:false})]);
+      const recheck=await runRequiredDocumentRecheck(client,requirement,null,req.identity.userId);
+      await client.query("COMMIT");
+      return {requiredDocumentId:requirement.id,decision,changed,bidSubmissionRelevanceState:requirement.manual_submission_relevance_override===false?"MANUALLY_NOT_REQUIRED":"REQUIRED",status:requirement.satisfaction_status,statusLabel:requirement.manual_submission_relevance_override===false?"Manuell als für die Angebotsabgabe nicht erforderlich bestätigt":requirementLabel(requirement.satisfaction_status),recheck,transmitted:false};
+    }catch(error){await client.query("ROLLBACK");throw error}finally{client.release()}
   });
   const requiredOriginalContext=async(req,reply)=>{
     if(!(await visibleTender(req,reply,req.params.id)))return null;
@@ -6098,7 +7472,7 @@ export function registerAutopilotRoutes(
       FROM tender.required_documents r LEFT JOIN tender.enrichment_documents d ON d.id=r.source_document_id LEFT JOIN tender.enrichment_versions v ON v.id=d.enrichment_version_id
       WHERE r.id=$1 AND r.tender_id=$2 AND r.company_id=$3 AND r.lot_key=$4`,[req.params.requiredDocumentId,req.params.id,companyId,lotKey])).rows[0];
     if(!row){reply.code(404).send({error:"required_document_not_found"});return null}
-    const form=resolveRequiredOriginalForm(row,row.original_document_id?[{id:row.original_document_id,tender_id:row.original_tender_id,company_id:row.company_id,lot_key:row.lot_key,filename:row.original_filename,mime_type:row.original_mime_type,payload_sha256:row.original_sha256,content:row.original_content,procurement_verification_status:row.original_verification_status,document_version:row.original_document_version,explicit_form_mapping:hasExactOriginalFormProvenance(row,row.original_provenance)}]:[]);
+    const form=await resolveRequiredOriginalForm(row,row.original_document_id?[{id:row.original_document_id,tender_id:row.original_tender_id,company_id:row.company_id,lot_key:row.lot_key,filename:row.original_filename,mime_type:row.original_mime_type,payload_sha256:row.original_sha256,content:row.original_content,procurement_verification_status:row.original_verification_status,document_version:row.original_document_version,explicit_form_mapping:hasExactOriginalFormProvenance(row,row.original_provenance)}]:[]);
     if(!form.downloadable){reply.code(409).send({error:"original_form_mapping_not_proven",mappingStatus:form.status,message:form.status==="AMBIGUOUS_MAPPING"?"Die Zuordnung ist mehrdeutig und muss fachlich geprüft werden.":"Zu dieser Anforderung ist kein eindeutig belegtes Originalformular zugeordnet."});return null}
     return {row,form,companyId,lotKey};
   };
@@ -6107,7 +7481,7 @@ export function registerAutopilotRoutes(
     .header("x-content-type-options","nosniff").header("cache-control","private, no-store").header("content-security-policy","sandbox").send(content);
   const requiredSourceContext=async(req,reply)=>{
     if(!(await visibleTender(req,reply,req.params.id)))return null;
-    const companyId=String(req.query?.company||""),lotKey=String(req.query?.lot??"");
+    const companyId=String(req.query?.company||req.body?.company||""),lotKey=String(req.query?.lot??req.body?.lot??"");
     if(!validUuid(req.params.requiredDocumentId)||!validUuid(companyId)){
       reply.code(400).send({error:"required_document_context_invalid",message:"Ausschreibung, Gesellschaft und Anforderung müssen eindeutig gewählt sein."});return null;
     }
@@ -6123,7 +7497,17 @@ export function registerAutopilotRoutes(
     if(!row){reply.code(404).send({error:"required_source_document_not_found"});return null}
     const source=resolveRequiredSourceDocument(row,[{id:row.source_id,tender_id:row.source_tender_id,required_document_id:row.id,company_id:row.company_id,lot_key:row.lot_key,filename:row.source_filename,mime_type:row.source_mime_type,payload_sha256:row.source_sha256,content:row.source_content,document_version:row.source_document_version}]);
     if(!source.available){reply.code(404).send({error:"required_source_document_not_found"});return null}
-    return source;
+    return {...source,row,companyId,lotKey};
+  };
+  const requiredPdfSourceContext=async(req,reply)=>{
+    const source=await requiredSourceContext(req,reply);if(!source)return null;
+    const classification=source.row.requirement_classification?source.row.requirement_classification:classifyRequirementEvidence(source.row.requirement_description).classification;
+    if(classification!=="FILLABLE_BIDDER_FORM"){reply.code(409).send({error:"required_document_not_fillable",classification,message:"Die PDF-Bearbeitung ist ausschließlich für eindeutig ausfüllbare Bieterformulare verfügbar."});return null}
+    if(source.mimeType!=="application/pdf"){reply.code(409).send({error:"required_source_not_pdf",message:"Die universelle Bildschirmbearbeitung ist für PDF-Quellen verfügbar."});return null}
+    const actualSha256=crypto.createHash("sha256").update(source.candidate.content).digest("hex");
+    if(actualSha256!==source.sha256){reply.code(409).send({error:"required_source_integrity_mismatch"});return null}
+    let pdf;try{pdf=await inspectPdfForOverlay(source.candidate.content)}catch(error){reply.code(409).send({error:error.message});return null}
+    return {...source,pdf};
   };
   app.get("/api/tenders/:id/required-documents/:requiredDocumentId/source",{preHandler:read},async(req,reply)=>{
     const source=await requiredSourceContext(req,reply);if(!source)return;
@@ -6137,22 +7521,111 @@ export function registerAutopilotRoutes(
     const context=await requiredOriginalContext(req,reply);if(!context)return;
     return sendScopedFile(reply,{content:context.form.candidate.content,mimeType:context.form.mimeType,filename:context.form.candidate.filename});
   });
-  app.post("/api/tenders/:id/required-documents/:requiredDocumentId/working-copy",{preHandler:[requirePermission("tender.document.analyze"),csrf]},async(req,reply)=>{
-    const context=await requiredOriginalContext(req,reply);if(!context)return;
-    if(!context.form.editable)return reply.code(409).send({error:"original_form_not_safely_editable",message:"Das belegte Original ist kein sicher digital bearbeitbares PDF-, DOCX- oder XLSX-Formular."});
-    const source=context.form.candidate,filename=safeOriginalFilename(`Arbeitskopie-${source.filename}`),sha256=crypto.createHash("sha256").update(source.content).digest("hex"),client=await pool.connect();
-    try{await client.query("BEGIN");const existing=(await client.query("SELECT id,version,filename,media_type,sha256 FROM tender.required_document_working_copies WHERE required_document_id=$1 AND source_sha256=$2 AND is_current FOR UPDATE",[context.row.id,source.payload_sha256])).rows[0];
+  app.post("/api/tenders/:id/required-documents/:requiredDocumentId/working-copy",{bodyLimit:1_000_000,preHandler:[requirePermission("tender.document.analyze"),csrf]},async(req,reply)=>{
+    const context=await requiredPdfSourceContext(req,reply);if(!context)return;
+    if(!(await requireParticipationEligible(reply,req.params.id,context.lotKey)))return;
+    const source=context.candidate,filename=safeOriginalFilename(`Arbeitskopie-${source.filename}`),sha256=crypto.createHash("sha256").update(source.content).digest("hex");
+    const client=await pool.connect();
+    try{await client.query("BEGIN");await client.query("SELECT id FROM tender.required_documents WHERE id=$1 AND tender_id=$2 AND company_id=$3 AND lot_key=$4 FOR UPDATE",[context.row.id,context.row.tender_id,context.companyId,context.lotKey]);const existing=(await client.query("SELECT id,version,filename,media_type,sha256 FROM tender.required_document_working_copies WHERE required_document_id=$1 AND tender_id=$2 AND company_id=$3 AND lot_key=$4 AND source_sha256=$5 AND is_current FOR UPDATE",[context.row.id,context.row.tender_id,context.companyId,context.lotKey,source.payload_sha256])).rows[0];
       if(existing){await client.query("COMMIT");return {item:existing,idempotent:true,transmitted:false}}
       await client.query("UPDATE tender.required_document_working_copies SET is_current=false WHERE required_document_id=$1 AND is_current",[context.row.id]);
-      const version=Number((await client.query("SELECT coalesce(max(version),0)+1 version FROM tender.required_document_working_copies WHERE required_document_id=$1",[context.row.id])).rows[0].version),item=(await client.query(`INSERT INTO tender.required_document_working_copies(required_document_id,tender_id,lot_key,company_id,source_document_id,source_sha256,version,filename,media_type,content,sha256,prepared_by)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id,version,filename,media_type,sha256`,[context.row.id,context.row.tender_id,context.row.lot_key,context.row.company_id,source.id,source.payload_sha256,version,filename,source.mime_type,source.content,sha256,req.identity.userId])).rows[0];
-      await client.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'REQUIRED_ORIGINAL_WORKING_COPY_PREPARED',$2,$3::jsonb)",[req.identity.userId,context.row.tender_id,JSON.stringify({requiredDocumentId:context.row.id,sourceDocumentId:source.id,sourceSha256:source.payload_sha256,workingCopyId:item.id,version,companyId:context.row.company_id,lotKey:context.row.lot_key,originalUnchanged:true,legalConfirmationAdded:false,externalWrite:false,transmitted:false})]);
+      const version=Number((await client.query("SELECT coalesce(max(version),0)+1 version FROM tender.required_document_working_copies WHERE required_document_id=$1",[context.row.id])).rows[0].version),provenance={kind:"REQUIRED_SOURCE_PDF",requiredDocumentId:context.row.id,sourceDocumentId:source.id,sourceSha256:source.payload_sha256,sourceDocumentVersion:source.document_version||null,pageCount:context.pdf.pageCount},item=(await client.query(`INSERT INTO tender.required_document_working_copies(required_document_id,tender_id,lot_key,company_id,source_document_id,source_sha256,version,filename,media_type,content,sha256,overlay_data,editor_provenance,prepared_by)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'[]'::jsonb,$12::jsonb,$13) RETURNING id,version,filename,media_type,sha256`,[context.row.id,context.row.tender_id,context.row.lot_key,context.row.company_id,source.id,source.payload_sha256,version,filename,source.mime_type,source.content,sha256,JSON.stringify(provenance),req.identity.userId])).rows[0];
+      await client.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'REQUIRED_PDF_WORKING_COPY_PREPARED',$2,$3::jsonb)",[req.identity.userId,context.row.tender_id,JSON.stringify({...provenance,workingCopyId:item.id,version,companyId:context.row.company_id,lotKey:context.row.lot_key,elementCount:0,originalUnchanged:true,legalConfirmationAdded:false,externalWrite:false,transmitted:false})]);
       await client.query("COMMIT");return reply.code(201).send({item,idempotent:false,transmitted:false});
     }catch(error){await client.query("ROLLBACK");throw error}finally{client.release()}
   });
+  app.get("/api/tenders/:id/required-documents/:requiredDocumentId/working-copy/fields",{preHandler:read},async(req,reply)=>{
+    const context=await requiredPdfSourceContext(req,reply);if(!context)return;
+    const row=(await pool.query("SELECT id,version,content,media_type,filename,sha256,source_sha256,overlay_data FROM tender.required_document_working_copies WHERE required_document_id=$1 AND tender_id=$2 AND company_id=$3 AND lot_key=$4 AND is_current",[context.row.id,context.row.tender_id,context.companyId,context.lotKey])).rows[0];
+    if(!row)return reply.code(404).send({error:"working_copy_not_found"});
+    if(row.media_type!=="application/pdf")return reply.code(409).send({error:"working_copy_not_pdf",message:"Die universelle Overlay-Bearbeitung benötigt eine PDF-Arbeitskopie."});
+    let inspection;try{inspection=await inspectPdfAcroForm(row.content)}catch{return reply.code(409).send({error:"working_copy_pdf_invalid"})}
+    return {item:{id:row.id,version:row.version,filename:row.filename,sha256:row.sha256,sourceSha256:row.source_sha256,fields:inspection.fields,signatureFieldCount:inspection.signatureFieldCount,overlays:row.overlay_data||[],pageCount:context.pdf.pageCount,pages:context.pdf.pages,suggestedPage:context.page||1},scope:{tenderId:context.row.tender_id,companyId:context.companyId,lotKey:context.lotKey,requiredDocumentId:context.row.id},overlayEditable:true,acroFormEditable:inspection.editable,originalUnchanged:true,externalWrite:false,transmitted:false};
+  });
+  app.post("/api/tenders/:id/required-documents/:requiredDocumentId/working-copy/fields",{preHandler:[requirePermission("tender.document.analyze"),csrf]},async(req,reply)=>{
+    const context=await requiredPdfSourceContext(req,reply);if(!context)return;
+    if(!(await requireParticipationEligible(reply,req.params.id,context.lotKey)))return;
+    const baseVersion=Number(req.body?.baseVersion),values=req.body?.fields;
+    if(!Number.isInteger(baseVersion)||baseVersion<1)return reply.code(400).send({error:"working_copy_version_invalid"});
+    const client=await pool.connect();
+    try{
+      await client.query("BEGIN");
+      const current=(await client.query("SELECT * FROM tender.required_document_working_copies WHERE required_document_id=$1 AND tender_id=$2 AND company_id=$3 AND lot_key=$4 AND is_current FOR UPDATE",[context.row.id,context.row.tender_id,context.companyId,context.lotKey])).rows[0];
+      if(!current){await client.query("ROLLBACK");return reply.code(404).send({error:"working_copy_not_found"})}
+      if(Number(current.version)!==baseVersion){await client.query("ROLLBACK");return reply.code(409).send({error:"working_copy_version_conflict",currentVersion:current.version,message:"Die Arbeitskopie wurde zwischenzeitlich geändert. Bitte neu laden."})}
+      if(current.media_type!=="application/pdf"){await client.query("ROLLBACK");return reply.code(409).send({error:"working_copy_not_pdf"})}
+      let filled,rendered,sourceInspection;try{sourceInspection=await inspectPdfAcroForm(context.candidate.content);filled=await fillPdfAcroForm(context.candidate.content,values);rendered=await renderPdfOverlays(filled.content,current.overlay_data||[])}catch(error){await client.query("ROLLBACK");return reply.code(400).send({error:error.message,message:"Die Feldwerte oder PDF-Overlays sind ungültig."})}
+      const sourceHash=crypto.createHash("sha256").update(context.candidate.content).digest("hex");
+      if(sourceHash!==context.sha256||current.source_sha256!==context.sha256){await client.query("ROLLBACK");return reply.code(409).send({error:"required_source_integrity_mismatch"})}
+      const materiallyEdited=materiallyEditedPdfWorkingCopy({elements:rendered.elements,sourceFields:sourceInspection.fields,fields:values}),nextStatus=materiallyEdited?"MANUAL_REVIEW_REQUIRED":"MISSING",
+        version=Number((await client.query("SELECT coalesce(max(version),0)+1 version FROM tender.required_document_working_copies WHERE required_document_id=$1",[context.row.id])).rows[0].version),sha256=crypto.createHash("sha256").update(rendered.content).digest("hex"),provenance={...(current.editor_provenance||{}),materiallyEdited};
+      const scan=materiallyEdited?await scanBuffer(rendered.content):null;
+      if(scan&&scan.status!=="CLEAN"){await client.query("ROLLBACK");return reply.code(scan.status==="INFECTED"?422:503).send({error:scan.status==="INFECTED"?"document_rejected_malware":"malware_scanner_temporarily_unavailable",retryable:scan.status==="SCAN_ERROR"})}
+      await client.query("UPDATE tender.required_document_working_copies SET is_current=false WHERE id=$1",[current.id]);
+      const item=(await client.query(`INSERT INTO tender.required_document_working_copies(required_document_id,tender_id,lot_key,company_id,source_document_id,source_sha256,version,filename,media_type,content,sha256,overlay_data,editor_provenance,prepared_by)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14) RETURNING id,version,filename,media_type,sha256`,[context.row.id,context.row.tender_id,context.row.lot_key,context.row.company_id,context.candidate.id,context.sha256,version,current.filename,current.media_type,rendered.content,sha256,JSON.stringify(current.overlay_data||[]),JSON.stringify(provenance),req.identity.userId])).rows[0];
+      let upload=null;
+      if(materiallyEdited){
+        await client.query("UPDATE tender.required_document_uploads SET is_current=false WHERE required_document_id=$1 AND is_current",[context.row.id]);
+        const uploadVersion=Number((await client.query("SELECT coalesce(max(version),0)+1 version FROM tender.required_document_uploads WHERE required_document_id=$1",[context.row.id])).rows[0].version);
+        upload=(await client.query(`INSERT INTO tender.required_document_uploads(required_document_id,tender_id,lot_key,company_id,version,filename,media_type,size_bytes,sha256,content,source_type,source_working_copy_id,validation_status,validation_summary,validation_details,malware_scan_status,uploaded_by)
+          VALUES($1,$2,$3,$4,$5,$6,'application/pdf',$7,$8,$9,'REQUIRED_PDF_WORKING_COPY',$10,'MANUAL_REVIEW_REQUIRED',$11,$12::jsonb,'CLEAN',$13) RETURNING *`,[context.row.id,context.row.tender_id,context.row.lot_key,context.row.company_id,uploadVersion,current.filename,rendered.content.length,sha256,rendered.content,item.id,"Ausgefüllte PDF-Arbeitskopie gespeichert – fachliche Prüfung erforderlich.",JSON.stringify({origin:"VERSIONED_REQUIRED_PDF_WORKING_COPY",workingCopyId:item.id,workingCopyVersion:version,sourceSha256:context.sha256,automaticCompletenessProven:false}),req.identity.userId])).rows[0];
+      }else await client.query("UPDATE tender.required_document_uploads SET is_current=false WHERE required_document_id=$1 AND source_type='REQUIRED_PDF_WORKING_COPY' AND is_current",[context.row.id]);
+      const requirement=(await client.query(`UPDATE tender.required_documents SET current_upload_id=CASE WHEN $3::uuid IS NOT NULL THEN $3 WHEN current_upload_id IN(SELECT id FROM tender.required_document_uploads WHERE required_document_id=$1 AND source_type='REQUIRED_PDF_WORKING_COPY') THEN NULL ELSE current_upload_id END,satisfaction_status=CASE WHEN satisfaction_status='NOT_REQUIRED' THEN satisfaction_status ELSE $2 END,updated_at=now() WHERE id=$1 RETURNING *`,[context.row.id,nextStatus,upload?.id||null])).rows[0];
+      await client.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'REQUIRED_PDF_WORKING_COPY_FIELDS_SAVED',$2,$3::jsonb)",[req.identity.userId,context.row.tender_id,JSON.stringify({requiredDocumentId:context.row.id,sourceDocumentId:context.candidate.id,sourceSha256:context.sha256,previousWorkingCopyId:current.id,workingCopyId:item.id,baseVersion,currentVersion:version,changedFieldNames:filled.changedFields,changedFieldCount:filled.changedFields.length,companyId:context.row.company_id,lotKey:context.row.lot_key,originalUnchanged:true,signatureAdded:false,legalConfirmationAdded:false,externalWrite:false,transmitted:false})]);
+      const recheck=await runRequiredDocumentRecheck(client,requirement,upload,req.identity.userId);
+      await client.query("COMMIT");return reply.code(201).send({item,materiallyEdited,status:requirement.satisfaction_status,statusLabel:requirementLabel(requirement.satisfaction_status),recheck,originalUnchanged:true,signatureAdded:false,externalWrite:false,transmitted:false});
+    }catch(error){await client.query("ROLLBACK");throw error}finally{client.release()}
+  });
+  app.post("/api/tenders/:id/required-documents/:requiredDocumentId/working-copy/overlays",{bodyLimit:1_000_000,preHandler:[requirePermission("tender.document.analyze"),csrf]},async(req,reply)=>{
+    const context=await requiredPdfSourceContext(req,reply);if(!context)return;
+    if(!(await requireParticipationEligible(reply,req.params.id,context.lotKey)))return;
+    const baseVersion=Number(req.body?.baseVersion),elements=req.body?.elements,requestedFields=req.body?.fields;
+    if(!Number.isInteger(baseVersion)||baseVersion<1)return reply.code(400).send({error:"working_copy_version_invalid"});
+    if(requestedFields!=null&&(!requestedFields||typeof requestedFields!=="object"||Array.isArray(requestedFields)))return reply.code(400).send({error:"pdf_form_values_invalid"});
+    const client=await pool.connect();
+    try{
+      await client.query("BEGIN");
+      const current=(await client.query("SELECT * FROM tender.required_document_working_copies WHERE required_document_id=$1 AND tender_id=$2 AND company_id=$3 AND lot_key=$4 AND is_current FOR UPDATE",[context.row.id,context.row.tender_id,context.companyId,context.lotKey])).rows[0];
+      if(!current){await client.query("ROLLBACK");return reply.code(404).send({error:"working_copy_not_found"})}
+      if(Number(current.version)!==baseVersion){await client.query("ROLLBACK");return reply.code(409).send({error:"working_copy_version_conflict",currentVersion:current.version,message:"Die Arbeitskopie wurde zwischenzeitlich geändert. Bitte neu laden."})}
+      if(current.media_type!=="application/pdf"||current.source_document_id!==context.candidate.id||current.source_sha256!==context.sha256){await client.query("ROLLBACK");return reply.code(409).send({error:"required_source_binding_mismatch"})}
+      const sourceInspection=await inspectPdfAcroForm(context.candidate.content);
+      let fields=requestedFields;
+      if(fields==null){const inspection=await inspectPdfAcroForm(current.content);fields=Object.fromEntries(inspection.editableFields.map(field=>[field.name,field.value]))}
+      let renderBase=context.candidate.content,changedFieldNames=[];
+      try{if(Object.keys(fields).length){const filled=await fillPdfAcroForm(renderBase,fields);renderBase=filled.content;changedFieldNames=filled.changedFields}}
+      catch(error){await client.query("ROLLBACK");return reply.code(400).send({error:error.message,message:"AcroForm-Werte passen nicht exakt zur Source-PDF."})}
+      let rendered;try{rendered=await renderPdfOverlays(renderBase,elements)}catch(error){await client.query("ROLLBACK");return reply.code(400).send({error:error.message,message:"Overlay-Daten sind ungültig."})}
+      const sourceHash=crypto.createHash("sha256").update(context.candidate.content).digest("hex");
+      if(sourceHash!==context.sha256){await client.query("ROLLBACK");return reply.code(409).send({error:"required_source_integrity_mismatch"})}
+      const materiallyEdited=materiallyEditedPdfWorkingCopy({elements:rendered.elements,sourceFields:sourceInspection.fields,fields}),nextStatus=materiallyEdited?"MANUAL_REVIEW_REQUIRED":"MISSING",
+        version=Number((await client.query("SELECT coalesce(max(version),0)+1 version FROM tender.required_document_working_copies WHERE required_document_id=$1",[context.row.id])).rows[0].version),sha256=crypto.createHash("sha256").update(rendered.content).digest("hex"),summary=summarizePdfOverlays(rendered.elements),provenance={kind:"REQUIRED_SOURCE_PDF_OVERLAY",requiredDocumentId:context.row.id,sourceDocumentId:context.candidate.id,sourceSha256:context.sha256,pageCount:rendered.pageCount,baseVersion,materiallyEdited};
+      const scan=materiallyEdited?await scanBuffer(rendered.content):null;
+      if(scan&&scan.status!=="CLEAN"){await client.query("ROLLBACK");return reply.code(scan.status==="INFECTED"?422:503).send({error:scan.status==="INFECTED"?"document_rejected_malware":"malware_scanner_temporarily_unavailable",retryable:scan.status==="SCAN_ERROR"})}
+      await client.query("UPDATE tender.required_document_working_copies SET is_current=false WHERE id=$1",[current.id]);
+      const item=(await client.query(`INSERT INTO tender.required_document_working_copies(required_document_id,tender_id,lot_key,company_id,source_document_id,source_sha256,version,filename,media_type,content,sha256,overlay_data,editor_provenance,prepared_by)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,'application/pdf',$9,$10,$11::jsonb,$12::jsonb,$13) RETURNING id,version,filename,media_type,sha256`,[context.row.id,context.row.tender_id,context.row.lot_key,context.row.company_id,context.candidate.id,context.sha256,version,current.filename,rendered.content,sha256,JSON.stringify(rendered.elements),JSON.stringify(provenance),req.identity.userId])).rows[0];
+      let upload=null;
+      if(materiallyEdited){
+        await client.query("UPDATE tender.required_document_uploads SET is_current=false WHERE required_document_id=$1 AND is_current",[context.row.id]);
+        const uploadVersion=Number((await client.query("SELECT coalesce(max(version),0)+1 version FROM tender.required_document_uploads WHERE required_document_id=$1",[context.row.id])).rows[0].version);
+        upload=(await client.query(`INSERT INTO tender.required_document_uploads(required_document_id,tender_id,lot_key,company_id,version,filename,media_type,size_bytes,sha256,content,source_type,source_working_copy_id,validation_status,validation_summary,validation_details,malware_scan_status,uploaded_by)
+          VALUES($1,$2,$3,$4,$5,$6,'application/pdf',$7,$8,$9,'REQUIRED_PDF_WORKING_COPY',$10,'MANUAL_REVIEW_REQUIRED',$11,$12::jsonb,'CLEAN',$13) RETURNING *`,[context.row.id,context.row.tender_id,context.row.lot_key,context.row.company_id,uploadVersion,current.filename,rendered.content.length,sha256,rendered.content,item.id,"Ausgefüllte PDF-Arbeitskopie gespeichert – fachliche Prüfung erforderlich.",JSON.stringify({origin:"VERSIONED_REQUIRED_PDF_WORKING_COPY",workingCopyId:item.id,workingCopyVersion:version,sourceSha256:context.sha256,automaticCompletenessProven:false}),req.identity.userId])).rows[0];
+      }else{
+        await client.query("UPDATE tender.required_document_uploads SET is_current=false WHERE required_document_id=$1 AND source_type='REQUIRED_PDF_WORKING_COPY' AND is_current",[context.row.id]);
+      }
+      const requirement=(await client.query(`UPDATE tender.required_documents SET current_upload_id=CASE WHEN $3::uuid IS NOT NULL THEN $3 WHEN current_upload_id IN(SELECT id FROM tender.required_document_uploads WHERE required_document_id=$1 AND source_type='REQUIRED_PDF_WORKING_COPY') THEN NULL ELSE current_upload_id END,satisfaction_status=CASE WHEN satisfaction_status='NOT_REQUIRED' THEN satisfaction_status ELSE $2 END,updated_at=now() WHERE id=$1 RETURNING *`,[context.row.id,nextStatus,upload?.id||null])).rows[0];
+      await client.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'REQUIRED_PDF_WORKING_COPY_OVERLAYS_SAVED',$2,$3::jsonb)",[req.identity.userId,context.row.tender_id,JSON.stringify({...provenance,...summary,previousWorkingCopyId:current.id,workingCopyId:item.id,currentVersion:version,changedFieldNames,changedFieldCount:changedFieldNames.length,companyId:context.row.company_id,lotKey:context.row.lot_key,originalUnchanged:true,signatureAdded:false,legalConfirmationAdded:false,externalWrite:false,transmitted:false})]);
+      const recheck=await runRequiredDocumentRecheck(client,requirement,upload,req.identity.userId);
+      await client.query("COMMIT");return reply.code(201).send({item,elementCount:summary.elementCount,materiallyEdited,status:requirement.satisfaction_status,statusLabel:requirementLabel(requirement.satisfaction_status),recheck,originalUnchanged:true,signatureAdded:false,externalWrite:false,transmitted:false});
+    }catch(error){await client.query("ROLLBACK");throw error}finally{client.release()}
+  });
   app.get("/api/tenders/:id/required-documents/:requiredDocumentId/working-copy",{preHandler:read},async(req,reply)=>{
-    const context=await requiredOriginalContext(req,reply);if(!context)return;
-    const row=(await pool.query("SELECT content,media_type,filename FROM tender.required_document_working_copies WHERE required_document_id=$1 AND tender_id=$2 AND company_id=$3 AND lot_key=$4 AND is_current",[context.row.id,context.row.tender_id,context.companyId,context.lotKey])).rows[0];
+    const context=await requiredPdfSourceContext(req,reply);if(!context)return;
+    const requestedVersion=req.query?.version==null?null:Number(req.query.version);if(requestedVersion!=null&&(!Number.isInteger(requestedVersion)||requestedVersion<1))return reply.code(400).send({error:"working_copy_version_invalid"});
+    const row=(await pool.query(`SELECT content,media_type,filename FROM tender.required_document_working_copies WHERE required_document_id=$1 AND tender_id=$2 AND company_id=$3 AND lot_key=$4 AND (($5::integer IS NULL AND is_current) OR version=$5) ORDER BY version DESC LIMIT 1`,[context.row.id,context.row.tender_id,context.companyId,context.lotKey,requestedVersion])).rows[0];
     if(!row)return reply.code(404).send({error:"working_copy_not_found"});return sendScopedFile(reply,{content:row.content,mimeType:row.media_type,filename:row.filename,inline:row.media_type==="application/pdf"});
   });
   app.get("/api/management/required-documents-inbox",{preHandler:read},async(req)=>{
@@ -6162,10 +7635,10 @@ export function registerAutopilotRoutes(
       FROM tender.required_documents r JOIN tender.current_registered_tender_company_portals registered ON registered.tender_id=r.tender_id AND registered.company_id=r.company_id JOIN tender.tenders t ON t.id=r.tender_id JOIN tender.enterprise_company_links c ON c.company_id=r.company_id
       LEFT JOIN tender.final_preflight_contexts fp ON fp.tender_id=r.tender_id AND fp.company_id=r.company_id AND fp.lot_key=r.lot_key AND fp.is_current
       LEFT JOIN tender.submission_contexts sc ON sc.id=fp.submission_context_id LEFT JOIN tender.portal_registry p ON p.id=sc.portal_id
-      WHERE r.mandatory AND r.submission_relevant AND r.satisfaction_status IN('MISSING','REJECTED','MANUAL_REVIEW_REQUIRED','UPLOADED_PENDING_VALIDATION')
+      WHERE r.mandatory AND r.submission_relevant AND r.manual_submission_relevance_override IS DISTINCT FROM false AND r.satisfaction_status IN('MISSING','REJECTED','MANUAL_REVIEW_REQUIRED','UPLOADED_PENDING_VALIDATION')
       AND ($1::uuid[] IS NULL OR r.company_id=ANY($1)) AND ($2='' OR r.company_id::text=$2) AND ($3='' OR fp.service_line=$3) AND ($4='' OR r.tender_id::text=$4) AND ($5='' OR r.lot_key=$5) AND ($6='' OR (CASE WHEN t.offer_deadline<now()+interval '2 days' THEN 'CRITICAL' ELSE 'NORMAL' END)=$6)
       ORDER BY t.offer_deadline NULLS LAST,r.requirement_title`,[companyIds,String(req.query?.company||''),String(req.query?.serviceLine||''),String(req.query?.tender||''),String(req.query?.lot||''),String(req.query?.priority||'')])).rows;
-    return {items:rows.map(x=>({...x,status_label:requirementLabel(x.satisfaction_status)})),filterLabel:"Unterlagen nachzureichen"};
+    return {items:rows.map(x=>({...x,status_label:requirementLabel(x.satisfaction_status)})),filterLabel:"Fehlende, abgelehnte oder zu prüfende Unterlagen"};
   });
   app.get("/api/management/signature-workbench",{preHandler:read},async(req)=>{
     const companyIds=req.identity.permissions.includes("tender.admin")?null:req.identity.companyIds;
@@ -6191,6 +7664,7 @@ export function registerAutopilotRoutes(
   app.post("/api/signature-workbench/:id/upload",{bodyLimit:30_000_000,preHandler:[requirePermission("tender.document.analyze"),csrf]},async(req,reply)=>{const row=(await pool.query("SELECT * FROM tender.signature_documents WHERE id=$1 AND is_current",[req.params.id])).rows[0];if(!row)return reply.code(404).send({error:"signature_document_not_found"});if(!req.identity.permissions.includes("tender.admin")&&!req.identity.companyIds.includes(String(row.company_id)))return reply.code(403).send({error:"company_scope_forbidden"});if(!(await requireRegisteredScope(reply,row.tender_id,row.company_id)))return;let content;try{const encoded=String(req.body?.base64||'').replace(/\s/g,'');content=Buffer.from(encoded,'base64');if(!encoded||content.toString('base64').replaceAll('=','')!==encoded.replaceAll('=',''))throw Error()}catch{return reply.code(400).send({error:"document_base64_invalid"})}const validation=inspectSignedPdf({content,sourceContent:row.working_content}),filename=String(req.body?.filename||'unterschrieben.pdf').slice(0,240),scan=await scanBuffer(content);await pool.query(`INSERT INTO tender.upload_malware_scans(object_type,object_id,tender_id,lot_key,company_id,sha256,size_bytes,engine,status,detail_code,created_by) VALUES('SIGNATURE_DOCUMENT',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[row.id,row.tender_id,row.lot_key,row.company_id,validation.sha256,content.length,scan.engine,scan.status==="INFECTED"?"QUARANTINED":scan.status,scan.detail,req.identity.userId]);if(scan.status!=="CLEAN")return reply.code(scan.status==="INFECTED"?422:503).send({error:scan.status==="INFECTED"?"document_rejected_malware":"malware_scanner_temporarily_unavailable",retryable:scan.status==="SCAN_ERROR"});validation.malwareScanStatus="CLEAN";const client=await pool.connect();try{await client.query('BEGIN');await client.query('UPDATE tender.signature_document_uploads SET is_current=false WHERE signature_document_id=$1 AND is_current',[row.id]);const version=Number((await client.query('SELECT coalesce(max(version),0)+1 version FROM tender.signature_document_uploads WHERE signature_document_id=$1',[row.id])).rows[0].version);const upload=(await client.query(`INSERT INTO tender.signature_document_uploads(signature_document_id,version,filename,media_type,size_bytes,sha256,content,validation_status,validation_details,malware_scan_status,uploaded_by) VALUES($1,$2,$3,'application/pdf',$4,$5,$6,$7,$8::jsonb,'CLEAN',$9) RETURNING id`,[row.id,version,filename,content.length,validation.sha256,content,validation.status,JSON.stringify(validation),req.identity.userId])).rows[0];await client.query('UPDATE tender.signature_documents SET status=$2 WHERE id=$1',[row.id,validation.status]);await client.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'SIGNED_DOCUMENT_UPLOADED',$2,$3::jsonb)",[req.identity.userId,row.tender_id,JSON.stringify({signatureDocumentId:row.id,uploadId:upload.id,version,sha256:validation.sha256,status:validation.status,malwareScan:'CLEAN',lotKey:row.lot_key,companyId:row.company_id})]);await client.query('COMMIT');return reply.code(201).send({uploadId:upload.id,version,validation,transmitted:false})}catch(error){await client.query('ROLLBACK');throw error}finally{client.release()}});
   app.post("/api/tenders/:id/required-documents/:requiredDocumentId/upload",{bodyLimit:30_000_000,preHandler:[requirePermission("tender.document.analyze"),csrf]},async(req,reply)=>{
     if(!(await visibleTender(req,reply,req.params.id)))return;
+    if(!(await requireParticipationEligible(reply,req.params.id,req.body?.lot)))return;
     const companyId=String(req.body?.company||""),lotKey=String(req.body?.lot??"");
     if(!validUuid(req.params.requiredDocumentId)||!validUuid(companyId))return reply.code(400).send({error:"required_document_context_invalid"});
     if(!req.identity.permissions.includes("tender.admin")&&!req.identity.companyIds.includes(companyId))return reply.code(403).send({error:"company_scope_forbidden"});
@@ -6215,16 +7689,44 @@ export function registerAutopilotRoutes(
     }catch(error){await client.query("ROLLBACK");throw error}finally{client.release()}
   });
   app.post("/api/tenders/:id/required-documents/:requiredDocumentId/review",{preHandler:[requirePermission("tender.document.analyze"),csrf]},async(req,reply)=>{
-    if(!(await visibleTender(req,reply,req.params.id)))return;const decision=String(req.body?.decision||""),reason=String(req.body?.reason||"").trim();
-    if(!["VALIDATED","REJECTED"].includes(decision)||!reason)return reply.code(400).send({error:"review_decision_and_reason_required"});
-    const client=await pool.connect();try{await client.query("BEGIN");const requirement=(await client.query("SELECT * FROM tender.required_documents WHERE id=$1 AND tender_id=$2 FOR UPDATE",[req.params.requiredDocumentId,req.params.id])).rows[0];
-      if(!requirement||!requirement.current_upload_id){await client.query("ROLLBACK");return reply.code(404).send({error:"uploaded_document_not_found"})}
-      if(!req.identity.permissions.includes("tender.admin")&&!req.identity.companyIds.includes(String(requirement.company_id))){await client.query("ROLLBACK");return reply.code(403).send({error:"company_scope_forbidden"})}
+    if(!(await visibleTender(req,reply,req.params.id)))return;
+    if(!(await requireParticipationEligible(reply,req.params.id,req.body?.lot)))return;
+    const decision=String(req.body?.decision||""),reason=String(req.body?.reason||"").trim(),companyId=String(req.body?.company||""),lotKey=String(req.body?.lot??""),target=req.body?.target,
+      validHash=value=>/^[0-9a-f]{64}$/.test(String(value||""));
+    if(!validUuid(req.params.requiredDocumentId)||!validUuid(companyId)||!["VALIDATED","REJECTED"].includes(decision)||!reason||reason.length>4000||!target||!["UPLOAD","WORKING_COPY"].includes(target.type)||!validUuid(target.id)||!Number.isInteger(target.version)||target.version<1||!validHash(target.sha256))return reply.code(400).send({error:"required_document_review_contract_invalid"});
+    if(target.type==="WORKING_COPY"&&(!validUuid(target.sourceDocumentId)||!validHash(target.sourceSha256)))return reply.code(400).send({error:"required_document_review_contract_invalid"});
+    if(!req.identity.permissions.includes("tender.admin")&&!req.identity.companyIds.includes(companyId))return reply.code(403).send({error:"company_scope_forbidden"});
+    const client=await pool.connect();try{await client.query("BEGIN");const requirement=(await client.query("SELECT * FROM tender.required_documents WHERE id=$1 AND tender_id=$2 AND company_id=$3 AND lot_key=$4 AND satisfaction_status<>'SUPERSEDED' FOR UPDATE",[req.params.requiredDocumentId,req.params.id,companyId,lotKey])).rows[0];
+      if(!requirement){await client.query("ROLLBACK");return reply.code(404).send({error:"required_document_not_found"})}
       if(!(await requireRegisteredScope(reply,requirement.tender_id,requirement.company_id))){await client.query("ROLLBACK");return}
-      const upload=(await client.query("UPDATE tender.required_document_uploads SET validation_status=$2,validation_summary=$3,reviewed_by=$4,reviewed_at=now() WHERE id=$1 RETURNING *",[requirement.current_upload_id,decision,reason,req.identity.userId])).rows[0];
-      await client.query("UPDATE tender.required_documents SET satisfaction_status=$2,updated_at=now() WHERE id=$1",[requirement.id,decision]);
-      await client.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,$2,$3,$4::jsonb)",[req.identity.userId,decision==="VALIDATED"?"REQUIRED_DOCUMENT_CONFIRMED":"REQUIRED_DOCUMENT_REJECTED",requirement.tender_id,JSON.stringify({requiredDocumentId:requirement.id,uploadId:upload.id,reason})]);
-      const recheck=await runRequiredDocumentRecheck(client,{...requirement,satisfaction_status:decision},upload,req.identity.userId);await client.query("COMMIT");return {status:decision,statusLabel:requirementLabel(decision),recheck,transmitted:false};
+      const currentUpload=(await client.query("SELECT * FROM tender.required_document_uploads WHERE required_document_id=$1 AND is_current FOR UPDATE",[requirement.id])).rows[0];
+      if(String(requirement.current_upload_id||"")!==String(currentUpload?.id||"")){await client.query("ROLLBACK");return reply.code(409).send({error:"required_document_upload_linkage_changed"})}
+      let upload=currentUpload,workingCopy=null,reviewTarget;
+      if(target.type==="UPLOAD"){
+        if(!upload||upload.id!==target.id||Number(upload.version)!==target.version||upload.sha256!==target.sha256||upload.source_working_copy_id){await client.query("ROLLBACK");return reply.code(409).send({error:"required_document_review_target_changed"})}
+        if(requirement.satisfaction_status!=="MANUAL_REVIEW_REQUIRED"||!["MANUAL_REVIEW_REQUIRED","UPLOADED_PENDING_VALIDATION"].includes(upload.validation_status)){await client.query("ROLLBACK");return reply.code(409).send({error:"required_document_not_review_ready"})}
+        upload=(await client.query("UPDATE tender.required_document_uploads SET validation_status=$2,validation_summary=$3,reviewed_by=$4,reviewed_at=now() WHERE id=$1 AND is_current RETURNING *",[upload.id,decision,reason,req.identity.userId])).rows[0];
+        reviewTarget={type:"UPLOAD",uploadId:upload.id,uploadVersion:upload.version,uploadSha256:upload.sha256};
+      }else{
+        workingCopy=(await client.query("SELECT * FROM tender.required_document_working_copies WHERE id=$1 AND required_document_id=$2 AND tender_id=$3 AND company_id=$4 AND lot_key=$5 AND is_current FOR UPDATE",[target.id,requirement.id,requirement.tender_id,companyId,lotKey])).rows[0];
+        if(!workingCopy||Number(workingCopy.version)!==target.version||workingCopy.sha256!==target.sha256||workingCopy.source_document_id!==target.sourceDocumentId||workingCopy.source_sha256!==target.sourceSha256||requirement.source_document_id!==workingCopy.source_document_id){await client.query("ROLLBACK");return reply.code(409).send({error:"required_document_review_target_changed"})}
+        const source=(await client.query("SELECT id,payload_sha256 FROM tender.enrichment_documents WHERE id=$1",[workingCopy.source_document_id])).rows[0],material=workingCopy.editor_provenance?.materiallyEdited===true||materiallyEditedPdfWorkingCopy({elements:workingCopy.overlay_data||[]});
+        if(!source||source.payload_sha256!==workingCopy.source_sha256||!material){await client.query("ROLLBACK");return reply.code(409).send({error:!material?"working_copy_not_materially_edited":"required_source_binding_mismatch"})}
+        if(!["MANUAL_REVIEW_REQUIRED","MISSING"].includes(requirement.satisfaction_status)||requirement.satisfaction_status==="MISSING"&&upload){await client.query("ROLLBACK");return reply.code(409).send({error:"required_document_not_review_ready"})}
+        if(upload){
+          if(upload.source_type!=="REQUIRED_PDF_WORKING_COPY"||upload.source_working_copy_id!==workingCopy.id||upload.sha256!==workingCopy.sha256||!["MANUAL_REVIEW_REQUIRED","UPLOADED_PENDING_VALIDATION"].includes(upload.validation_status)){await client.query("ROLLBACK");return reply.code(409).send({error:"required_document_working_copy_linkage_changed"})}
+          upload=(await client.query("UPDATE tender.required_document_uploads SET validation_status=$2,validation_summary=$3,reviewed_by=$4,reviewed_at=now() WHERE id=$1 AND is_current RETURNING *",[upload.id,decision,reason,req.identity.userId])).rows[0];
+        }else{
+          const scan=await scanDocument(workingCopy.content);if(scan.status!=="CLEAN"){await client.query("ROLLBACK");return reply.code(scan.status==="INFECTED"?422:503).send({error:scan.status==="INFECTED"?"document_rejected_malware":"malware_scanner_temporarily_unavailable",retryable:scan.status==="SCAN_ERROR"})}
+          const version=Number((await client.query("SELECT coalesce(max(version),0)+1 version FROM tender.required_document_uploads WHERE required_document_id=$1",[requirement.id])).rows[0].version);
+          upload=(await client.query(`INSERT INTO tender.required_document_uploads(required_document_id,tender_id,lot_key,company_id,version,filename,media_type,size_bytes,sha256,content,source_type,source_working_copy_id,validation_status,validation_summary,validation_details,malware_scan_status,uploaded_by,reviewed_by,reviewed_at)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'REQUIRED_PDF_WORKING_COPY',$11,$12,$13,$14::jsonb,'CLEAN',$15,$16,now()) RETURNING *`,[requirement.id,requirement.tender_id,requirement.lot_key,requirement.company_id,version,workingCopy.filename,workingCopy.media_type,workingCopy.content.length,workingCopy.sha256,workingCopy.content,workingCopy.id,decision,reason,JSON.stringify({origin:"HUMAN_CONFIRMED_VERSIONED_REQUIRED_PDF_WORKING_COPY",workingCopyId:workingCopy.id,workingCopyVersion:workingCopy.version,workingCopySha256:workingCopy.sha256,sourceDocumentId:workingCopy.source_document_id,sourceSha256:workingCopy.source_sha256,automaticCompletenessProven:false}),workingCopy.prepared_by,req.identity.userId])).rows[0];
+        }
+        reviewTarget={type:"WORKING_COPY",uploadId:upload.id,uploadVersion:upload.version,uploadSha256:upload.sha256,workingCopyId:workingCopy.id,workingCopyVersion:workingCopy.version,workingCopySha256:workingCopy.sha256,sourceDocumentId:workingCopy.source_document_id,sourceSha256:workingCopy.source_sha256};
+      }
+      const updated=(await client.query("UPDATE tender.required_documents SET current_upload_id=$2,satisfaction_status=$3,updated_at=now() WHERE id=$1 RETURNING *",[requirement.id,upload.id,decision])).rows[0];
+      await client.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,$2,$3,$4::jsonb)",[req.identity.userId,decision==="VALIDATED"?"REQUIRED_DOCUMENT_CONFIRMED":"REQUIRED_DOCUMENT_REJECTED",requirement.tender_id,JSON.stringify({requiredDocumentId:requirement.id,companyId:requirement.company_id,lotKey:requirement.lot_key,decision,reason,...reviewTarget,explicitHumanConfirmation:true,externalWrite:false,transmitted:false})]);
+      const recheck=await runRequiredDocumentRecheck(client,updated,upload,req.identity.userId);await client.query("COMMIT");return {status:decision,statusLabel:requirementLabel(decision),reviewTarget,recheck,transmitted:false};
     }catch(error){await client.query("ROLLBACK");throw error}finally{client.release()}
   });
   app.get("/api/tenders/:id/required-documents/:requiredDocumentId/download",{preHandler:read},async(req,reply)=>{

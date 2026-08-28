@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
+import rawBody from "fastify-raw-body";
 import pg from "pg";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
@@ -9,7 +10,17 @@ import { createHash } from "node:crypto";
 import { hashSession, loadIdentity, mayView } from "./auth.mjs";
 import { registerAutopilotRoutes } from "./autopilot-routes.mjs";
 import { registerConfigurationAdmin } from "./configuration-admin.mjs";
+import { startRegionRecalculationWorker } from "./region-recalculation-worker.mjs";
+import { registerLocalPdfJsAssets } from "./pdfjs-assets.mjs";
 import { requireRegisteredTenderPortalScope } from "./registered-portal-scope.mjs";
+import { SAAS_PERMISSION_FEATURES, loadSaasContext, registerSaasRoutes } from "./saas-platform.mjs";
+import { registerTenantPortalRoutes } from "./tenant-portal.mjs";
+import { SmtpEmailAdapter, StripeBillingAdapter, UnconfiguredBillingAdapter, UnconfiguredEmailAdapter } from "./saas-adapters.mjs";
+import { TenantFilesystemStorage, UnconfiguredTenantStorage } from "./tenant-storage.mjs";
+import { PostgresLoginStateStore, PostgresSaasSessionStore, SAAS_LOGIN_PATH, SaasOidcClient, registerSaasIamRoutes } from "./saas-iam.mjs";
+import { decoratePortalNavigation } from "./portal-navigation.mjs";
+import { loadTenderLinkEvidence } from "./tender-link-evidence.mjs";
+import { registerLiveSubmissionRoutes } from "./submission-live-routes.mjs";
 import {
   favoriteContext,
   favoriteMetadata,
@@ -17,9 +28,19 @@ import {
   validFavoriteId,
 } from "./favorites.mjs";
 
+const TENDER_RELEASE=process.env.TENDER_RELEASE||"tender-lifecycle-participation-20260820.1";
+
 const enabled =
   process.env.TENDER_ENABLED === "true" ||
   process.env.TENDER_PILOT_ENABLED === "true";
+const saasRequested = process.env.WB_TENDER_SAAS_ENABLED === "true";
+const stripeProviderConfigured = process.env.SAAS_BILLING_ADAPTER === "stripe"
+  && Boolean(process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET_KEY_FILE)
+  && Boolean(process.env.STRIPE_WEBHOOK_SECRET || process.env.STRIPE_WEBHOOK_SECRET_FILE)
+  && /^https:\/\//.test(String(process.env.WB_TENDER_PUBLIC_BASE_URL || ""));
+// The commercial surface remains entirely dark unless the selected billing
+// provider has all configuration required for checkout and verified webhooks.
+const saasEnabled = saasRequested && stripeProviderConfigured;
 const uiBase = process.env.TENDER_UI_BASE || "/admin/ausschreibungen";
 const apiBase = process.env.TENDER_API_BASE || "/api/tender";
 const asset = (name) => readFileSync(new URL(`./assets/${name}`, import.meta.url));
@@ -52,15 +73,26 @@ const sendAsset = (reply, name, type, { immutable = false } = {}) => {
 };
 const secret = (name) =>
   process.env[name] || readFileSync(process.env[`${name}_FILE`], "utf8").trim();
-const pool = new pg.Pool({ connectionString: secret("DATABASE_URL") });
-const sectors = new DatabaseSync(process.env.CAREER_DATABASE_PATH, {
-  readOnly: true,
+const optionalSecret = (name) => process.env[name] || (process.env[`${name}_FILE`] ? readFileSync(process.env[`${name}_FILE`], "utf8").trim() : "");
+const fileOnlySecret = (name) => {
+  if (process.env[name]) throw new Error(`inline_secret_forbidden_${name.toLowerCase()}`);
+  const path = process.env[`${name}_FILE`];
+  return path ? readFileSync(path, "utf8").replace(/\r?\n$/, "") : "";
+};
+const readOnlyCandidate = process.env.WB_TENDER_READ_ONLY_CANDIDATE === "true";
+const pool = new pg.Pool({
+  connectionString: secret("DATABASE_URL"),
+  ...(readOnlyCandidate ? { options: "-c default_transaction_read_only=on" } : {}),
 });
+const sectors = enabled ? new DatabaseSync(process.env.CAREER_DATABASE_PATH, {
+  readOnly: true,
+}) : null;
 const app = Fastify({
   logger: { redact: ["req.headers.cookie", "req.body"] },
   trustProxy: true,
 });
 await app.register(cookie);
+await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
 await app.register(helmet, {
   contentSecurityPolicy: {
     directives: {
@@ -80,6 +112,7 @@ if (!Number.isInteger(rateLimitMax) || rateLimitMax < 120 || rateLimitMax > 600)
 await app.register(rateLimit, { max: rateLimitMax, timeWindow: "1 minute" });
 app.addHook("onSend", async (_, reply, payload) => {
   reply.header("x-robots-tag", "noindex, nofollow");
+  reply.header("x-wb-tender-release",TENDER_RELEASE);
   if (!reply.hasHeader("cache-control")) reply.header("cache-control", "no-store");
   if (reply.request.url === "/" && typeof payload === "string" && payload.includes("</head>"))
     return payload.replace("</head>", `<script src="${uiBase}/configuration-nav.js" defer></script></head>`);
@@ -95,21 +128,35 @@ async function auth(req, reply) {
   );
   if (!identity)
     return reply.code(401).send({ error: "authentication_required" });
-  const careerSectorIds = sectors
-    .prepare(
-      "SELECT sector_id FROM recruiting_user_sectors WHERE user_id=? AND access_active=1 AND can_read=1",
-    )
-    .all(identity.userId)
-    .map((row) => row.sector_id);
-  // Tender-native scopes and the established Career sector assignments are
-  // independent, additive authorization sources. Never discard a scope that
-  // was explicitly granted in iam.tender_identity_scopes.
-  identity.sectorIds = [...new Set([...identity.sectorIds, ...careerSectorIds])];
+  if (saasEnabled) {
+    identity.saas = await loadSaasContext(pool, identity.userId);
+    if (identity.saas) {
+      // A SaaS identity receives only company bindings owned by its tenant.
+      // Internal IAM scopes and admin permissions never bleed into this context.
+      identity.companyIds = identity.saas.companyIds;
+      identity.sectorIds = [];
+      identity.sectorSlugs = [];
+      identity.permissions = identity.permissions.filter((permission) => Object.hasOwn(SAAS_PERMISSION_FEATURES, permission));
+      identity.roles = identity.roles.filter((role) => !/admin/i.test(role));
+    }
+  }
+  if (!identity.saas) {
+    const careerSectorIds = sectors
+      .prepare("SELECT sector_id FROM recruiting_user_sectors WHERE user_id=? AND access_active=1 AND can_read=1")
+      .all(identity.userId)
+      .map((row) => row.sector_id);
+    identity.sectorIds = [...new Set([...identity.sectorIds, ...careerSectorIds])];
+  }
   req.identity = identity;
 }
 const requirePermission = (permission) => async (req, reply) => {
   await auth(req, reply);
   if (reply.sent) return;
+  if (req.identity.saas) {
+    // Legacy Tender routes query the WB internal schema. They stay unavailable
+    // until each route is migrated to the tenant data plane and RLS-tested.
+    return reply.code(403).send({ error: "saas_legacy_data_plane_forbidden" });
+  }
   if (
     !(Array.isArray(permission)?permission.some(p=>req.identity.permissions.includes(p)):req.identity.permissions.includes(permission)) &&
     !req.identity.permissions.includes("tender.admin")
@@ -124,7 +171,7 @@ const csrf = async (req, reply) => {
   )
     return reply.code(403).send({ error: "csrf_rejected" });
 };
-const health = async () => ({ status: "ok", enabled, component: "tender-platform" });
+const health = async () => ({ status: "ok", enabled, component: "tender-platform", release:TENDER_RELEASE });
 app.get("/healthz", health);
 // The production reverse proxy intentionally strips /api/tender to /api.
 // Keep all three forms healthy so container, canary and productive probes
@@ -140,21 +187,60 @@ app.get(
   async (req) => {
     const q = String(req.query.q || "").slice(0, 200),
       source = String(req.query.source || "").slice(0, 40),
+      page = Math.max(1, Math.min(10000, Number.parseInt(String(req.query.page || "1"), 10) || 1)),
+      pageSize = Math.max(1, Math.min(200, Number.parseInt(String(req.query.pageSize || "100"), 10) || 100)),
       companyIds = req.identity.companyIds || [],
+      sectorIds = req.identity.sectorIds || [],
       unrestricted = req.identity.permissions.includes("tender.admin") || req.identity.permissions.includes("tender.view");
+    const visibility = `($3::boolean OR tender.assigned_user_id=$5::uuid OR tender.sector_id=ANY($6::uuid[]) OR tender.company_id=ANY($4::uuid[]))`;
+    const parameters = [q, source, unrestricted, companyIds, req.identity.userId, sectorIds];
+    const total = Number((await pool.query(
+      `SELECT count(*) count FROM tender.tenders tender WHERE data_class='PUBLIC_REAL'
+       AND source_lifecycle_status='ACTIVE'
+       AND participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE')
+       AND EXISTS(SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=tender.id)
+       AND wb_relevance_status='RELEVANT'
+       AND classification_confidence='HIGH'
+       AND assigned_service_line IS NOT NULL
+       AND ($1='' OR search_document @@ plainto_tsquery('german',$1))
+       AND ($2='' OR source_code=$2) AND ${visibility}`,
+      parameters,
+    )).rows[0].count);
     const result = await pool.query(
-      `SELECT tender.*,
+      `SELECT tender.*,tender.assigned_service_line service_line,
+        tender.wb_relevance_status relevance_status,
+        tender.classification_reason,
+        coalesce(tender.company_id,navigation_company.company_id) portal_navigation_company_id,
         EXISTS(SELECT 1 FROM tender.current_registered_tender_company_portals registered
           WHERE registered.tender_id=tender.id AND ($3::boolean OR registered.company_id=ANY($4::uuid[]))) portal_access_connected
-       FROM tender.tenders tender WHERE data_class='PUBLIC_REAL'
-    AND ($1='' OR search_document @@ plainto_tsquery('german',$1))
-    AND ($2='' OR source_code=$2) ORDER BY offer_deadline NULLS LAST LIMIT 100`,
-      [q, source, unrestricted, companyIds],
+       FROM tender.tenders tender
+       LEFT JOIN LATERAL(
+         SELECT relevance.company_id
+         FROM tender.current_service_relevance relevance
+         WHERE relevance.tender_id=tender.id
+           AND ($3::boolean OR relevance.company_id=ANY($4::uuid[]))
+         ORDER BY relevance.primary_company DESC,relevance.evaluation_version DESC,relevance.company_id
+         LIMIT 1
+       ) navigation_company ON true
+       WHERE data_class='PUBLIC_REAL'
+       AND source_lifecycle_status='ACTIVE'
+       AND participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE')
+       AND EXISTS(SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=tender.id)
+       AND wb_relevance_status='RELEVANT'
+       AND classification_confidence='HIGH'
+       AND assigned_service_line IS NOT NULL
+       AND ($1='' OR search_document @@ plainto_tsquery('german',$1))
+       AND ($2='' OR source_code=$2) AND ${visibility}
+       ORDER BY (source_lifecycle_status='ACTIVE') DESC,publication_date DESC NULLS LAST,updated_at DESC,id
+       LIMIT $7 OFFSET $8`,
+      [...parameters, pageSize, (page - 1) * pageSize],
     );
-    const items = result.rows.filter((item) => mayView(req.identity, item));
     return {
-      items,
-      total: items.length,
+      items: await decoratePortalNavigation(pool, result.rows, { uiBase }),
+      total,
+      page,
+      pageSize,
+      pages: Math.max(1, Math.ceil(total / pageSize)),
     };
   },
 );
@@ -165,13 +251,38 @@ app.get(
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(req.params.id || "")))
       return reply.code(400).send({ error: "tender_id_invalid", message: "Bitte eine gültige Ausschreibung auswählen." });
     const result = await pool.query(
-      "SELECT * FROM tender.tenders WHERE id=$1 AND data_class='PUBLIC_REAL'",
+      "SELECT * FROM tender.tenders tender WHERE id=$1 AND data_class='PUBLIC_REAL' AND source_lifecycle_status='ACTIVE' AND participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE') AND EXISTS(SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=tender.id) AND wb_relevance_status='RELEVANT' AND classification_confidence='HIGH' AND assigned_service_line IS NOT NULL",
       [req.params.id],
     );
     if (!result.rowCount) return reply.code(404).send({ error: "not_found" });
     if (!mayView(req.identity, result.rows[0]))
       return reply.code(403).send({ error: "forbidden" });
-    return result.rows[0];
+    const tender = result.rows[0];
+    const [lots, version, evidence] = await Promise.all([
+      pool.query(`SELECT life.lot_key source_lot_id,coalesce(l.id,enriched.id,life.id) lot_id,
+                         coalesce(l.title,enriched.title,life.lot_key) title,
+                         life.offer_deadline,life.lifecycle_status,life.participation_status,
+                         life.deadline_quality,life.participation_block_reason
+                    FROM tender.tender_lot_lifecycles life
+                    LEFT JOIN tender.lots l ON l.tender_id=life.tender_id AND l.external_id=life.lot_key
+                    LEFT JOIN LATERAL(
+                      SELECT el.id,el.title FROM tender.enrichment_lots el
+                      JOIN tender.enrichment_versions ev ON ev.id=el.enrichment_version_id
+                      WHERE ev.tender_id=life.tender_id AND el.lot_key=life.lot_key
+                      ORDER BY ev.version DESC LIMIT 1
+                    ) enriched ON true
+                   WHERE life.tender_id=$1 AND life.is_current
+                   ORDER BY life.lot_key`, [tender.id]),
+      pool.query("SELECT id,version FROM tender.tender_versions WHERE tender_id=$1 ORDER BY version DESC LIMIT 1", [tender.id]),
+      loadTenderLinkEvidence(pool, [tender.id]),
+    ]);
+    return {
+      ...tender,
+      tender_version_id: version.rows[0]?.id || null,
+      tender_version: version.rows[0]?.version || null,
+      lots: lots.rows,
+      sourceEvidence: evidence.get(String(tender.id)) || null,
+    };
   },
 );
 async function visibleTender(req, reply, id) {
@@ -487,7 +598,7 @@ app.get(
   async (req) => {
     const rows = (
       await pool.query(
-        "SELECT external_id,title,buyer,publication_date,offer_deadline,source_url FROM tender.tenders WHERE data_class='PUBLIC_REAL' ORDER BY publication_date DESC LIMIT 1000",
+        "SELECT external_id,title,buyer,publication_date,offer_deadline,source_url FROM tender.tenders tender WHERE data_class='PUBLIC_REAL' AND source_lifecycle_status='ACTIVE' AND participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE') AND EXISTS(SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=tender.id) AND wb_relevance_status='RELEVANT' AND classification_confidence='HIGH' AND assigned_service_line IS NOT NULL ORDER BY publication_date DESC LIMIT 1000",
       )
     ).rows;
     return { dataClass: "PUBLIC_REAL", items: rows };
@@ -499,7 +610,12 @@ app.get(
   async () => ({
     items: (
       await pool.query(
-        "SELECT code,name,last_success_at,last_status FROM tender.sources ORDER BY code",
+        `SELECT source.code,source.name,
+          coalesce(scheduler.last_success_at,source.last_success_at) last_success_at,
+          coalesce(scheduler.last_run_status,source.last_status) last_status
+        FROM tender.sources source
+        LEFT JOIN tender.scheduler_worker_status scheduler ON scheduler.source_code=source.code
+        ORDER BY source.code`,
       )
     ).rows,
   }),
@@ -530,9 +646,79 @@ registerAutopilotRoutes(app, {
   pool,
   requirePermission,
   csrf,
+  invitationPepper: optionalSecret("SAAS_INVITATION_PEPPER"),
   visibleTender,
 });
+const submissionContinuationSecret = optionalSecret("SUBMISSION_CONTINUATION_SECRET") || secret("SESSION_PEPPER");
+registerLiveSubmissionRoutes(app, {
+  pool, requirePermission, csrf,
+  continuationSecret: submissionContinuationSecret,
+  envExternalEnabled: process.env.EXTERNAL_SUBMISSION_ENABLED === "true",
+  envAllowExternal: process.env.WB_TENDER_ALLOW_EXTERNAL_SUBMISSION === "true",
+  isFreshWbMfa: async (req) => {
+    const token = req.cookies.wb_session;
+    if (!token) return false;
+    const row = (await pool.query("SELECT mfa_verified_at FROM iam.sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()", [hashSession(token, secret("SESSION_PEPPER"))])).rows[0];
+    return Boolean(row?.mfa_verified_at && new Date(row.mfa_verified_at).getTime() >= Date.now() - 5 * 60_000);
+  },
+});
 registerConfigurationAdmin(app, { pool, requirePermission, csrf });
+const regionRecalculationWorker=readOnlyCandidate?null:startRegionRecalculationWorker(pool,{logger:app.log,batchSize:Number(process.env.REGION_RECALCULATION_BATCH_SIZE||100)});
+app.addHook("onClose",async()=>{regionRecalculationWorker?.stop()});
+const emailAdapter = saasEnabled && process.env.SAAS_EMAIL_ADAPTER === "smtp"
+  ? new SmtpEmailAdapter({ host: fileOnlySecret("SAAS_SMTP_HOST"), port: fileOnlySecret("SAAS_SMTP_PORT") || 587, secure: fileOnlySecret("SAAS_SMTP_SECURE") === "true", user: fileOnlySecret("SAAS_SMTP_USER"), password: fileOnlySecret("SAAS_SMTP_PASSWORD"), from: fileOnlySecret("SAAS_SMTP_FROM"), verificationBaseUrl: process.env.SAAS_PUBLIC_BASE_URL || process.env.WB_TENDER_PUBLIC_BASE_URL })
+  : new UnconfiguredEmailAdapter();
+const stripeSecretKey = saasEnabled && process.env.SAAS_BILLING_ADAPTER === "stripe" ? optionalSecret("STRIPE_SECRET_KEY") : "";
+const stripeWebhookSecret = saasEnabled && process.env.SAAS_BILLING_ADAPTER === "stripe" ? optionalSecret("STRIPE_WEBHOOK_SECRET") : "";
+const stripePublicBaseUrl = process.env.WB_TENDER_PUBLIC_BASE_URL || "";
+const stripeConfigurationComplete = Boolean(stripeSecretKey && stripeWebhookSecret && stripePublicBaseUrl);
+const billingAdapter = saasEnabled && process.env.SAAS_BILLING_ADAPTER === "stripe" && stripeConfigurationComplete
+  ? new StripeBillingAdapter({ secretKey: stripeSecretKey, webhookSecret: stripeWebhookSecret, publicBaseUrl: stripePublicBaseUrl, priceIds: { CORE: process.env.STRIPE_PRICE_CORE, NORMAL: process.env.STRIPE_PRICE_NORMAL, PROFESSIONAL: process.env.STRIPE_PRICE_PROFESSIONAL, ENTERPRISE: process.env.STRIPE_PRICE_ENTERPRISE } })
+  : new UnconfiguredBillingAdapter();
+const tenantStorage = saasEnabled && process.env.WB_TENDER_TENANT_STORAGE_ADAPTER === "filesystem"
+  ? new TenantFilesystemStorage({ root: process.env.WB_TENDER_TENANT_STORAGE_ROOT })
+  : new UnconfiguredTenantStorage();
+const saasIamConfigured = saasEnabled && process.env.SAAS_IAM_ADAPTER === "oidc"
+  && Boolean(process.env.SAAS_IAM_ISSUER && process.env.SAAS_IAM_AUTHORIZATION_ENDPOINT && process.env.SAAS_IAM_TOKEN_ENDPOINT && process.env.SAAS_IAM_JWKS_URI && process.env.SAAS_IAM_CLIENT_ID)
+  && Boolean(process.env.SAAS_IAM_CLIENT_SECRET_FILE && process.env.SAAS_IAM_SESSION_PEPPER_FILE);
+const saasIamClient = saasIamConfigured ? new SaasOidcClient({
+  issuer: process.env.SAAS_IAM_ISSUER,
+  authorizationEndpoint: process.env.SAAS_IAM_AUTHORIZATION_ENDPOINT,
+  tokenEndpoint: process.env.SAAS_IAM_TOKEN_ENDPOINT,
+  jwksUri: process.env.SAAS_IAM_JWKS_URI,
+  clientId: process.env.SAAS_IAM_CLIENT_ID,
+  clientSecret: fileOnlySecret("SAAS_IAM_CLIENT_SECRET"),
+  sessionPepper: fileOnlySecret("SAAS_IAM_SESSION_PEPPER"),
+  stateStore: new PostgresLoginStateStore(pool),
+  sessionStore: new PostgresSaasSessionStore(pool),
+  resolveIdentity: async ({issuer,subject,email}) => {
+    const binding = (await pool.query("SELECT * FROM saas.resolve_iam_subject_binding($1,$2,$3)",[issuer,subject,email])).rows;
+    if (binding.length !== 1) return null;
+    const saas = await loadSaasContext(pool,binding[0].user_id);
+    if (!saas || saas.tenant_id !== String(binding[0].tenant_id)) return null;
+    return {userId:binding[0].user_id,tenantId:binding[0].tenant_id,email,emailVerified:true,mfaRequired:true,saas};
+  },
+}) : null;
+const unavailableSaasAuth = async (_,reply) => reply.code(503).send({error:"saas_iam_not_configured"});
+const unavailableSaasCsrf = async (_,reply) => reply.code(403).send({error:"csrf_invalid"});
+const saasIamRoutes = saasIamClient ? registerSaasIamRoutes(app,{client:saasIamClient,enabled:saasEnabled}) : null;
+const saasAuthenticate = saasIamRoutes?.authenticate || unavailableSaasAuth;
+const saasCsrf = saasIamRoutes?.csrf || unavailableSaasCsrf;
+registerSaasRoutes(app, {
+  pool,
+  enabled: saasEnabled,
+  verificationPepper: saasEnabled ? secret("SAAS_VERIFICATION_PEPPER") : "disabled-not-used-disabled-not-used",
+  invitationPepper: saasEnabled ? optionalSecret("SAAS_INVITATION_PEPPER") : "",
+  loadInternalIdentity: saasAuthenticate,
+  requireInternalAdmin: requirePermission("tender.admin"),
+  csrf,
+  saasCsrf,
+  emailAdapter,
+  billingAdapter,
+  loginUrl: saasIamConfigured ? SAAS_LOGIN_PATH : "",
+  upgradeUrl: /^https:\/\//.test(String(process.env.SAAS_UPGRADE_URL || "")) ? process.env.SAAS_UPGRADE_URL : "",
+});
+registerTenantPortalRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf, storage: tenantStorage, invitationPepper: optionalSecret("SAAS_INVITATION_PEPPER"), emailAdapter });
 const uiAuth = { preHandler: requirePermission("tender.view_assigned") };
 app.get("/wb-holding-logo.png", uiAuth, async (_, r) =>
   r
@@ -573,6 +759,10 @@ app.get("/autopilot-navigation.js", uiAuth, async (_, r) =>
 app.get("/autopilot-navigation.css", uiAuth, async (_, r) =>
   sendAsset(r, "autopilot-navigation.css", "text/css"),
 );
+// PDF.js is immutable public vendor code. Keeping it independent of the UI
+// session prevents a page opened before session rotation from failing its
+// later dynamic import; no tender or user data is served by these routes.
+registerLocalPdfJsAssets(app);
 app.get("/assets/:digest/:name", uiAuth, async (req, reply) => {
   const current = assetMeta.get(req.params.name);
   if (!current || req.params.digest !== version(req.params.name))
@@ -593,7 +783,7 @@ app.get("/ui.js", uiAuth, async (_, r) =>
   r
     .type("text/javascript")
     .send(
-      `const API=${JSON.stringify(apiBase)},tabs=[["overview","Übersicht"],["tenders","Ausschreibungen"],["management-inbox","Management-Inbox"],["scheduler","Schedulerstatus"],["favorites","Favoriten"],["deadlines","Fristen"],["tasks","Aufgaben"],["reminders","Wiedervorlagen"],["sources","Quellen"],["imports","Importprotokolle"],["deadletters","Dead Letters"]],nav=document.querySelector("#tabs"),out=document.querySelector("#content"),q=document.querySelector("#q"),source=document.querySelector("#source");let current="overview";const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));async function get(path){const r=await fetch(API+path,{credentials:"same-origin"});if(!r.ok)throw new Error(r.status===403?"Keine Berechtigung":r.status===401?"Anmeldung erforderlich":"Abruf fehlgeschlagen ("+r.status+")");return r.json()}function cards(rows){return '<div class="grid">'+rows.map(x=>'<article class="card"><h2>'+esc(x.title||x.tender_title||x.name||x.code||"Eintrag")+'</h2><p>'+esc(x.buyer||x.interface||x.company_name||"")+'</p><p class="muted">Quelle: '+esc(x.source_code||x.code||"–")+' · Frist: '+esc(x.offer_deadline||x.due_at||x.remind_at||"–")+'</p><p>'+esc(x.decision||x.workflow_status||"")+'</p>'+(x.tender_id||x.id&&x.source_code?'<button data-detail="'+esc(x.tender_id||x.id)+'">Details</button>':"")+'</article>').join("")+'</div>'}async function load(){out.innerHTML='<p>Wird geladen …</p>';try{let d;if(["overview","tenders","deadlines"].includes(current)){d=await get("/tenders?q="+encodeURIComponent(q.value)+"&source="+encodeURIComponent(source.value));out.innerHTML=cards(current==="deadlines"?d.items.filter(x=>x.offer_deadline):d.items)}else if(current==="management-inbox"){d=await get("/management-inbox?source="+encodeURIComponent(source.value)+"&sort=relevance");out.innerHTML=cards(d.items)}else if(current==="scheduler"){d=await get("/scheduler/status");out.innerHTML='<div class="panel"><table><tbody>'+d.sources.map(x=>'<tr><td>'+esc(x.source_code)+'</td><td>'+esc(x.kill_switch?"GESPERRT":x.enabled?"AKTIV":"INAKTIV")+'</td><td>'+esc(x.next_run_at||"Nicht geplant")+'</td></tr>').join("")+'</tbody></table></div>'}else if(current==="favorites")d=await get("/favorites"),out.innerHTML=cards(d.items);else if(current==="tasks")d=await get("/tasks"),out.innerHTML=cards(d.items);else if(current==="reminders")d=await get("/reminders"),out.innerHTML=cards(d.items);else{d=await get("/"+current);out.innerHTML='<div class="panel"><table><tbody>'+d.items.map(x=>'<tr><td>'+esc(x.code||x.source_code||x.external_id||x.id)+'</td><td>'+esc(x.name||x.status||x.error_code||"")+'</td><td>'+esc(x.last_success_at||x.started_at||x.created_at||"")+'</td></tr>').join("")+'</tbody></table></div>'}}catch(e){out.innerHTML='<p class="error" role="alert">'+esc(e.message)+'</p>'}}async function detail(id){try{const x=await get("/tenders/"+encodeURIComponent(id));out.innerHTML='<article class="panel"><button id="back">← Zurück</button><h1>'+esc(x.title)+'</h1><p>'+esc(x.buyer)+'</p><p>'+esc(x.description||"Keine Beschreibung vorhanden.")+'</p><dl><dt>Quelle</dt><dd><a rel="noopener noreferrer" target="_blank" href="'+esc(x.source_url)+'">'+esc(x.source_code)+'</a></dd><dt>Frist</dt><dd>'+esc(x.offer_deadline||"Nicht angegeben")+'</dd><dt>CPV</dt><dd>'+esc((x.cpv_codes||[]).join(", ")||"Nicht angegeben")+'</dd></dl></article>';document.querySelector("#back").onclick=load}catch(e){out.innerHTML='<p class="error">'+esc(e.message)+'</p>'}}tabs.forEach(([id,label])=>{const b=document.createElement("button");b.textContent=label;b.onclick=()=>{current=id;[...nav.children].forEach(x=>x.classList.remove("active"));b.classList.add("active");load()};nav.append(b)});nav.firstChild.classList.add("active");out.addEventListener("click",e=>{const id=e.target.dataset.detail;if(id)detail(id)});q.oninput=load;source.onchange=load;load();`,
+      `const API=${JSON.stringify(apiBase)},tabs=[["overview","Übersicht"],["tenders","Ausschreibungen"],["management-inbox","Management-Inbox"],["scheduler","Schedulerstatus"],["favorites","Favoriten"],["deadlines","Fristen"],["tasks","Aufgaben"],["reminders","Wiedervorlagen"],["sources","Quellen"],["imports","Importprotokolle"],["deadletters","Dead Letters"]],nav=document.querySelector("#tabs"),out=document.querySelector("#content"),q=document.querySelector("#q"),source=document.querySelector("#source");let current="overview";const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));async function get(path){const r=await fetch(API+path,{credentials:"same-origin"});if(!r.ok)throw new Error(r.status===403?"Keine Berechtigung":r.status===401?"Anmeldung erforderlich":"Abruf fehlgeschlagen ("+r.status+")");return r.json()}function cards(rows){return '<div class="grid">'+rows.map(x=>'<article class="card"><h2>'+esc(x.title||x.tender_title||x.name||x.code||"Eintrag")+'</h2><p>'+esc(x.buyer||x.interface||x.company_name||"")+'</p><p class="muted">Quelle: '+esc(x.source_code||x.code||"–")+' · Veröffentlicht: '+esc(x.publication_date||"–")+' · Frist: '+esc(x.offer_deadline||x.due_at||x.remind_at||"–")+'</p><p>Gewerk: '+esc(x.service_line||"Prüfgruppe")+'</p><p>'+esc(x.decision||x.workflow_status||x.relevance_status||"")+'</p>'+(x.tender_id||x.id&&x.source_code?'<button data-detail="'+esc(x.tender_id||x.id)+'">Details</button>':"")+'</article>').join("")+'</div>'}async function load(){out.innerHTML='<p>Wird geladen …</p>';try{let d;if(["overview","tenders","deadlines"].includes(current)){d=await get("/tenders?q="+encodeURIComponent(q.value)+"&source="+encodeURIComponent(source.value));out.innerHTML=cards(current==="deadlines"?d.items.filter(x=>x.offer_deadline):d.items)}else if(current==="management-inbox"){d=await get("/management-inbox?source="+encodeURIComponent(source.value)+"&sort=relevance");out.innerHTML=cards(d.items)}else if(current==="scheduler"){d=await get("/scheduler/status");out.innerHTML='<div class="panel"><table><tbody>'+d.sources.map(x=>'<tr><td>'+esc(x.source_code)+'</td><td>'+esc(x.kill_switch?"GESPERRT":x.enabled?"AKTIV":"INAKTIV")+'</td><td>'+esc(x.next_run_at||"Nicht geplant")+'</td></tr>').join("")+'</tbody></table></div>'}else if(current==="favorites")d=await get("/favorites"),out.innerHTML=cards(d.items);else if(current==="tasks")d=await get("/tasks"),out.innerHTML=cards(d.items);else if(current==="reminders")d=await get("/reminders"),out.innerHTML=cards(d.items);else{d=await get("/"+current);out.innerHTML='<div class="panel"><table><tbody>'+d.items.map(x=>'<tr><td>'+esc(x.code||x.source_code||x.external_id||x.id)+'</td><td>'+esc(x.name||x.status||x.error_code||"")+'</td><td>'+esc(x.last_success_at||x.started_at||x.created_at||"")+'</td></tr>').join("")+'</tbody></table></div>'}}catch(e){out.innerHTML='<p class="error" role="alert">'+esc(e.message)+'</p>'}}async function detail(id){try{const x=await get("/tenders/"+encodeURIComponent(id));out.innerHTML='<article class="panel"><button id="back">← Zurück</button><h1>'+esc(x.title)+'</h1><p>'+esc(x.buyer)+'</p><p>'+esc(x.description||"Keine Beschreibung vorhanden.")+'</p><dl><dt>Quelle</dt><dd><a rel="noopener noreferrer" target="_blank" href="'+esc(x.source_url)+'">'+esc(x.source_code)+'</a></dd><dt>Frist</dt><dd>'+esc(x.offer_deadline||"Nicht angegeben")+'</dd><dt>CPV</dt><dd>'+esc((x.cpv_codes||[]).join(", ")||"Nicht angegeben")+'</dd></dl></article>';document.querySelector("#back").onclick=load}catch(e){out.innerHTML='<p class="error">'+esc(e.message)+'</p>'}}tabs.forEach(([id,label])=>{const b=document.createElement("button");b.textContent=label;b.onclick=()=>{current=id;[...nav.children].forEach(x=>x.classList.remove("active"));b.classList.add("active");load()};nav.append(b)});nav.firstChild.classList.add("active");out.addEventListener("click",e=>{const id=e.target.dataset.detail;if(id)detail(id)});q.oninput=load;source.onchange=load;load();`,
     ),
 );
 app.get("/inbox-regions.js", uiAuth, async (_, r) =>
@@ -610,14 +800,14 @@ app.get("/", uiAuth, async (_, r) =>
   r
     .type("text/html")
     .send(
-      `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ausschreibungen · WB Plattform</title><link rel="stylesheet" href="${uiBase}/ui.css"><link rel="stylesheet" href="${uiBase}/contrast.css"><script src="${uiBase}/assets/${version("ui.js")}/ui.js" defer></script></head><body data-api="${apiBase}"><header><span class="brand"><img src="${uiBase}/wb-holding-logo.png" alt="WB-Holding AG"><strong>WB Plattform · Ausschreibungen</strong></span><a href="/admin/">Adminportal</a></header><main><h1>Ausschreibungen</h1><p class="muted">Internes, geschütztes Enterprise-Modul mit geprüften öffentlichen Vergabedaten.</p><nav id="tabs" class="tabs" aria-label="Ausschreibungsbereiche"></nav><section class="toolbar"><label>Suche <input id="q" autocomplete="off"></label><label>Quelle <select id="source"><option value="">Alle</option><option>TED</option><option>DOE</option></select></label></section><section id="content" aria-live="polite"></section></main></body></html>`,
+      `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="wb-tender-release" content="${TENDER_RELEASE}"><title>Ausschreibungen · WB Plattform</title><link rel="stylesheet" href="${uiBase}/ui.css"><link rel="stylesheet" href="${uiBase}/contrast.css"><script src="${uiBase}/assets/${version("ui.js")}/ui.js" defer></script></head><body data-api="${apiBase}"><header><span class="brand"><img src="${uiBase}/wb-holding-logo.png" alt="WB-Holding AG"><strong>WB Plattform · Ausschreibungen</strong></span><a href="/admin/">Adminportal</a></header><main><h1>Ausschreibungen</h1><p class="muted">Internes, geschütztes Enterprise-Modul mit geprüften öffentlichen Vergabedaten.</p><nav id="tabs" class="tabs" aria-label="Ausschreibungsbereiche"></nav><section class="toolbar"><label>Suche <input id="q" autocomplete="off"></label><label>Quelle <select id="source"><option value="">Alle</option><option>TED</option><option>DOE</option></select></label></section><section id="content" aria-live="polite"></section></main></body></html>`,
     ),
 );
 const autopilotPage=async (_, r) =>
   r
     .type("text/html")
     .send(
-      `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tender-Autopilot · WB Plattform</title><link rel="stylesheet" href="${uiBase}/ui.css"><link rel="stylesheet" href="${uiBase}/contrast.css"><link rel="stylesheet" href="${uiBase}/assets/${version("autopilot-navigation.css")}/autopilot-navigation.css"><script src="${uiBase}/assets/${version("autopilot-navigation.js")}/autopilot-navigation.js" defer></script></head><body data-base="${uiBase}" data-api="${apiBase}"><header><span class="brand"><img src="${uiBase}/wb-holding-logo.png" alt="WB-Holding AG"><strong>WB Plattform · Tender-Autopilot</strong></span><a href="${uiBase}/">Ausschreibungen</a></header><main><h1>Tender-Autopilot</h1><p class="muted">Interne Vorbereitung. Externe Portal- und Abgabefunktionen sind durch HTTP 423 gesperrt.</p><nav id="autopilot-nav" class="tabs" aria-label="Autopilot-Bereiche"></nav><section id="autopilot-content" aria-live="polite"><p>Ansicht wird geladen …</p></section></main></body></html>`,
+      `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="wb-tender-release" content="${TENDER_RELEASE}"><title>Tender-Autopilot · WB Plattform</title><link rel="stylesheet" href="${uiBase}/ui.css"><link rel="stylesheet" href="${uiBase}/contrast.css"><link rel="stylesheet" href="${uiBase}/assets/${version("autopilot-navigation.css")}/autopilot-navigation.css"><script src="${uiBase}/assets/${version("autopilot-navigation.js")}/autopilot-navigation.js" defer></script></head><body data-base="${uiBase}" data-api="${apiBase}"><header><span class="brand"><img src="${uiBase}/wb-holding-logo.png" alt="WB-Holding AG"><strong>WB Plattform · Tender-Autopilot</strong></span><a href="${uiBase}/">Ausschreibungen</a></header><main><h1>Tender-Autopilot</h1><p class="muted">Interne Vorbereitung. Externe Portal- und Abgabefunktionen sind durch HTTP 423 gesperrt.</p><nav id="autopilot-nav" class="tabs" aria-label="Autopilot-Bereiche"></nav><section id="autopilot-content" aria-live="polite"><p>Ansicht wird geladen …</p></section></main></body></html>`,
     );
 app.get("/favicon.ico", async (_, reply) => reply.code(204).send());
 app.get("/autopilot", uiAuth, autopilotPage);
