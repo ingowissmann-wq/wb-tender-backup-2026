@@ -6,12 +6,33 @@ const item=(key,label,value,unit="EUR",source="Kalkulation")=>present(value)?{ke
 const compact=items=>items.filter(Boolean);
 const sourceLabel=value=>value==="COMPANY_PROFILE"?"Aktives Gesellschaftsprofil":value==="TENDER_DOCUMENT"?"Vergabeunterlagen":value||"Kalkulation";
 
-export function buildCalculationViewModel({tender,company,lot,calculation,managementOutput,approval,documents=[],snapshotId=null}) {
+const documentEvidence = source => source?.type==="VERIFIED_PROCUREMENT_DOCUMENT"
+  ? [{documentId:source.documentId,documentSha256:source.documentSha256,location:source.location}]
+  : source?.type==="VERIFIED_PROCUREMENT_DOCUMENT_SET"&&Array.isArray(source.evidence)
+    ? source.evidence : [];
+
+function exactSnapshotSources(snapshot,documents=[]) {
+  if (!snapshot) return [];
+  const documentById=new Map(documents.map(document=>[String(document.id),document]));
+  const facts=Array.isArray(snapshot.fact_records)?snapshot.fact_records:[];
+  const parameters=Array.isArray(snapshot.parameter_records)?snapshot.parameter_records:[];
+  const documentSources=facts.flatMap(fact=>documentEvidence(fact.source).map(evidence=>{
+    const document=documentById.get(String(evidence.documentId)),location=evidence.location||{};
+    return {type:"Dokument",fact:fact.key||null,classification:fact.classification||null,name:document?.filename||"Vergabeunterlage",documentId:evidence.documentId||null,page:location.page??null,table:location.table??null,worksheet:location.worksheet??null,row:location.row??null,rowStart:location.rowStart??null,rowEnd:location.rowEnd??null,cell:location.cell??null,originalValue:location.originalValue??null,normalizedValue:fact.value??null,unit:fact.unit??null,sha256:evidence.documentSha256||null,url:document?.source_url||null};
+  }));
+  const decisionSources=facts.filter(fact=>fact?.source?.type==="EXPLICIT_MANAGEMENT_INPUT").map(fact=>({type:"Fallentscheidung",fact:fact.key||null,classification:fact.classification||null,name:"Freigegebene Fallentscheidung",inputId:fact.source.inputId||null,approvedBy:fact.source.approvedBy||null,approvedAt:fact.source.approvedAt||null,value:fact.value??null,unit:fact.unit??null}));
+  const parameterSources=parameters.map(parameter=>({type:"Gesellschaftsparameter",fact:parameter.key||null,classification:parameter.classification||null,name:parameter.key||"Gesellschaftsparameter",versionId:parameter.versionId||null,approvedBy:parameter.approvedBy||null,approvedAt:parameter.approvedAt||null,value:parameter.value??null,unit:parameter.unit??null}));
+  return [...documentSources,...decisionSources,...parameterSources];
+}
+
+export function buildCalculationViewModel({tender,company,lot,calculation,managementOutput,approval,documents=[],calculationInputSnapshot=null,snapshotId=null}) {
   const totals=calculation?.totals||{}, provenance=totals.provenance||{}, recommendation=managementOutput?.payload?.recommendation||{};
   const total=number(totals.totalPrice),db1=number(totals.db1),db2=number(totals.db2),db3=number(totals.db3);
   const missing=Array.isArray(totals.missingPositions)&&totals.missingPositions.length?totals.missingPositions:Array.isArray(calculation?.blocked_reasons)?calculation.blocked_reasons:[];
   const directCosts=total!==null&&db1!==null?total-db1:null,indirectCosts=db1!==null&&db2!==null?db1-db2:null,administrationRisk=db2!==null&&db3!==null?db2-db3:null;
-  const sourceKeys=[...new Set(Object.values(provenance).map(x=>x?.source).filter(Boolean))];
+  const sourceKeys=[...new Set(Object.values(provenance).map(x=>x?.source).filter(Boolean))],exactSources=exactSnapshotSources(calculationInputSnapshot,documents);
+  const exactSnapshotBound=Boolean(calculationInputSnapshot&&String(calculation.calculation_input_snapshot_id||"")===String(calculationInputSnapshot.id||""));
+  const exactManagementBound=Boolean(managementOutput&&String(managementOutput.calculation_id||"")===String(calculation.id||""));
   const payload=managementOutput?.payload||{},capacity=payload.capacity||{},awardChance=payload.awardChance||{},evidence=payload.evidence||{},nextSteps=Array.isArray(payload.nextSteps)?payload.nextSteps:[];
   const share=value=>total&&number(value)!==null?number(value)/total*100:null;
   const costBreakdown=compact([
@@ -34,13 +55,13 @@ export function buildCalculationViewModel({tender,company,lot,calculation,manage
     marginTargets:{db1:number(totals.db1TargetPercent??totals.targetDb1Percent),db2:number(totals.db2TargetPercent??totals.targetDb2Percent),db3:number(totals.db3TargetPercent??totals.targetDb3Percent)},
     capacitySummary:{status:capacity.status||null,personnelNeed:number(capacity.personnelNeed??totals.fte),availableCapacity:number(capacity.availableCapacity),coveragePercent:number(capacity.coveragePercent),siteManagement:number(capacity.siteManagement),vehicles:number(capacity.vehicles),equipment:number(capacity.equipment),basis:capacity.status==="AUS_EFFECTIVE_PROFILE_GEBUNDEN"?"Die Kapazitätsbewertung basiert auf dem aktuell freigegebenen Unternehmensprofil.":null},
     awardChanceSummary:{value:number(awardChance.value),confidence:awardChance.confidence||null,available:number(awardChance.value)!==null&&!awardChance.invented,reason:number(awardChance.value)===null?"Es liegen nicht genügend autoritative Vergleichs- oder Wettbewerbsdaten vor.":null},
-    evidenceSummary:{profileComplete:evidence.profileComplete===true,missing:Array.isArray(evidence.missing)?evidence.missing:[],documentComplete:missing.length===0,sourceCount:documents.length,calculationBasisComplete:calculation.status==="CALCULATED_REAL"},
+    evidenceSummary:{profileComplete:evidence.profileComplete===true,missing:Array.isArray(evidence.missing)?evidence.missing:[],documentComplete:missing.length===0&&exactSnapshotBound,sourceCount:exactSources.length,calculationBasisComplete:calculation.status==="CALCULATED_REAL"&&exactSnapshotBound&&exactManagementBound,inputSnapshotBound:exactSnapshotBound,managementOutputBound:exactManagementBound},
     openPoints:[...missing,...(Array.isArray(recommendation.requiredActions)?recommendation.requiredActions:[])].map((x,index)=>typeof x==="object"?{label:x.field||x.label||`Offener Punkt ${index+1}`,area:x.area||x.category||"Kalkulationsgrundlage",impact:x.impact||x.reason||"Die finale Entscheidungsreife kann betroffen sein.",action:x.nextAction||x.action||"Fachlich prüfen und vervollständigen.",priority:x.priority||"HIGH"}:{label:String(x),area:"Kalkulationsgrundlage",impact:"Die finale Entscheidungsreife kann betroffen sein.",action:"Fachlich prüfen und vervollständigen.",priority:"HIGH"}).filter((x,index,array)=>array.findIndex(y=>y.label===x.label)===index),
     requiredActions:{items:Array.isArray(recommendation.requiredActions)?recommendation.requiredActions:[],nextSteps:nextSteps.map(x=>({action:x.action,priority:x.priority}))},
     recommendation:{decision:recommendation.decision||null,reason:recommendation.reason||null},
-    sources:[...documents.map(d=>({type:"Dokument",name:d.filename||d.display_name||"Vergabeunterlage",page:d.provenance?.page??null,table:d.provenance?.table??null,cell:d.provenance?.cell??null,originalValue:d.provenance?.originalValue??null,normalizedValue:d.provenance?.normalizedValue??null,sha256:d.payload_sha256||d.sha256||null,url:d.source_url||null})),...sourceKeys.map(key=>({type:sourceLabel(key),name:sourceLabel(key),page:null,table:null,cell:null,originalValue:null,normalizedValue:null,sha256:key==="COMPANY_PROFILE"?managementOutput?.payload?.provenance?.profileRevision:key==="TENDER_DOCUMENT"?managementOutput?.document_revision:null,url:null}))],
+    sources:exactSources.length?exactSources:exactSnapshotBound?sourceKeys.map(key=>({type:sourceLabel(key),name:sourceLabel(key),page:null,table:null,cell:null,originalValue:null,normalizedValue:null,sha256:key==="COMPANY_PROFILE"?managementOutput?.payload?.provenance?.profileRevision:key==="TENDER_DOCUMENT"?managementOutput?.document_revision:null,url:null})):[],
     approval:{id:approval?.id||null,status:approval?.status||null,eligible:Boolean(approval&&approval.status==="REQUESTED"&&(!approval.expires_at||new Date(approval.expires_at)>new Date())),expiresAt:approval?.expires_at||null,requestedAt:approval?.created_at||null,binding:approval?.payload_manifest||null,recommendation:recommendation.decision||null},
-    technicalDetails:{calculationId:calculation.id,snapshotId,companyId:calculation.company_id,calculationHash:totals.calculationHash||null,managementOutputId:managementOutput?.id||null,auditId:approval?.audit_id||null,jobId:payload.provenance?.jobId||null,correlationId:payload.provenance?.correlationId||null,profileRevision:payload.provenance?.profileRevision||null,profileSnapshotId:payload.provenance?.profileSnapshotId||null,calculationVersion:payload.provenance?.calculationVersion||calculation.version,managementOutputVersion:payload.provenance?.managementOutputVersion||null,documentRevision:managementOutput?.document_revision||payload.provenance?.documentRevision||null,scenario:calculation.scenario,rawTotals:totals,rawManagementOutput:payload,provenance}
+    technicalDetails:{calculationId:calculation.id,snapshotId,calculationInputSnapshotSha256:calculationInputSnapshot?.snapshot_sha256||null,calculationContractVersion:calculationInputSnapshot?.contract_version||null,calculationContractState:calculationInputSnapshot?.contract_state||null,inputSnapshotBound:exactSnapshotBound,managementOutputBound:exactManagementBound,companyId:calculation.company_id,calculationHash:totals.calculationHash||null,managementOutputId:managementOutput?.id||null,managementOutputSha256:managementOutput?.output_sha256||null,auditId:approval?.audit_id||null,jobId:payload.provenance?.jobId||null,correlationId:payload.provenance?.correlationId||null,profileRevision:payload.provenance?.profileRevision||null,profileSnapshotId:payload.provenance?.profileSnapshotId||null,calculationVersion:payload.provenance?.calculationVersion||calculation.version,managementOutputVersion:payload.provenance?.managementOutputVersion||null,documentRevision:managementOutput?.document_revision||payload.provenance?.documentRevision||null,scenario:calculation.scenario,rawTotals:totals,rawManagementOutput:payload,provenance}
   };
   return {...view,tenderSummary:view.managementHeader,financialSummary:view.calculationSummary,personnelSummary:view.personnelCosts,operationalSummary:view.cleaning,marginSummary:view.margins,riskSummary:view.risks,sourceReferences:view.sources,approvalSummary:view.approval,technicalAudit:view.technicalDetails};
 }
