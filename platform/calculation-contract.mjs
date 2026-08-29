@@ -20,6 +20,7 @@ const EXECUTABLE_STATES = new Set([
   CALCULATION_CONTRACT_STATES.SHADOW,
 ]);
 const DOCUMENT_SOURCE = "VERIFIED_PROCUREMENT_DOCUMENT";
+const DOCUMENT_SET_SOURCE = "VERIFIED_PROCUREMENT_DOCUMENT_SET";
 const MANAGEMENT_SOURCE = "EXPLICIT_MANAGEMENT_INPUT";
 const DERIVATION_SOURCE = "DETERMINISTIC_DERIVATION";
 const PARAMETER_SOURCE = "ACTIVE_APPROVED_EXACT_CONFIGURATION_SCOPE";
@@ -43,13 +44,33 @@ const exactFactScope = (left = {}, right = {}) =>
 const hasExactLocator = location => Boolean(
   location && typeof location === "object" && (
     Number.isInteger(location.page) && location.page > 0 ||
-    supplied(location.worksheet) && (Number.isInteger(location.row) && location.row > 0 || supplied(location.cell)) ||
+    supplied(location.worksheet) && (
+      Number.isInteger(location.row) && location.row > 0 ||
+      supplied(location.cell) ||
+      Number.isInteger(location.rowStart) && location.rowStart > 0 &&
+        Number.isInteger(location.rowEnd) && location.rowEnd >= location.rowStart
+    ) ||
     supplied(location.jsonPointer)
   )
 );
 const isRange = value => value && typeof value === "object" && !Array.isArray(value) && (
   supplied(value.minimum) || supplied(value.maximum) || supplied(value.min) || supplied(value.max)
 );
+
+const validateDocumentEvidence = ({evidence, fact, fingerprints, errors}) => {
+  if (!Array.isArray(evidence) || !evidence.length) {
+    errors.push({code: "FACT_DOCUMENT_EVIDENCE_EMPTY", fact});
+    return;
+  }
+  for (const item of evidence) {
+    if (!fingerprints.has(String(item?.documentId)))
+      errors.push({code: "FACT_DOCUMENT_FINGERPRINT_MISSING", fact, documentId: item?.documentId || null});
+    else if (fingerprints.get(String(item.documentId)) !== String(item.documentSha256 || "").toLowerCase())
+      errors.push({code: "FACT_DOCUMENT_HASH_MISMATCH", fact, documentId: item.documentId});
+    if (!hasExactLocator(item?.location))
+      errors.push({code: "FACT_EXACT_LOCATION_MISSING", fact, documentId: item?.documentId || null});
+  }
+};
 
 export function validateCalculationContractInput(input = {}) {
   const errors = [];
@@ -91,11 +112,14 @@ export function validateCalculationContractInput(input = {}) {
 
     const source = record.source || {};
     if (source.type === DOCUMENT_SOURCE) {
-      if (!fingerprints.has(String(source.documentId)))
-        errors.push({code: "FACT_DOCUMENT_FINGERPRINT_MISSING", fact: key});
-      else if (fingerprints.get(String(source.documentId)) !== String(source.documentSha256 || "").toLowerCase())
-        errors.push({code: "FACT_DOCUMENT_HASH_MISMATCH", fact: key});
-      if (!hasExactLocator(source.location)) errors.push({code: "FACT_EXACT_LOCATION_MISSING", fact: key});
+      validateDocumentEvidence({
+        evidence: [{documentId: source.documentId, documentSha256: source.documentSha256, location: source.location}],
+        fact: key,
+        fingerprints,
+        errors,
+      });
+    } else if (source.type === DOCUMENT_SET_SOURCE) {
+      validateDocumentEvidence({evidence: source.evidence, fact: key, fingerprints, errors});
     } else if (source.type === MANAGEMENT_SOURCE) {
       if (![source.inputId, source.approvedBy, source.approvedAt].every(supplied))
         errors.push({code: "MANAGEMENT_APPROVAL_INCOMPLETE", fact: key});

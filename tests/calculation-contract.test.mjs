@@ -59,6 +59,42 @@ test("document facts require exact source location and the matching fingerprint"
   assert.ok(validation.errors.some(error => error.code === "FACT_EXACT_LOCATION_MISSING"));
 });
 
+test("an aggregate fact may bind multiple exact document locations", () => {
+  const secondSha = "b".repeat(64);
+  const aggregate = {
+    key: "productiveHours", value: 28023.66, unit: "HOURS", scope,
+    source: {
+      type: "VERIFIED_PROCUREMENT_DOCUMENT_SET",
+      evidence: [
+        {documentId: "document-1", documentSha256: sha, location: {worksheet: "P4, Aufmaß", rowStart: 12, rowEnd: 917}},
+        {documentId: "document-2", documentSha256: secondSha, location: {page: 7}},
+      ],
+    },
+  };
+  const validation = validateCalculationContractInput({
+    scope, engineInput,
+    documentFingerprints: [...documentFingerprints, {documentId: "document-2", sha256: secondSha}],
+    parameterRecords,
+    factRecords: [aggregate, fact("duration", 24, "MONTHS")],
+  });
+  assert.equal(validation.valid, true);
+});
+
+test("every member of a document evidence set needs its matching hash and exact locator", () => {
+  const validation = validateCalculationContractInput({
+    scope, engineInput, documentFingerprints, parameterRecords,
+    factRecords: [{
+      key: "productiveHours", value: 28023.66, unit: "HOURS", scope,
+      source: {type: "VERIFIED_PROCUREMENT_DOCUMENT_SET", evidence: [
+        {documentId: "document-1", documentSha256: "b".repeat(64), location: {worksheet: "P4, Aufmaß"}},
+      ]},
+    }, fact("duration", 24, "MONTHS")],
+  });
+  const codes = validation.errors.map(error => error.code);
+  assert.ok(codes.includes("FACT_DOCUMENT_HASH_MISMATCH"));
+  assert.ok(codes.includes("FACT_EXACT_LOCATION_MISSING"));
+});
+
 test("ranges, option terms and cross-scope facts cannot enter production", () => {
   const validation = validateCalculationContractInput({
     scope,

@@ -27,6 +27,10 @@ test("Munich shadow keeps C22 nonpersistent and binds C23 to the approved scope"
   assert.match(runner, /NONPERSISTENT_CASE_APPROVED_SHADOW_INPUT/);
   assert.match(runner, /ACTIVE_APPROVED_EXACT_CONFIGURATION_SCOPE/);
   assert.match(runner, /C22Persistence: "NONE_CASE_SCOPED_SHADOW_ONLY"/);
+  assert.match(runner, /createCalculationContractSnapshot/);
+  assert.match(runner, /executeCalculationContractSnapshot/);
+  assert.match(runner, /VERIFIED_PROCUREMENT_DOCUMENT_SET/);
+  assert.doesNotMatch(runner, /calculateSectorTender/);
   assert.doesNotMatch(runner, /INSERT INTO|UPDATE tender\.|DELETE FROM/);
 });
 

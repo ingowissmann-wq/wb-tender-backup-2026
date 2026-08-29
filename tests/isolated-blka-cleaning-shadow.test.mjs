@@ -14,6 +14,10 @@ test("BLKA grouped shadow binds the exact approved business values and base term
   assert.match(runner, /NONPERSISTENT_CASE_APPROVED_GROUPED_SHADOW_INPUT/);
   assert.match(runner, /MANAGEMENT_REVIEW_REQUIRED_PARTIAL/);
   assert.match(runner, /externalWrite: false/);
+  assert.match(runner, /createCalculationContractSnapshot/);
+  assert.match(runner, /executeCalculationContractSnapshot/);
+  assert.match(runner, /VERIFIED_PROCUREMENT_DOCUMENT_SET/);
+  assert.doesNotMatch(runner, /calculateSectorTender/);
 });
 
 test("BLKA grouped replay is clone-only, fingerprinted and submission inert", () => {
