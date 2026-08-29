@@ -22,6 +22,15 @@ test("approved C23 activation fails closed on scope, actor, migration and prior-
   assert.match(script, /C23_active_state_must_be_empty/);
 });
 
+test("approved C23 activation uses the historically proven MFA board identity", () => {
+  assert.match(script, /approval_actor_id=fe93f980-5699-44f4-ad41-69d254dcaa9f/);
+  assert.match(script, /approval_actor_email=admin@wb-holding\.ag/);
+  assert.match(script, /user_row\.mfa_required=true/);
+  assert.match(script, /role_row\.code='board'/);
+  assert.match(script, /audit\.action='BOARD_SELF_APPROVED'/);
+  assert.doesNotMatch(script, /admin@wb-tender\.de/);
+});
+
 test("approved C23 activation preserves protected fingerprints and records approval provenance", () => {
   assert.match(script, /protected_fingerprint/);
   assert.match(script, /BOARD_SELF_APPROVED/);

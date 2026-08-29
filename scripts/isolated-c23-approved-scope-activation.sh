@@ -9,7 +9,8 @@ database_user=${RESTORE_DATABASE_USER:-restore_admin}
 approved_value=1670
 approved_unit=HOURS_PER_YEAR
 approval_date=2026-08-29
-approval_actor_email=admin@wb-tender.de
+approval_actor_id=fe93f980-5699-44f4-ad41-69d254dcaa9f
+approval_actor_email=admin@wb-holding.ag
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 root=$(git -C "$script_dir/.." rev-parse --show-toplevel)
@@ -81,8 +82,13 @@ THEN 1 ELSE 0 END")
 test "$scope_match" = 1 || fail "active configuration scopes differ from the six approved scopes"
 
 actor_count=$(scalar "SELECT count(*) FROM iam.users user_row
-  WHERE lower(user_row.email)=lower('$approval_actor_email') AND user_row.active=true
-    AND EXISTS(SELECT 1 FROM iam.user_roles user_role JOIN iam.role_permissions role_permission ON role_permission.role_id=user_role.role_id JOIN iam.permissions permission_row ON permission_row.id=role_permission.permission_id WHERE user_role.user_id=user_row.id AND permission_row.code='tender.config.self_approve_activate')")
+  WHERE user_row.id='$approval_actor_id'::uuid
+    AND lower(user_row.email)=lower('$approval_actor_email')
+    AND user_row.active=true
+    AND user_row.mfa_required=true
+    AND EXISTS(SELECT 1 FROM iam.user_roles user_role JOIN iam.roles role_row ON role_row.id=user_role.role_id WHERE user_role.user_id=user_row.id AND role_row.code='board')
+    AND EXISTS(SELECT 1 FROM iam.user_roles user_role JOIN iam.role_permissions role_permission ON role_permission.role_id=user_role.role_id JOIN iam.permissions permission_row ON permission_row.id=role_permission.permission_id WHERE user_role.user_id=user_row.id AND permission_row.code='tender.config.self_approve_activate')
+    AND EXISTS(SELECT 1 FROM tender.configuration_audit audit WHERE audit.actor_id=user_row.id AND audit.action='BOARD_SELF_APPROVED')")
 test "$actor_count" = 1 || fail "expected exactly one active board self-approval actor for $approval_actor_email; found $actor_count"
 printf 'approved_scopes=6\napproval_actor=%s\napproved_C23=%s\napproved_unit=%s\napproval_date=%s\n' "$approval_actor_email" "$approved_value" "$approved_unit" "$approval_date"
 
@@ -121,8 +127,17 @@ BEGIN
 
   SELECT user_row.id INTO STRICT actor_id
   FROM iam.users user_row
-  WHERE lower(user_row.email)='admin@wb-tender.de'
+  WHERE user_row.id='fe93f980-5699-44f4-ad41-69d254dcaa9f'::uuid
+    AND lower(user_row.email)='admin@wb-holding.ag'
     AND user_row.active=true
+    AND user_row.mfa_required=true
+    AND EXISTS(
+      SELECT 1
+      FROM iam.user_roles user_role
+      JOIN iam.roles role_row ON role_row.id=user_role.role_id
+      WHERE user_role.user_id=user_row.id
+        AND role_row.code='board'
+    )
     AND EXISTS(
       SELECT 1
       FROM iam.user_roles user_role
@@ -130,6 +145,12 @@ BEGIN
       JOIN iam.permissions permission_row ON permission_row.id=role_permission.permission_id
       WHERE user_role.user_id=user_row.id
         AND permission_row.code='tender.config.self_approve_activate'
+    )
+    AND EXISTS(
+      SELECT 1
+      FROM tender.configuration_audit audit
+      WHERE audit.actor_id=user_row.id
+        AND audit.action='BOARD_SELF_APPROVED'
     );
 
   IF EXISTS(SELECT 1 FROM tender.configuration_active_parameters WHERE parameter_key='C23') THEN
