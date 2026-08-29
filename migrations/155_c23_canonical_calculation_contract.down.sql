@@ -1,6 +1,7 @@
 BEGIN;
 SET LOCAL lock_timeout='10s';
 SET LOCAL statement_timeout='120s';
+-- rollback identity: 0155-c23-canonical-calculation-contract-down
 SELECT pg_advisory_xact_lock(hashtextextended('wb-tender:migration:155-c23-canonical-calculation-contract-down',0));
 
 DELETE FROM iam.role_permissions binding
@@ -30,11 +31,7 @@ VALUES(
   )
 );
 
-INSERT INTO app.schema_migrations(version,description)
-VALUES(
-  '0155-c23-canonical-calculation-contract-down',
-  'Remove only the calculation sandbox role bindings introduced by migration 155 while preserving all business and configuration data'
-)
-ON CONFLICT(version) DO NOTHING;
+DELETE FROM app.schema_migrations
+WHERE version='0155-c23-canonical-calculation-contract';
 
 COMMIT;

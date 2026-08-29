@@ -20,6 +20,8 @@ test("migration 155 adds only the isolated sandbox authorization contract",()=>{
 test("migration 155 rollback preserves business and configuration data",()=>{
   assert.match(rollback,/DELETE FROM iam\.role_permissions/);
   assert.match(rollback,/NOT EXISTS\([\s\S]*iam\.role_permissions/);
+  assert.match(rollback,/DELETE FROM app\.schema_migrations\s+WHERE version='0155-c23-canonical-calculation-contract'/);
+  assert.doesNotMatch(rollback,/INSERT INTO app\.schema_migrations/);
   assert.doesNotMatch(rollback,/DELETE FROM tender\./);
   assert.doesNotMatch(rollback,/DROP TABLE|TRUNCATE/);
   assert.match(rollback,/businessRowsDeleted',false/);

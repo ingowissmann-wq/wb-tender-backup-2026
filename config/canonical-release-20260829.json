@@ -12,7 +12,7 @@
     {
       "version": "0155-c23-canonical-calculation-contract-down",
       "path": "migrations/155_c23_canonical_calculation_contract.down.sql",
-      "sha256": "820fa9efd95cc40de9aeb6b37ceb661c2582864f2ad71f3f1b2941133ce21abd"
+      "sha256": "75090eabb791ebc622d0b4c484e75ad8046a7161a638140438345461fe626df3"
     }
   ],
   "externalSubmissionEnabled": false,
