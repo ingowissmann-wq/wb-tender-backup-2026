@@ -5,7 +5,8 @@ set -Eeuo pipefail
 container=${RESTORE_CONTAINER:-wb-tender-restore-verify-20260828T211025Z-db}
 database=${RESTORE_DATABASE:-wb_platform_restore}
 database_user=${RESTORE_DATABASE_USER:-restore_admin}
-root=$(git rev-parse --show-toplevel)
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+root=$(git -C "$script_dir/.." rev-parse --show-toplevel)
 expected_tree=${EXPECTED_TREE:-}
 document_version='5e885f85-c63e-47c8-ac5e-ab6770f9d446'
 company_id='15c3c602-aa51-4dd4-adc1-3586dc82e523'

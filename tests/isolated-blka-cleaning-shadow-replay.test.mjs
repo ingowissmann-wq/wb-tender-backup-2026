@@ -8,6 +8,8 @@ const shell = fs.readFileSync(new URL("../scripts/isolated-blka-cleaning-shadow-
 test("BLKA shadow replay is exact, clone-only, cross-lot isolated and read-only", () => {
   assert.match(shell, /EXPECTED_COMMIT/);
   assert.match(shell, /EXPECTED_TREE/);
+  assert.match(shell, /BASH_SOURCE\[0\]/);
+  assert.match(shell, /git -C "\$script_dir\/\.\." rev-parse --show-toplevel/);
   assert.match(shell, /wb-tender-restore-verify-/);
   assert.match(shell, /published/);
   assert.match(shell, /before_fingerprint/);
