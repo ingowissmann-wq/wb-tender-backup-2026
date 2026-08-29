@@ -12,6 +12,7 @@ test("BLKA shadow replay is exact, clone-only, cross-lot isolated and read-only"
   assert.match(shell, /published/);
   assert.match(shell, /before_fingerprint/);
   assert.match(shell, /after_fingerprint/);
+  assert.equal((shell.match(/default_transaction_read_only=on/g) || []).length, 5);
   assert.match(shell, /approved_C22_C23_rows/);
   assert.match(shell, /CALCULATION_BLOCKED_MISSING_INPUT_C22_C23/);
   assert.doesNotMatch(shell, /\b(?:INSERT|UPDATE|DELETE|TRUNCATE|DROP|ALTER)\b/i);

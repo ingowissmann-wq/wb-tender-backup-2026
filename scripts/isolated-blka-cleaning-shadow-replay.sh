@@ -34,10 +34,10 @@ fingerprint_sql="SELECT concat_ws('|',
  (SELECT count(*) FROM tender.configuration_active_parameters),
  (SELECT count(*) FROM tender.external_action_receipts),
  (SELECT count(*) FROM app.schema_migrations WHERE version='0155-c23-canonical-calculation-contract'))"
-before=$(docker exec "$container" psql -U "$database_user" -d "$database" -X -At -v ON_ERROR_STOP=1 -c "$fingerprint_sql")
+before=$(docker exec -e 'PGOPTIONS=-c default_transaction_read_only=on' "$container" psql -U "$database_user" -d "$database" -X -At -v ON_ERROR_STOP=1 -c "$fingerprint_sql")
 printf 'before_fingerprint=%s\n' "$before"
 
-selected_lot_ids=$(docker exec "$container" psql -U "$database_user" -d "$database" -X -At -v ON_ERROR_STOP=1 -c "
+selected_lot_ids=$(docker exec -e 'PGOPTIONS=-c default_transaction_read_only=on' "$container" psql -U "$database_user" -d "$database" -X -At -v ON_ERROR_STOP=1 -c "
 SELECT id FROM tender.enrichment_lots
 WHERE enrichment_version_id='$document_version'::uuid AND lot_key='LOT-0001'
 ORDER BY id")
@@ -46,7 +46,7 @@ test "$(printf '%s\n' "$selected_lot_ids" | sed '/^$/d' | wc -l)" -eq 1 || {
   exit 66
 }
 
-approved_c22_c23=$(docker exec "$container" psql -U "$database_user" -d "$database" -X -At -v ON_ERROR_STOP=1 -c "
+approved_c22_c23=$(docker exec -e 'PGOPTIONS=-c default_transaction_read_only=on' "$container" psql -U "$database_user" -d "$database" -X -At -v ON_ERROR_STOP=1 -c "
 SELECT count(*)
 FROM tender.configuration_active_parameters active
 JOIN tender.configuration_changes change ON change.id=active.change_id
@@ -68,7 +68,7 @@ temporary=$(mktemp -d)
 cleanup(){ rm -f "$temporary/documents.json"; rmdir "$temporary" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
-docker exec "$container" psql -U "$database_user" -d "$database" -X -At -v ON_ERROR_STOP=1 -c "
+docker exec -e 'PGOPTIONS=-c default_transaction_read_only=on' "$container" psql -U "$database_user" -d "$database" -X -At -v ON_ERROR_STOP=1 -c "
 SELECT coalesce(jsonb_agg(jsonb_build_object(
   'id',id,
   'lot_id',lot_id,
@@ -88,7 +88,7 @@ printf '\n===== EXACT READ-ONLY SHADOW RESULT =====\n'
 node "$root/scripts/isolated-blka-cleaning-shadow.mjs" \
   "$temporary/documents.json" "$selected_lot_ids"
 
-after=$(docker exec "$container" psql -U "$database_user" -d "$database" -X -At -v ON_ERROR_STOP=1 -c "$fingerprint_sql")
+after=$(docker exec -e 'PGOPTIONS=-c default_transaction_read_only=on' "$container" psql -U "$database_user" -d "$database" -X -At -v ON_ERROR_STOP=1 -c "$fingerprint_sql")
 printf 'after_fingerprint=%s\n' "$after"
 test "$before" = "$after" || { printf 'ERROR: protected clone fingerprint changed\n' >&2; exit 68; }
 
