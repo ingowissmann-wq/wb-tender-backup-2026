@@ -14,6 +14,15 @@ export const CALCULATION_CONTRACT_STATES = Object.freeze({
   NEW_TENDER_TYPE_CANDIDATE: "NEW_TENDER_TYPE_CANDIDATE",
   QUARANTINED: "QUARANTINED",
 });
+export const CALCULATION_FACT_CLASSIFICATIONS = Object.freeze({
+  DOCUMENT_VERIFIED: "DOCUMENT_VERIFIED",
+  COMPANY_APPROVED: "COMPANY_APPROVED",
+  CASE_APPROVED: "CASE_APPROVED",
+  DETERMINISTIC_DERIVED: "DETERMINISTIC_DERIVED",
+  CONFLICTING_EVIDENCE: "CONFLICTING_EVIDENCE",
+  MISSING_INPUT: "MISSING_INPUT",
+  OUTSIDE_ALLOWED_RANGE: "OUTSIDE_ALLOWED_RANGE",
+});
 
 const EXECUTABLE_STATES = new Set([
   CALCULATION_CONTRACT_STATES.READY,
@@ -25,6 +34,11 @@ const MANAGEMENT_SOURCE = "EXPLICIT_MANAGEMENT_INPUT";
 const DERIVATION_SOURCE = "DETERMINISTIC_DERIVATION";
 const PARAMETER_SOURCE = "ACTIVE_APPROVED_EXACT_CONFIGURATION_SCOPE";
 const SHA256 = /^[a-f0-9]{64}$/i;
+const BLOCKING_FACT_CLASSIFICATIONS = new Set([
+  CALCULATION_FACT_CLASSIFICATIONS.CONFLICTING_EVIDENCE,
+  CALCULATION_FACT_CLASSIFICATIONS.MISSING_INPUT,
+  CALCULATION_FACT_CLASSIFICATIONS.OUTSIDE_ALLOWED_RANGE,
+]);
 
 const stable = value => {
   if (Array.isArray(value)) return value.map(stable);
@@ -111,7 +125,13 @@ export function validateCalculationContractInput(input = {}) {
       errors.push({code: "OPTION_TERM_CANNOT_BE_BASE_TERM", fact: key});
 
     const source = record.source || {};
+    if (mode !== "MANUAL_SANDBOX" && !Object.values(CALCULATION_FACT_CLASSIFICATIONS).includes(record.classification))
+      errors.push({code: "FACT_CLASSIFICATION_MISSING_OR_UNKNOWN", fact: key});
+    if (BLOCKING_FACT_CLASSIFICATIONS.has(record.classification))
+      errors.push({code: "FACT_CLASSIFICATION_BLOCKING", fact: key, classification: record.classification});
     if (source.type === DOCUMENT_SOURCE) {
+      if (record.classification !== CALCULATION_FACT_CLASSIFICATIONS.DOCUMENT_VERIFIED)
+        errors.push({code: "FACT_SOURCE_CLASSIFICATION_MISMATCH", fact: key});
       validateDocumentEvidence({
         evidence: [{documentId: source.documentId, documentSha256: source.documentSha256, location: source.location}],
         fact: key,
@@ -119,11 +139,17 @@ export function validateCalculationContractInput(input = {}) {
         errors,
       });
     } else if (source.type === DOCUMENT_SET_SOURCE) {
+      if (record.classification !== CALCULATION_FACT_CLASSIFICATIONS.DOCUMENT_VERIFIED)
+        errors.push({code: "FACT_SOURCE_CLASSIFICATION_MISMATCH", fact: key});
       validateDocumentEvidence({evidence: source.evidence, fact: key, fingerprints, errors});
     } else if (source.type === MANAGEMENT_SOURCE) {
+      if (record.classification !== CALCULATION_FACT_CLASSIFICATIONS.CASE_APPROVED)
+        errors.push({code: "FACT_SOURCE_CLASSIFICATION_MISMATCH", fact: key});
       if (![source.inputId, source.approvedBy, source.approvedAt].every(supplied))
         errors.push({code: "MANAGEMENT_APPROVAL_INCOMPLETE", fact: key});
     } else if (source.type === DERIVATION_SOURCE) {
+      if (record.classification !== CALCULATION_FACT_CLASSIFICATIONS.DETERMINISTIC_DERIVED)
+        errors.push({code: "FACT_SOURCE_CLASSIFICATION_MISMATCH", fact: key});
       if (![source.ruleTypeId, source.ruleVersion].every(supplied) || !Array.isArray(source.inputFactKeys) || !source.inputFactKeys.length)
         errors.push({code: "DERIVATION_EVIDENCE_INCOMPLETE", fact: key});
     } else if (mode !== "MANUAL_SANDBOX") {
@@ -164,6 +190,8 @@ export function validateCalculationContractInput(input = {}) {
     }
     if (record.source !== PARAMETER_SOURCE || ![record.versionId, record.approvedBy, record.approvedAt].every(supplied))
       errors.push({code: "PARAMETER_APPROVAL_INCOMPLETE", parameterKey: key});
+    if (record.classification !== CALCULATION_FACT_CLASSIFICATIONS.COMPANY_APPROVED)
+      errors.push({code: "PARAMETER_CLASSIFICATION_INVALID", parameterKey: key});
     if (!supplied(record.scope?.tenantId) || String(record.scope.tenantId) !== String(scope.tenantId) ||
         !supplied(record.scope?.companyId) || String(record.scope.companyId) !== String(scope.companyId) ||
         !supplied(record.scope?.serviceArea) || String(record.scope.serviceArea) !== String(input.engineInput?.serviceArea))

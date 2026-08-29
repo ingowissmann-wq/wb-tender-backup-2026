@@ -151,6 +151,7 @@ const parameterRecords = parameterRows.map(row => ({
   key: row.parameter_key,
   value: row.new_value,
   unit: row.unit,
+  classification: "COMPANY_APPROVED",
   scope: {tenantId: row.tenant_id, companyId: expected.companyId, serviceArea: "cleaning"},
   source: "ACTIVE_APPROVED_EXACT_CONFIGURATION_SCOPE",
   versionId: row.version_id,
@@ -230,18 +231,18 @@ const engineInput = {
   },
 };
 const factRecords = [
-  {key: "annualCleaningArea", value: annualArea.value, unit: annualArea.unit, scope,
+  {key: "annualCleaningArea", value: annualArea.value, unit: annualArea.unit, scope, classification: "DOCUMENT_VERIFIED",
     source: {type: "VERIFIED_PROCUREMENT_DOCUMENT_SET", evidence: documentEvidence(annualArea)}},
-  {key: "duration", value: duration.value, unit: duration.unit, termType: "BASE", scope,
+  {key: "duration", value: duration.value, unit: duration.unit, termType: "BASE", scope, classification: "DOCUMENT_VERIFIED",
     source: {type: "VERIFIED_PROCUREMENT_DOCUMENT_SET", evidence: documentEvidence(duration)}},
-  {key: "cleaningPerformance", value: shadowC22, unit: "M2_PER_HOUR", scope,
+  {key: "cleaningPerformance", value: shadowC22, unit: "M2_PER_HOUR", scope, classification: "CASE_APPROVED",
     source: {type: "EXPLICIT_MANAGEMENT_INPUT", inputId: "board-approval-2026-08-29-munich-c22", approvedBy: approvalIdentity, approvedAt: "2026-08-29"}},
-  {key: "productiveHours", value: productiveHours, unit: "HOURS", scope,
+  {key: "productiveHours", value: productiveHours, unit: "HOURS", scope, classification: "DETERMINISTIC_DERIVED",
     source: {type: "DETERMINISTIC_DERIVATION", ruleTypeId: "cleaning-area-hours", ruleVersion: 1,
       inputFactKeys: ["annualCleaningArea", "cleaningPerformance", "duration"]}},
 ];
 if (sourceArea) factRecords.push({
-  key: "areas", value: sourceArea.value, unit: sourceArea.unit, scope,
+  key: "areas", value: sourceArea.value, unit: sourceArea.unit, scope, classification: "DOCUMENT_VERIFIED",
   source: {type: "VERIFIED_PROCUREMENT_DOCUMENT_SET", evidence: documentEvidence(sourceArea)},
 });
 const snapshot = createCalculationContractSnapshot({

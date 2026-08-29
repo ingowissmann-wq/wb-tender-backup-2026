@@ -12,7 +12,7 @@ const sha = "a".repeat(64);
 const scope = {tenantId: "tenant-1", companyId: "company-1", tenderId: "tender-1", lotId: "lot-1", lotKey: "LOT-0001"};
 const documentFingerprints = [{documentId: "document-1", sha256: sha, parserVersion: "xlsx/1"}];
 const fact = (key, value, unit, extra = {}) => ({
-  key, value, unit, scope,
+  key, value, unit, scope, classification: "DOCUMENT_VERIFIED",
   source: {type: "VERIFIED_PROCUREMENT_DOCUMENT", documentId: "document-1", documentSha256: sha, location: {worksheet: "P4, Aufmaß", row: 12}},
   ...extra,
 });
@@ -25,6 +25,7 @@ const engineInput = {
 };
 const parameterRecords = Object.entries(engineInput.parameters).map(([key, value]) => ({
   key, value, unit: engineInput.units[key] || "PERCENT",
+  classification: "COMPANY_APPROVED",
   scope: {tenantId: scope.tenantId, companyId: scope.companyId, serviceArea: engineInput.serviceArea},
   source: "ACTIVE_APPROVED_EXACT_CONFIGURATION_SCOPE",
   versionId: `version-${key}`,
@@ -62,7 +63,7 @@ test("document facts require exact source location and the matching fingerprint"
 test("an aggregate fact may bind multiple exact document locations", () => {
   const secondSha = "b".repeat(64);
   const aggregate = {
-    key: "productiveHours", value: 28023.66, unit: "HOURS", scope,
+    key: "productiveHours", value: 28023.66, unit: "HOURS", scope, classification: "DOCUMENT_VERIFIED",
     source: {
       type: "VERIFIED_PROCUREMENT_DOCUMENT_SET",
       evidence: [
@@ -84,7 +85,7 @@ test("every member of a document evidence set needs its matching hash and exact 
   const validation = validateCalculationContractInput({
     scope, engineInput, documentFingerprints, parameterRecords,
     factRecords: [{
-      key: "productiveHours", value: 28023.66, unit: "HOURS", scope,
+      key: "productiveHours", value: 28023.66, unit: "HOURS", scope, classification: "DOCUMENT_VERIFIED",
       source: {type: "VERIFIED_PROCUREMENT_DOCUMENT_SET", evidence: [
         {documentId: "document-1", documentSha256: "b".repeat(64), location: {worksheet: "P4, Aufmaß"}},
       ]},
@@ -112,9 +113,23 @@ test("ranges, option terms and cross-scope facts cannot enter production", () =>
   assert.ok(codes.includes("CROSS_SCOPE_FACT"));
 });
 
+test("missing, conflicting and outside-range classifications block the snapshot", () => {
+  for (const classification of ["MISSING_INPUT", "CONFLICTING_EVIDENCE", "OUTSIDE_ALLOWED_RANGE"]) {
+    const validation = validateCalculationContractInput({
+      scope, engineInput, documentFingerprints, parameterRecords,
+      factRecords: [
+        {...fact("productiveHours", 28023.66, "HOURS"), classification},
+        fact("duration", 24, "MONTHS"),
+      ],
+    });
+    assert.ok(validation.errors.some(error =>
+      error.code === "FACT_CLASSIFICATION_BLOCKING" && error.classification === classification));
+  }
+});
+
 test("an approved management input may supply the missing exact kilometer quantity", () => {
   const kilometerFact = {
-    key: "kilometers", value: 900, unit: "KM", scope,
+    key: "kilometers", value: 900, unit: "KM", scope, classification: "CASE_APPROVED",
     source: {type: "EXPLICIT_MANAGEMENT_INPUT", inputId: "input-1", approvedBy: "fe93f980-5699-44f4-ad41-69d254dcaa9f", approvedAt: "2026-08-29T16:00:00Z"},
   };
   const snapshot = createCalculationContractSnapshot({
@@ -146,11 +161,11 @@ test("calculation parameters require approved exact company and service scope", 
 test("deterministic derivations bind their exact versioned rule and evidenced inputs", () => {
   const annualArea = fact("annualCleaningArea", 2589414.889362, "SQUARE_METRES_PER_YEAR");
   const performance = {
-    key: "cleaningPerformance", value: 195, unit: "SQUARE_METRES_PER_HOUR", scope,
+    key: "cleaningPerformance", value: 195, unit: "SQUARE_METRES_PER_HOUR", scope, classification: "CASE_APPROVED",
     source: {type: "EXPLICIT_MANAGEMENT_INPUT", inputId: "performance-1", approvedBy: "board-1", approvedAt: "2026-08-29T16:00:00Z"},
   };
   const productiveHours = {
-    key: "productiveHours", value: 28023.66, unit: "HOURS", scope,
+    key: "productiveHours", value: 28023.66, unit: "HOURS", scope, classification: "DETERMINISTIC_DERIVED",
     source: {type: "DETERMINISTIC_DERIVATION", ruleTypeId: "cleaning-area-hours", ruleVersion: 1, inputFactKeys: ["annualCleaningArea", "cleaningPerformance", "duration"]},
   };
   const validation = validateCalculationContractInput({
