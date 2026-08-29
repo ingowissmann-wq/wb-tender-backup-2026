@@ -4261,10 +4261,22 @@ async function persistCalculation(pool, item, tender, enrichment) {
                FROM tender.configuration_active_parameters active
                JOIN tender.configuration_changes change
                  ON change.id=active.change_id
+               JOIN tender.configuration_versions version
+                 ON version.id=active.version_id
+                AND version.company_id=active.company_id
+                AND version.canonical_service='cleaning'
+               JOIN tender.configuration_scopes scope
+                 ON scope.tenant_id=version.tenant_id
+                AND scope.company_id=version.company_id
+                AND scope.canonical_service=version.canonical_service
+                AND scope.profile_id=version.profile_id
                WHERE active.company_id=$1
                  AND active.service_line=$2
                  AND active.parameter_key='C22'
                  AND change.unit='M2_PER_HOUR'
+                 AND version.status='ACTIVE'
+                 AND version.approved_by IS NOT NULL
+                 AND version.approved_at IS NOT NULL
                  AND change.valid_from<=current_date
                  AND (
                    change.valid_until IS NULL
@@ -4288,6 +4300,12 @@ async function persistCalculation(pool, item, tender, enrichment) {
           fact =>
             fact.key ===
             "annual_cleaning_area_occurrences"
+        )?.value
+      ),
+    derivedCleaningArea =
+      Number(
+        derivedContractFacts.find(
+          fact => fact.key === "areas"
         )?.value
       ),
     legacyCleaningHours =
@@ -4468,6 +4486,21 @@ async function persistCalculation(pool, item, tender, enrichment) {
     validation.missing = validation.missing.filter(
       (entry) => entry.field !== "Produktivstunden",
     );
+  else if (
+    item.service_scope === "cleaning" &&
+    !validation.missing.some(entry => entry.field === "Produktivstunden")
+  )
+    validation.missing.push({
+      field: "Produktivstunden",
+      source:
+        "verifizierte Jahresreinigungsfläche, freigegebener C22-Leistungswert und verifizierte Vertragslaufzeit",
+      lot: item.lot_key || "Gesamt",
+      documentStatus: documents.length
+        ? "VORHANDEN_ABER_AUTORITATIVE_ABLEITUNG_UNVOLLSTÄNDIG"
+        : "KEINE_DOKUMENTE",
+      nextAction:
+        "Autoritative Cleaning-Eingaben vervollständigen; generische Stundenangaben aus Freitext werden nicht als Produktivstunden verwendet",
+    });
   const securityCostRows =
       item.service_scope === "security"
         ? (
@@ -4607,9 +4640,11 @@ async function persistCalculation(pool, item, tender, enrichment) {
     (Number.isFinite(derivedCleaningHours) && derivedCleaningHours > 0
       ? derivedCleaningHours
       : null) ??
-    result.review.calculation?.neededHours ??
-    valueFor(result.review.scope, "Produktivstunden") ??
-    valueFor(result.review.scope, "Leistungsstunden");
+    (item.service_scope === "cleaning"
+      ? null
+      : result.review.calculation?.neededHours ??
+        valueFor(result.review.scope, "Produktivstunden") ??
+        valueFor(result.review.scope, "Leistungsstunden"));
   const engineResult = calculateSectorTender({
     serviceArea: item.service_scope,
     parameters: {
@@ -4646,7 +4681,12 @@ async function persistCalculation(pool, item, tender, enrichment) {
                 "Vertragslaufzeit"
               )
             ),
-      areas: valueFor(result.review.scope, "Flächen"),
+      areas:
+        item.service_scope === "cleaning"
+          ? Number.isFinite(derivedCleaningArea) && derivedCleaningArea > 0
+            ? derivedCleaningArea
+            : null
+          : valueFor(result.review.scope, "Flächen"),
       nightHours:
         securityLvFacts?.nightHours ??
         valueFor(result.review.scope, "Nachtstunden"),

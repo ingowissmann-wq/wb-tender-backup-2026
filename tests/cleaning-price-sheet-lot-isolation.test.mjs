@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   declaredDocumentLotNumbers,
+  deriveCleaningContractFacts,
   deriveCleaningRoomBookFacts,
   derivePriceSheetCleaningFacts,
   priceSheetForSelectedLot,
@@ -145,5 +146,62 @@ test("invalid cached annual-area formulas are rejected", () => {
     deriveCleaningRoomBookFacts([invalid], "LOT-0001")
       .some(fact => fact.key === "annual_cleaning_area_occurrences"),
     false,
+  );
+});
+
+test("LOT-0000 derives one explicit verified 48-month contract period", () => {
+  const document = {
+    id: "munich-performance-description",
+    filename: "VGSt1-1-2026-0059_Leistungsbeschreibung_K2.pdf",
+    payload_sha256: "fd7b456ebc1db063585ed455e22a23dfbdd45c30beadfe31493fe7f828da63b2",
+    procurement_verification_status: "VERIFIED",
+    extracted_data: { pages: [{
+      pageNumber: 4,
+      text: "3.1. Vertragsdauer Die Rahmenvereinbarung beginnt voraussichtlich am 01.11.2026 und endet voraussichtlich am 31.10.2030 Die Vertragslaufzeit beträgt damit 48 Monate / 4 Jahre Die endgültigen Vertragszeiten werden mit dem Zuschlag mitgeteilt.",
+    }] },
+  };
+  const facts = deriveCleaningContractFacts([document], "LOT-0000");
+  const duration = facts.find(fact => fact.key === "contract_duration_months");
+  assert.equal(duration.value, 48);
+  assert.equal(duration.evidence[0].documentId, document.id);
+  assert.equal(duration.evidence[0].page, 4);
+  assert.equal(duration.evidence[0].hash, document.payload_sha256);
+});
+
+test("LOT-0000 contract periods fail closed when verified documents conflict", () => {
+  const document = (id, start, end, months) => ({
+    id,
+    filename: `${id}.pdf`,
+    payload_sha256: `${id}-hash`,
+    procurement_verification_status: "VERIFIED",
+    extracted_data: { pages: [{
+      pageNumber: 1,
+      text: `Die Rahmenvereinbarung beginnt am ${start} und endet am ${end}. Die Vertragslaufzeit beträgt damit ${months} Monate.`,
+    }] },
+  });
+  assert.deepEqual(deriveCleaningContractFacts([
+    document("left", "01.11.2026", "31.10.2030", 48),
+    document("right", "01.11.2026", "31.10.2029", 36),
+  ], "LOT-0000"), []);
+});
+
+test("LOT-0000 is a real lot number during exact document selection", () => {
+  const zero = workbook({
+    id: "lot-zero",
+    lot: 0,
+    hash: "lot-zero-hash",
+    rows: [{ rowNumber: 9, area: 10, days: 10 }],
+  });
+  assert.deepEqual(declaredDocumentLotNumbers(zero), [0]);
+  assert.equal(
+    priceSheetForSelectedLot(
+      selectLotAuthoritativeDocuments(
+        [zero],
+        new Set(["selected-lot-zero"]),
+        "LOT-0000",
+      ),
+      "LOT-0000",
+    )?.id,
+    "lot-zero",
   );
 });

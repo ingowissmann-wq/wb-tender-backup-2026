@@ -33,7 +33,7 @@ export function declaredDocumentLotNumbers(document) {
 
 const explicitlyConflictsWithSelectedLot = (document, selectedLotKey) => {
   const selectedLotNumber = lotNumberFromKey(selectedLotKey);
-  if (!selectedLotNumber) return false;
+  if (selectedLotNumber === null) return false;
   const declared = declaredDocumentLotNumbers(document);
   return declared.length > 0 &&
     (declared.length !== 1 || declared[0] !== selectedLotNumber);
@@ -41,7 +41,7 @@ const explicitlyConflictsWithSelectedLot = (document, selectedLotKey) => {
 
 const explicitlyMatchesSelectedLot = (document, selectedLotKey) => {
   const selectedLotNumber = lotNumberFromKey(selectedLotKey);
-  if (!selectedLotNumber) return false;
+  if (selectedLotNumber === null) return false;
   const declared = declaredDocumentLotNumbers(document);
   return declared.length === 1 && declared[0] === selectedLotNumber;
 };
@@ -105,9 +105,75 @@ const contractPeriod = documents => {
   return null;
 };
 
+const explicitSingleLotContractPeriod = documents => {
+  const candidates = [];
+  const periodPattern =
+    /(?:Rahmenvereinbarung|Vertrag|Leistungs(?:beziehung|zeitraum))[\s\S]{0,100}?beginnt(?:\s+voraussichtlich)?\s+am\s+(\d{2}\.\d{2}\.\d{4})[\s\S]{0,180}?endet(?:\s+voraussichtlich)?\s+am\s+(\d{2}\.\d{2}\.\d{4})/gi;
+
+  for (const document of documents.filter(
+    item => item?.procurement_verification_status === "VERIFIED",
+  ))
+    for (const page of document.extracted_data?.pages || []) {
+      const text = String(page.text || "").replace(/\s+/g, " ");
+      periodPattern.lastIndex = 0;
+
+      for (const match of text.matchAll(periodPattern)) {
+        const start = parseGermanDate(match[1]);
+        const end = parseGermanDate(match[2]);
+        if (end < start) continue;
+
+        const months = inclusiveMonths(start, end);
+        const context = text.slice(
+          match.index,
+          Math.min(text.length, match.index + match[0].length + 260),
+        );
+        const explicitMonths = Number(
+          context.match(
+            /Vertragslaufzeit\s+beträgt[^\d]{0,40}(\d{1,3})\s+Monate/i,
+          )?.[1],
+        );
+
+        if (
+          !Number.isInteger(months) ||
+          months <= 0 ||
+          months > 240 ||
+          !Number.isInteger(explicitMonths) ||
+          explicitMonths !== months
+        ) continue;
+
+        candidates.push({
+          months,
+          start: match[1],
+          end: match[2],
+          evidence: {
+            documentId: document.id,
+            filename: document.filename,
+            hash: document.payload_sha256,
+            page: page.pageNumber || null,
+            match: context.slice(0, 700),
+            explicitMonths,
+          },
+        });
+      }
+    }
+
+  const identities = new Set(
+    candidates.map(item => `${item.start}|${item.end}|${item.months}`),
+  );
+  if (identities.size !== 1) return null;
+
+  const selected = candidates[0];
+  return {
+    months: selected.months,
+    start: selected.start,
+    end: selected.end,
+    evidence: candidates.map(item => item.evidence),
+  };
+};
+
 export function deriveCleaningContractFacts(documents = [], selectedLotKey = null) {
-  const lotNumber=Number(String(selectedLotKey||"").match(/(?:LOT-0*|LOS\s*)(\d+)/i)?.[1]);
-  if(!lotNumber)return [];
+  const lotNumber=lotNumberFromKey(selectedLotKey);
+  if(lotNumber===null)return [];
   for(const document of documents.filter(item=>item?.procurement_verification_status==="VERIFIED"))for(const page of document.extracted_data?.pages||[]){
     const text=String(page.text||"").replace(/\s+/g," ");
     if(!/Vertragsdauer und Kündigung/i.test(text))continue;
@@ -126,6 +192,13 @@ export function deriveCleaningContractFacts(documents = [], selectedLotKey = nul
         {key:"contract_periods",value:endTexts.map(end=>({start:startText,end})),unit:"Zeiträume",formula:"Losbezogene Haupt- und Teilobjektzeiträume aus § 3 Vertragsdauer",evidence:[evidence]},
       ];
     }
+  }
+  if(lotNumber===0){
+    const period=explicitSingleLotContractPeriod(documents);
+    if(period)return [
+      {key:"contract_duration_months",value:period.months,unit:"Monate",formula:"Eindeutige verifizierte Vertragsdaten; explizite Monatsangabe entspricht den einschließlich gezählten Kalendermonaten",evidence:period.evidence},
+      {key:"contract_periods",value:[{start:period.start,end:period.end}],unit:"Zeiträume",formula:"Verifizierter Beginn und verifiziertes Ende der ausdrücklich bezifferten Vertragslaufzeit",evidence:period.evidence},
+    ];
   }
   return [];
 }
@@ -218,7 +291,7 @@ const workbookRevision = filename => {
 
 export const priceSheetForSelectedLot = (documents, selectedLotKey) => {
   const selectedLotNumber = lotNumberFromKey(selectedLotKey);
-  if (!selectedLotNumber) return null;
+  if (selectedLotNumber === null) return null;
   const candidates = documents.filter(document => {
     if (document?.procurement_verification_status !== "VERIFIED") return false;
     if (!/preisblatt/i.test(document.filename || "")) return false;
