@@ -58,6 +58,7 @@ export function isFreshRunningPortalJob({
 
 export const PORTAL_ACCESS_STATUSES = Object.freeze([
   "NOT_CONFIGURED",
+  "CREDENTIAL_SCOPE_CONFLICT",
   "CONFIGURED_UNVERIFIED",
   "VALID",
   "MFA_REQUIRED",
@@ -75,6 +76,7 @@ export const PORTAL_ACCESS_STATUSES = Object.freeze([
  */
 export function canonicalPortalAccessStatus({
   configured = false,
+  scopeConflict = false,
   credentialStatus = null,
   credentialRevokedAt = null,
   credentialValidUntil = null,
@@ -92,6 +94,7 @@ export function canonicalPortalAccessStatus({
   accountLocked = false,
   now = new Date(),
 } = {}) {
+  if (scopeConflict) return "CREDENTIAL_SCOPE_CONFLICT";
   if (!configured) return "NOT_CONFIGURED";
   const resultCode = String(jobResultCode || "").toUpperCase();
   if (accountLocked || LOCKED_CODES.has(resultCode) || loginStatus === "ZUGANG_GESPERRT")
@@ -131,6 +134,12 @@ const PRESENTATION = Object.freeze({
     message: "Für dieses Portal ist ein Zugang einzurichten.",
     actionType: "MANAGE_CREDENTIALS",
     actionLabel: "Zugangsdaten hinterlegen",
+  },
+  CREDENTIAL_SCOPE_CONFLICT: {
+    label: "Gesellschaftszuordnung des Portalzugangs prüfen",
+    message: "Ein gespeicherter Portalzugang ist mehreren Gesellschaften zugeordnet und bleibt bis zur gesellschaftsscharfen Klärung gesperrt.",
+    actionType: "NONE",
+    actionLabel: null,
   },
   CONFIGURED_UNVERIFIED: {
     label: "Zugang gespeichert, noch nicht verifiziert",

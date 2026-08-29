@@ -1512,6 +1512,22 @@ export function registerAutopilotRoutes(
         [portalId, companyId],
       )
     ).rows[0] || null;
+  const credentialScopeConflictForCompany = async (portalId, companyId) =>
+    !validUuid(companyId) ? false : Boolean((
+      await pool.query(
+        `SELECT EXISTS(
+           SELECT 1 FROM tender.portal_credential_secrets credential
+           JOIN tender.portal_credential_companies scope
+             ON scope.credential_id=credential.id AND scope.company_id=$2 AND scope.active=true
+           WHERE credential.portal_id=$1 AND credential.status='ACTIVE'
+             AND credential.revoked_at IS NULL
+             AND EXISTS(SELECT 1 FROM tender.portal_credential_companies other_scope
+               WHERE other_scope.credential_id=credential.id AND other_scope.active=true
+                 AND other_scope.company_id<>scope.company_id)
+         ) scope_conflict`,
+        [portalId, companyId],
+      )
+    ).rows[0]?.scope_conflict);
   const latestCredentialTruthForCompany = async (portalId, companyId) =>
     !validUuid(companyId) ? null : (
       await pool.query(
@@ -1730,6 +1746,7 @@ export function registerAutopilotRoutes(
         context = await portalNavigationContext(req, reply, { requestedPortalId: portalId });
       if (!context) return;
       const portal = await portalRow(portalId),
+        scopeConflict = await credentialScopeConflictForCompany(portalId, context.company.company_id),
         credentials = (
           await pool.query(
             `SELECT credential.id,credential.username_masked,credential.mfa_method,
@@ -1773,14 +1790,14 @@ export function registerAutopilotRoutes(
       if (credentials.length > 1)
         return reply.code(403).send({ error: "credential_scope_ambiguous" });
       const credential = credentials[0] || null,
-        accessStatus = canonicalPortalAccessStatus({ configured:Boolean(credential), credentialStatus:credential?.status, credentialRevokedAt:credential?.revoked_at, credentialValidUntil:credential?.valid_until, loginStatus:credential?.login_status, sessionEffectiveStatus:credential?.session_effective_status, jobStatus:credential?.job_status, jobResultCode:credential?.job_result_code, jobCreatedAt:credential?.job_created_at, jobStartedAt:credential?.job_started_at, jobHeartbeatAt:credential?.job_heartbeat_at, jobTimeoutAt:credential?.job_timeout_at, jobFinishedAt:credential?.job_finished_at, mfaRequired:credential?.mfa_required_state, captchaRequired:portal.captcha_required }),
+        accessStatus = canonicalPortalAccessStatus({ configured:Boolean(credential), scopeConflict, credentialStatus:credential?.status, credentialRevokedAt:credential?.revoked_at, credentialValidUntil:credential?.valid_until, loginStatus:credential?.login_status, sessionEffectiveStatus:credential?.session_effective_status, jobStatus:credential?.job_status, jobResultCode:credential?.job_result_code, jobCreatedAt:credential?.job_created_at, jobStartedAt:credential?.job_started_at, jobHeartbeatAt:credential?.job_heartbeat_at, jobTimeoutAt:credential?.job_timeout_at, jobFinishedAt:credential?.job_finished_at, mfaRequired:credential?.mfa_required_state, captchaRequired:portal.captcha_required }),
         accessPresentation = portalAccessPresentation(accessStatus),
-        body = `<section class="panel" aria-label="Direkte Zugangsdatenmaske"><dl><dt>Ausschreibung</dt><dd>${portalNavigationEscape(context.tender.title)}</dd><dt>Gesellschaft</dt><dd><strong>${portalNavigationEscape(context.company.legal_name)}</strong></dd><dt>Portal</dt><dd><strong>${portalNavigationEscape(portal.display_name)}</strong></dd><dt>Betreiber</dt><dd>${portalNavigationEscape(portal.display_name)}</dd><dt>Domain</dt><dd>${portalNavigationEscape(portal.canonical_domain)}</dd><dt>Validierte Loginadresse</dt><dd>${portalNavigationEscape(safeExternalPortalUrl(portal.authentication_entry_url,portal) || "Nicht hinterlegt")}</dd><dt>Zugangsstatus</dt><dd><strong>${portalNavigationEscape(accessPresentation.label)}</strong></dd></dl><p>${portalNavigationEscape(accessPresentation.message)}</p></section><form id="portal-direct-credential-form" class="panel" autocomplete="off" data-configured="${Boolean(credential)}" data-portal-id="${portalNavigationEscape(portal.id)}" data-company-id="${portalNavigationEscape(context.company.company_id)}" data-internal-label="${portalNavigationEscape(credential?.internal_label || "")}" data-registration-status="${portalNavigationEscape(credential?.registration_status || "NICHT_REGISTRIERT")}" data-login-status="${portalNavigationEscape(credential?.login_status || "LOGIN_UNGEPRUEFT")}" data-account-confirmed="${credential?.account_confirmed === true}" data-submission-capable="${credential?.submission_capable === true}"><h2>Zugangsdaten</h2>${credential ? `<p><strong>Passwort ist sicher hinterlegt.</strong> Gespeicherter Benutzername: ${portalNavigationEscape(credential.username_masked || "sicher maskiert")}. Ein leeres Passwortfeld verändert das Passwort nicht.</p>` : `<p>Für diese Gesellschaft ist an diesem Portal noch kein Zugang hinterlegt.</p>`}<label>Benutzername oder E-Mail<input name="username" autocomplete="username" inputmode="email"></label><label>Passwort (Write-only)<input name="password" type="password" autocomplete="new-password"></label><label>MFA erforderlich<select name="mfaRequired"><option value="">Unbekannt</option><option value="true" ${credential?.mfa_required_state===true?"selected":""}>Ja</option><option value="false" ${credential?.mfa_required_state===false?"selected":""}>Nein</option></select></label><label>MFA-Art<input name="mfaMethod" value="${portalNavigationEscape(credential?.mfa_method || "")}" maxlength="80"></label><label>Verantwortliche Person<input name="contactPerson" value="${portalNavigationEscape(credential?.contact_person || "")}" maxlength="160"></label><label>Bemerkung ohne Geheimnisse<textarea name="notes" maxlength="1000">${portalNavigationEscape(credential?.notes || "")}</textarea></label><div class="review-actions"><button type="submit">Sicher speichern</button><button type="button" data-test-portal-credential>Zugang jetzt prüfen</button><a class="button-link" href="${portalNavigationEscape(context.returnTo)}">Abbrechen</a><a class="button-link" href="${portalNavigationEscape(context.returnTo)}">Zur Ausschreibung zurück</a></div><p data-portal-navigation-status aria-live="polite"></p></form>`;
+        body = `<section class="panel" aria-label="Direkte Zugangsdatenmaske"><dl><dt>Ausschreibung</dt><dd>${portalNavigationEscape(context.tender.title)}</dd><dt>Gesellschaft</dt><dd><strong>${portalNavigationEscape(context.company.legal_name)}</strong></dd><dt>Portal</dt><dd><strong>${portalNavigationEscape(portal.display_name)}</strong></dd><dt>Betreiber</dt><dd>${portalNavigationEscape(portal.display_name)}</dd><dt>Domain</dt><dd>${portalNavigationEscape(portal.canonical_domain)}</dd><dt>Validierte Loginadresse</dt><dd>${portalNavigationEscape(safeExternalPortalUrl(portal.authentication_entry_url,portal) || "Nicht hinterlegt")}</dd><dt>Zugangsstatus</dt><dd><strong>${portalNavigationEscape(accessPresentation.label)}</strong></dd></dl><p>${portalNavigationEscape(accessPresentation.message)}</p></section><form id="portal-direct-credential-form" class="panel" autocomplete="off" data-configured="${Boolean(credential)}" data-portal-id="${portalNavigationEscape(portal.id)}" data-company-id="${portalNavigationEscape(context.company.company_id)}" data-internal-label="${portalNavigationEscape(credential?.internal_label || "")}" data-registration-status="${portalNavigationEscape(credential?.registration_status || "NICHT_REGISTRIERT")}" data-login-status="${portalNavigationEscape(credential?.login_status || "LOGIN_UNGEPRUEFT")}" data-account-confirmed="${credential?.account_confirmed === true}" data-submission-capable="${credential?.submission_capable === true}"><h2>Zugangsdaten</h2>${credential ? `<p><strong>Passwort ist sicher hinterlegt.</strong> Gespeicherter Benutzername: ${portalNavigationEscape(credential.username_masked || "sicher maskiert")}. Ein leeres Passwortfeld verändert das Passwort nicht.</p>` : `<p>Für diese Gesellschaft ist an diesem Portal noch kein Zugang hinterlegt.</p>`}<label>Benutzername oder E-Mail<input name="username" autocomplete="username" inputmode="email"></label><label>Passwort (Write-only)<input name="password" type="password" autocomplete="new-password"></label><label>MFA erforderlich<select name="mfaRequired"><option value="">Unbekannt</option><option value="true" ${credential?.mfa_required_state===true?"selected":""}>Ja</option><option value="false" ${credential?.mfa_required_state===false?"selected":""}>Nein</option></select></label><label>MFA-Art<input name="mfaMethod" value="${portalNavigationEscape(credential?.mfa_method || "")}" maxlength="80"></label><label>Verantwortliche Person<input name="contactPerson" value="${portalNavigationEscape(credential?.contact_person || "")}" maxlength="160"></label><label>Bemerkung ohne Geheimnisse<textarea name="notes" maxlength="1000">${portalNavigationEscape(credential?.notes || "")}</textarea></label><div class="review-actions"><button type="submit">Sicher speichern</button>${scopeConflict ? "" : `<button type="button" data-test-portal-credential>Zugang jetzt prüfen</button>`}<a class="button-link" href="${portalNavigationEscape(context.returnTo)}">Abbrechen</a><a class="button-link" href="${portalNavigationEscape(context.returnTo)}">Zur Ausschreibung zurück</a></div><p data-portal-navigation-status aria-live="polite"></p></form>`;
       return reply
         .header("cache-control", "no-store, max-age=0, must-revalidate")
         .header("x-wb-portal-navigation-release", PORTAL_NAVIGATION_RELEASE)
         .type("text/html")
-        .send(portalNavigationPage({ title: credential ? "Portalzugang bearbeiten" : "Portalzugang einrichten", body, returnTo: context.returnTo }));
+        .send(portalNavigationPage({ title: scopeConflict ? "Portalzugang-Zuordnung prüfen" : credential ? "Portalzugang bearbeiten" : "Portalzugang einrichten", body, returnTo: context.returnTo }));
     },
   );
   app.get(
@@ -2036,6 +2053,22 @@ export function registerAutopilotRoutes(
             )
           ).rows
         : [],
+      credentialScopeConflictRows = permittedCompanyIds.length
+        ? (
+            await pool.query(
+              `SELECT DISTINCT credential.portal_id,scope.company_id
+               FROM tender.portal_credential_secrets credential
+               JOIN tender.portal_credential_companies scope
+                 ON scope.credential_id=credential.id AND scope.active=true
+               WHERE credential.status='ACTIVE' AND credential.revoked_at IS NULL
+                 AND scope.company_id=ANY($1::uuid[])
+                 AND EXISTS(SELECT 1 FROM tender.portal_credential_companies other_scope
+                   WHERE other_scope.credential_id=credential.id AND other_scope.active=true
+                     AND other_scope.company_id<>scope.company_id)`,
+              [permittedCompanyIds],
+            )
+          ).rows
+        : [],
       rows = withTedServiceCatalog((
         await pool.query(`WITH detected AS(
       SELECT lower(split_part(split_part(d.source_url,'://',2),'/',1)) domain,count(DISTINCT e.tender_id)::int tenders,count(*)::int documents
@@ -2099,6 +2132,7 @@ export function registerAutopilotRoutes(
         submission = Boolean(features.SUBMISSION?.autopilotSupported),
         submissionPreflight = Boolean(features.SUBMISSION_PREFLIGHT?.autopilotSupported),
         portalSubmission = features.SUBMISSION?.portalSupport || "UNKNOWN",
+        scopeConflict = row.credential_scope_conflict === true,
         account = Boolean(row.configured && row.account_confirmed !== false),
         credentials = Boolean(row.configured),
         session = row.session_effective_status === "ACTIVE",
@@ -2117,6 +2151,11 @@ export function registerAutopilotRoutes(
         label = "Portaladapter fehlt";
         tone = "red";
         action = "Validierten Portaladapter bereitstellen";
+      } else if (scopeConflict) {
+        code = "CREDENTIAL_SCOPE_CONFLICT";
+        label = "Gesellschaftszuordnung des Portalzugangs prüfen";
+        tone = "red";
+        action = "Eigenen bestätigten Zugang je Gesellschaft hinterlegen; vorhandenes geteiltes Credential nicht automatisch übernehmen";
       } else if (portalSubmission === "NOT_SUPPORTED") {
         code = "SUBMISSION_EXTERNAL_PORTAL";
         label = "Angebotsabgabe erfolgt im verknüpften Vergabeportal";
@@ -2176,6 +2215,7 @@ export function registerAutopilotRoutes(
         submission,
         submissionPreflight,
         portalSubmission,
+        scopeConflict,
         account,
         credentials,
         session,
@@ -2191,10 +2231,15 @@ export function registerAutopilotRoutes(
                 String(item.portal_id) === String(row.id) &&
                 String(item.company_id) === String(company.company_id),
             );
+            const scopeConflict = credentialScopeConflictRows.some(
+              (item) => String(item.portal_id) === String(row.id) &&
+                String(item.company_id) === String(company.company_id),
+            );
             return {
               companyId: company.company_id,
               companyName: company.legal_name,
-              configured: Boolean(credential),
+              configured: Boolean(credential) || scopeConflict,
+              scopeConflict,
               credentialId: credential?.credential_id || null,
               credentialVersion: credential?.credential_version || null,
               usernameMasked: manage
@@ -2226,6 +2271,7 @@ export function registerAutopilotRoutes(
                 : null,
               status: canonicalPortalAccessStatus({
                 configured: Boolean(credential),
+                scopeConflict,
                 credentialStatus: credential?.credential_status || null,
                 credentialRevokedAt: credential?.credential_revoked_at || null,
                 credentialValidUntil: credential?.valid_until || null,
@@ -2251,6 +2297,7 @@ export function registerAutopilotRoutes(
           ),
           scopedRow = {
             ...row,
+            credential_scope_conflict: companyAccesses.some((access) => access.scopeConflict),
             configured: configuredAccesses.length > 0,
             account_confirmed: configuredAccesses.some(
               (access) => access.bidderAccountPresent,
@@ -2834,7 +2881,8 @@ export function registerAutopilotRoutes(
           reason: linkEvidence?.portalMapping?.reason || "Kein externer Portalhost in der Quelle",
           canManage: portalManage(req.identity),
         };
-      const scopedCredential = await latestCredentialTruthForCompany(registeredScope.portal_id, requestedCompany);
+      const scopedCredential = await latestCredentialTruthForCompany(registeredScope.portal_id, requestedCompany),
+        scopedCredentialConflict = await credentialScopeConflictForCompany(registeredScope.portal_id, requestedCompany);
       const rows = (
         await pool.query(
           `WITH latest_enrichment AS(
@@ -2960,6 +3008,7 @@ export function registerAutopilotRoutes(
             accessStatus = documentTruth.accessStatus,
             credentialStatus = canonicalPortalAccessStatus({
               configured: Boolean(scopedCredential),
+              scopeConflict: scopedCredentialConflict,
               credentialStatus: scopedCredential?.status,
               credentialRevokedAt: scopedCredential?.revoked_at,
               credentialValidUntil: scopedCredential?.valid_until,

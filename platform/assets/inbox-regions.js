@@ -16,7 +16,7 @@
       ),
     recordOrNull = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null,
     canonicalCredentialStatuses = new Set([
-      "NOT_CONFIGURED", "CONFIGURED_UNVERIFIED", "VALID", "MFA_REQUIRED",
+      "NOT_CONFIGURED", "CREDENTIAL_SCOPE_CONFLICT", "CONFIGURED_UNVERIFIED", "VALID", "MFA_REQUIRED",
       "CAPTCHA_OR_USER_ACTION_REQUIRED", "EXPIRED", "INVALID", "LOCKED",
       "PORTAL_UNAVAILABLE", "VALIDATION_PENDING",
     ]),
@@ -680,6 +680,7 @@ document.addEventListener("click", async (event) => {
     if (!portal) return "Zugangsstatus technisch nicht verfügbar";
     return portal.credential_status_label || ({
     NOT_CONFIGURED: "Kein Portalzugang hinterlegt",
+    CREDENTIAL_SCOPE_CONFLICT: "Gesellschaftszuordnung des Portalzugangs prüfen",
     CONFIGURED_UNVERIFIED: "Zugang gespeichert, noch nicht verifiziert",
     VALID: "Gültiger Portalzugang vorhanden",
     MFA_REQUIRED: "MFA-Bestätigung erforderlich",
@@ -696,7 +697,7 @@ document.addEventListener("click", async (event) => {
     if (!portal) return "Kontextprüfung erforderlich";
     if (portal.documents_complete) return "Kein erneuter Abruf erforderlich";
     if (portal.next_retry) return formatDate(portal.next_retry);
-    if (["NOT_CONFIGURED", "CONFIGURED_UNVERIFIED", "MFA_REQUIRED", "CAPTCHA_OR_USER_ACTION_REQUIRED", "EXPIRED", "INVALID", "LOCKED"].includes(portal.credential_status))
+    if (["NOT_CONFIGURED", "CREDENTIAL_SCOPE_CONFLICT", "CONFIGURED_UNVERIFIED", "MFA_REQUIRED", "CAPTCHA_OR_USER_ACTION_REQUIRED", "EXPIRED", "INVALID", "LOCKED"].includes(portal.credential_status))
       return "Aktualisierung nach erfolgreicher Portalzugangsprüfung";
     return "Nicht eingeplant";
   };

@@ -13,9 +13,9 @@ const inbox = readFileSync(new URL("../platform/assets/inbox-regions.js", import
 const navigation = readFileSync(new URL("../platform/assets/autopilot-navigation.js", import.meta.url), "utf8");
 const routes = readFileSync(new URL("../platform/autopilot-routes.mjs", import.meta.url), "utf8");
 
-test("all ten canonical credential states have an unambiguous presentation", () => {
+test("all eleven canonical credential states have an unambiguous presentation", () => {
   assert.deepEqual(PORTAL_ACCESS_STATUSES, [
-    "NOT_CONFIGURED", "CONFIGURED_UNVERIFIED", "VALID", "MFA_REQUIRED",
+    "NOT_CONFIGURED", "CREDENTIAL_SCOPE_CONFLICT", "CONFIGURED_UNVERIFIED", "VALID", "MFA_REQUIRED",
     "CAPTCHA_OR_USER_ACTION_REQUIRED", "EXPIRED", "INVALID", "LOCKED",
     "PORTAL_UNAVAILABLE", "VALIDATION_PENDING",
   ]);
@@ -25,6 +25,7 @@ test("all ten canonical credential states have an unambiguous presentation", () 
     assert.ok(presentation.message, status);
   }
   assert.equal(portalAccessPresentation("NOT_CONFIGURED").actionLabel, "Zugangsdaten hinterlegen");
+  assert.equal(portalAccessPresentation("CREDENTIAL_SCOPE_CONFLICT").actionType, "NONE");
   assert.equal(portalAccessPresentation("CONFIGURED_UNVERIFIED").actionLabel, "Zugang prüfen");
   assert.equal(portalAccessPresentation("EXPIRED").actionLabel, "Zugang aktualisieren");
 });
@@ -98,6 +99,8 @@ test("restored real portal states cannot regress to an endless pending status", 
 });
 
 test("canonical precedence is fail-closed and does not infer validity from documents", () => {
+  assert.equal(canonicalPortalAccessStatus({ scopeConflict:true }), "CREDENTIAL_SCOPE_CONFLICT");
+  assert.equal(canonicalPortalAccessStatus({ scopeConflict:true, configured:true, loginStatus:"LOGIN_BESTAETIGT" }), "CREDENTIAL_SCOPE_CONFLICT");
   assert.equal(canonicalPortalAccessStatus({ configured:true, jobResultCode:"KONTO_GESPERRT" }), "LOCKED");
   assert.equal(canonicalPortalAccessStatus({ configured:true, jobResultCode:"BENUTZERNAME_ODER_PASSWORT_FALSCH" }), "INVALID");
   assert.equal(canonicalPortalAccessStatus({ configured:true, jobResultCode:"PORTAL_NICHT_ERREICHBAR" }), "PORTAL_UNAVAILABLE");
@@ -113,6 +116,7 @@ test("credential actions use canonical state and never ask to create an existing
   assert.equal(portalLoginAction({ ...base, credentialStatus:"MFA_REQUIRED" }).label, "MFA fortsetzen");
   assert.equal(portalLoginAction({ ...base, credentialStatus:"CAPTCHA_OR_USER_ACTION_REQUIRED" }).type, "CONFIRM_CAPTCHA");
   assert.equal(portalLoginAction({ ...base, credentialStatus:"VALID", portalOpenAvailable:true }).label, "Portal öffnen");
+  assert.equal(portalLoginAction({ ...base, credentialStatus:"CREDENTIAL_SCOPE_CONFLICT" }).type, "NONE");
 });
 
 test("all tender surfaces consume separate credential and document truth", () => {
@@ -135,7 +139,7 @@ test("stored access and setup prompt cannot be emitted together", () => {
   assert.equal(configuredMessages.some((message) => message.includes("ein Zugang einzurichten")), false);
 });
 
-test("six company types and sixteen portal families render all ten states without contradictions", () => {
+test("six company types and sixteen portal families render all eleven states without contradictions", () => {
   const companies = ["cleaning", "emergency", "facility", "protect", "security", "security-technology"],
     families = ["ai-vergabe-manager", "aumass", "bi-medien", "cosinex", "deutsche-evergabe", "dtvp", "etenders-ireland", "eu-funding-tenders", "evergabe-bayern", "evergabe-de", "evergabe-online-bund", "mercell-s2c", "rib-meinauftrag", "subreport", "ted", "vergabe24"];
   let assertions = 0;
@@ -146,5 +150,30 @@ test("six company types and sixteen portal families render all ten states withou
     else assert.notEqual(presentation.actionLabel, "Zugangsdaten hinterlegen");
     assertions += 1;
   }
-  assert.equal(assertions, 960);
+  assert.equal(assertions, 1056);
+});
+
+test("the restored shared-credential matrix remains visible but non-executable", () => {
+  const sharedCredentialCompanyCounts = [2, 3, 3, 4, 3, 4];
+  assert.equal(sharedCredentialCompanyCounts.length, 6);
+  assert.equal(sharedCredentialCompanyCounts.reduce((sum, count) => sum + count, 0), 19);
+  for (const activeCompanyCount of sharedCredentialCompanyCounts) {
+    const status = canonicalPortalAccessStatus({
+      configured: true,
+      scopeConflict: activeCompanyCount > 1,
+      loginStatus: "LOGIN_BESTAETIGT",
+      sessionEffectiveStatus: "ACTIVE",
+    });
+    assert.equal(status, "CREDENTIAL_SCOPE_CONFLICT");
+    assert.equal(portalLoginAction({
+      tenderId:"t", companyId:"c", portalId:"p", configured:true,
+      authenticationTargetConfigured:true, credentialStatus:status,
+    }).type, "NONE");
+  }
+  assert.match(routes, /credentialScopeConflictForCompany/);
+  assert.match(routes, /credential_scope_conflict/);
+  assert.match(routes, /scopeConflict: scopedCredentialConflict/);
+  assert.match(routes, /scopeConflict \? "" : `<button type="button" data-test-portal-credential>/);
+  assert.match(navigation, /CREDENTIAL_SCOPE_CONFLICT/);
+  assert.match(inbox, /CREDENTIAL_SCOPE_CONFLICT/);
 });

@@ -85,7 +85,7 @@ export function portalLoginAction(
 
   if (["NOT_CONFIGURED", "EXPIRED", "INVALID"].includes(status))
     return result(presentation.actionType, presentation.actionLabel, status);
-  if (["LOCKED", "PORTAL_UNAVAILABLE", "VALIDATION_PENDING"].includes(status))
+  if (["CREDENTIAL_SCOPE_CONFLICT", "LOCKED", "PORTAL_UNAVAILABLE", "VALIDATION_PENDING"].includes(status))
     return result("NONE", null, status);
   if (status === "VALID")
     return portalOpenAvailable

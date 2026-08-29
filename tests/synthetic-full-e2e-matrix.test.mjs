@@ -9,8 +9,8 @@ test("six synthetic company types complete all 25 non-binding steps on all 16 re
   assert.equal(report.coverage.portalFamilies,SYNTHETIC_E2E_PORTAL_FAMILIES.length);
   assert.equal(report.coverage.scenarios,96);
   assert.equal(report.coverage.totalStepAssertions,2400);
-  assert.equal(report.coverage.credentialStatuses,10);
-  assert.equal(report.coverage.contextStateAssertions,1632);
+  assert.equal(report.coverage.credentialStatuses,11);
+  assert.equal(report.coverage.contextStateAssertions,1728);
   assert.equal(report.inventory.beforeCleanup.credentials,96);
   assert.equal(report.inventory.beforeCleanup.sessions,96);
   assert.equal(report.inventory.beforeCleanup.tenders,96);
