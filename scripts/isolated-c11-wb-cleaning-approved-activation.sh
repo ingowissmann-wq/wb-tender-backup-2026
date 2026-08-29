@@ -106,6 +106,7 @@ DECLARE
   actor_id uuid := 'fe93f980-5699-44f4-ad41-69d254dcaa9f'::uuid;
   old_version_id uuid;
   old_change_id uuid;
+  predecessor_id uuid;
   new_version_id uuid;
   new_change_id uuid;
   new_version_no bigint;
@@ -129,6 +130,17 @@ BEGIN
     AND version.version_no=61
   FOR UPDATE OF active,version;
 
+  SELECT id INTO STRICT predecessor_id
+  FROM tender.configuration_versions
+  WHERE tenant_id='1df0552d-34e0-4bc6-8205-e1fae02a90de'::uuid
+    AND company_id='15c3c602-aa51-4dd4-adc1-3586dc82e523'::uuid
+    AND canonical_service='cleaning'
+    AND profile_id='447c8ef1-39e2-4ec0-a053-0dadd5b01e0b'::uuid
+    AND service_line='cleaning'
+  ORDER BY version_no DESC
+  LIMIT 1
+  FOR SHARE;
+
   payload_value=jsonb_build_object(
     'clientRequestId',gen_random_uuid()::text,
     'businessApprovalId','WB-C11-050-EUR-PER-HOUR-20260829',
@@ -145,7 +157,7 @@ BEGIN
     predecessor_id,company_id,service_line,tenant_id,canonical_service,profile_id,
     source,reason,payload,checksum,created_by,status
   ) VALUES (
-    old_version_id,'15c3c602-aa51-4dd4-adc1-3586dc82e523'::uuid,'cleaning',
+    predecessor_id,'15c3c602-aa51-4dd4-adc1-3586dc82e523'::uuid,'cleaning',
     '1df0552d-34e0-4bc6-8205-e1fae02a90de'::uuid,'cleaning',
     '447c8ef1-39e2-4ec0-a053-0dadd5b01e0b'::uuid,
     'Vorstandsfreigabe Dr. Ingo Wissmann vom 29.08.2026',

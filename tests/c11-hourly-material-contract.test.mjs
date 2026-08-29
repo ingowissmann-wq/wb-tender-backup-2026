@@ -50,6 +50,8 @@ test("C11 activation is exact-scope, board-approved, atomic and idempotent", () 
   assert.match(activation, /approved_value=0\.5/);
   assert.match(activation, /approved_unit=EUR_PER_HOUR/);
   assert.match(activation, /version\.version_no=61/);
+  assert.match(activation, /ORDER BY version_no DESC/);
+  assert.match(activation, /predecessor_id,'15c3c602/);
   assert.match(activation, /BOARD_SELF_APPROVED/);
   assert.match(activation, /active parameter count changed/);
   assert.match(activation, /rerun is idempotent/);
