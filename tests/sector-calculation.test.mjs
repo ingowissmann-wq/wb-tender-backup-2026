@@ -63,6 +63,19 @@ test("a configured per-unit cost without an authoritative quantity blocks with a
   assert.match(result.missingDetails[0].nextAction,/fachlich passenden Einheit/);
 });
 
+test("missing quantities for configured conditional costs produce a reviewable partial result",()=>{
+  const result=calculateSectorTender({
+    serviceArea:"cleaning",
+    parameters:{C01:15.5,C13:1.2,C14:0.4,C23:1670},
+    units:{C13:"EUR_PER_KM",C14:"EUR_PER_KM",C23:"HOURS_PER_YEAR"},
+    facts:{productiveHours:2906.38,duration:48,areas:29142.6877},
+  });
+  assert.equal(result.status,"CALCULATION_PARTIAL");
+  assert.deepEqual(result.unappliedConditionalCosts.map(item=>item.parameterKey),["C13","C14"]);
+  assert.equal(result.vehicles,0);
+  assert.equal(result.travel,0);
+});
+
 test("legacy C05 divisor semantics are rejected",()=>{
   const result=calculateSectorTender({
     serviceArea:"cleaning",

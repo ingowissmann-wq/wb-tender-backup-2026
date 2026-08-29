@@ -182,7 +182,7 @@ const calculation = calculateSectorTender({
 
 exact(
   calculation.status,
-  "CALCULATED",
+  "CALCULATION_PARTIAL",
   "calculation status",
 );
 exact(calculation.schemaVersion, 5, "calculation schema version");
@@ -226,7 +226,7 @@ exact(
 );
 exact(
   management.recommendation?.decision,
-  "CONDITIONAL_GO",
+  "MANAGEMENT_REVIEW_REQUIRED_PARTIAL",
   "management recommendation",
 );
 exact(management.externalTransmission, false, "management external transmission");

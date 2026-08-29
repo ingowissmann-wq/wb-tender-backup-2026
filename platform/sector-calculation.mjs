@@ -468,7 +468,9 @@ export function calculateSectorTender({
 
   const result = {
     schemaVersion: CALCULATION_SCHEMA_VERSION,
-    status: "CALCULATED",
+    status: unappliedConditionalCosts.length
+      ? "CALCULATION_PARTIAL"
+      : "CALCULATED",
     serviceArea,
     productiveHours: money(productiveHours),
     hoursPerMonth: money(productiveHours / months),
