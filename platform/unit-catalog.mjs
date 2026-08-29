@@ -19,6 +19,8 @@ export const units=Object.freeze({
  EUR_PER_FTE:unit("EUR_PER_FTE","EUR/FTE",["€/FTE"]),
  EUR_PER_YEAR:unit("EUR_PER_YEAR","EUR/Jahr",["€/Jahr"]),
  EUR_PER_WEEK:unit("EUR_PER_WEEK","EUR/Woche",["€/Woche"]),
+ M2_PER_HOUR:unit("M2_PER_HOUR","m²/h",["m2/h","qm/h","m² pro Stunde","Quadratmeter/Stunde"]),
+ HOURS_PER_YEAR:unit("HOURS_PER_YEAR","Stunden/Jahr",["h/Jahr","Std/Jahr","Stunden pro Jahr","h/a"]),
 });
 
 const rule=(parameterKey,label,unitIds,{numeric=true,defaultUnitId=unitIds[0]}={})=>Object.freeze({
@@ -48,6 +50,8 @@ export const parameterUnitRules=Object.freeze({
  C19:rule("C19","Ziel-DB1",["PERCENT","EUR"]),
  C20:rule("C20","Ziel-DB2",["PERCENT","EUR"]),
  C21:rule("C21","Ziel-DB3",["PERCENT","EUR"]),
+ C22:rule("C22","Reinigungsleistungswert",["M2_PER_HOUR"]),
+ C23:rule("C23","Produktive Jahresstunden je Vollzeitkraft",["HOURS_PER_YEAR"]),
  S01:rule("S01","Videoanlage – Kostenansatz / Einheitspreis",["EUR_PER_UNIT"]),
  S02:rule("S02","Anlagenwoche – Kostenansatz / Einheitspreis",["EUR_PER_WEEK"]),
  S03:rule("S03","Notruf-/Servicewoche – Kostenansatz / Einheitspreis",["EUR_PER_WEEK"]),

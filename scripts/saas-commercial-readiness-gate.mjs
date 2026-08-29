@@ -41,6 +41,11 @@ if (enabled) {
   requireValue("WB_TENDER_DPA_URL", "approved_dsgvo_data_processing_terms_missing");
   if (process.env.WB_TENDER_LEGAL_APPROVED !== "true") blockers.push("legal_approval_missing");
   if (process.env.WB_TENDER_COMMERCIAL_PRICES_APPROVED !== "true") blockers.push("commercial_price_approval_missing");
+  if (process.env.WB_TENDER_TRIAL_PRICE_MAPPING_VERIFIED !== "true") blockers.push("stripe_trial_price_mapping_missing");
+  if (process.env.WB_TENDER_TRIAL_IDENTITY_BACKFILL_VERIFIED !== "true") blockers.push("trial_identity_backfill_unverified");
+  if (process.env.SAAS_TRIAL_WORKER_ENABLED !== "true") blockers.push("paid_trial_lifecycle_worker_disabled");
+  requireValue("SAAS_UPGRADE_URL", "trial_upgrade_url_missing");
+  if (!/^https:\/\//.test(String(process.env.SAAS_UPGRADE_URL || ""))) blockers.push("trial_upgrade_url_must_be_https");
   const migration = await readFile(new URL("../migrations/080_saas_product_entitlements.sql", import.meta.url), "utf8");
   if (!/price_status text NOT NULL DEFAULT 'PLACEHOLDER'/.test(migration)) blockers.push("catalog_price_safety_marker_missing");
   const isolation = await readFile(new URL("../migrations/081_tenant_data_plane.sql", import.meta.url), "utf8");
@@ -60,6 +65,16 @@ if (enabled) {
   if (!/csm_service_cases/.test(trialPlane) || !/people_onboarding_tasks/.test(trialPlane) || !/FORCE ROW LEVEL SECURITY/.test(trialPlane)) blockers.push("commercial_tenant_data_plane_incomplete");
   if (!/class TenantFilesystemStorage/.test(storage) || !/tenant_storage_path_escape/.test(storage)) blockers.push("tenant_storage_adapter_incomplete");
   if (!/class StripeBillingAdapter/.test(adapters) || !/payment_status === "paid"/.test(adapters) || !/class SmtpEmailAdapter/.test(adapters)) blockers.push("provider_adapters_incomplete");
+  const licensing = await readFile(new URL("../migrations/100_commercial_product_licensing.sql", import.meta.url), "utf8");
+  if (!/stripe_price_one_active_offer/.test(licensing) || !/tenant_product_licenses FORCE ROW LEVEL SECURITY/.test(licensing)) blockers.push("commercial_product_licensing_missing");
+  if (!/effective_tenant_modules/.test(licensing) || !/commercial_product_capabilities/.test(licensing)) blockers.push("multi_product_entitlement_resolver_missing");
+  const paidTrial = await readFile(new URL("../migrations/101_paid_trial_lifecycle.sql", import.meta.url), "utf8");
+  const paidTrialPrice = await readFile(new URL("../deployment/configure-paid-trial-price.sql", import.meta.url), "utf8");
+  const lifecycle = await readFile(new URL("../platform/trial-lifecycle.mjs", import.meta.url), "utf8");
+  if (!/wb_business_suite_trial_14d/.test(paidTrial) || !/expected_amount_minor=19900/.test(paidTrial) || !/trial_reminder_deliveries FORCE ROW LEVEL SECURITY/.test(paidTrial)) blockers.push("paid_trial_lifecycle_migration_missing");
+  if (!/price_1U5VsIE0SiqbbyKf1wdyWTUR/.test(paidTrialPrice) || !/billing_interval='ONE_TIME'/.test(paidTrialPrice)
+    || !/amount_minor=19900/.test(paidTrialPrice) || !/paid_trial_price_mapping_conflict/.test(paidTrialPrice)) blockers.push("paid_trial_price_mapping_artifact_invalid");
+  if (!/DEFAULT_TRIAL_REMINDER_OFFSETS.*5, 2/.test(lifecycle) || !/FOR UPDATE OF r SKIP LOCKED/.test(lifecycle) || !/TRIAL_EXPIRED/.test(lifecycle)) blockers.push("paid_trial_lifecycle_worker_incomplete");
 }
 
 if (blockers.length) {

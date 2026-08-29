@@ -1,12 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { canonicalPortalMetadataStatus, canonicalPortalUrl, containsSecret, publicCredential } from "../platform/portal-credentials.mjs";
+import { canonicalPortalUrl, containsSecret, publicCredential } from "../platform/portal-credentials.mjs";
 
 const routes = readFileSync(new URL("../platform/autopilot-routes.mjs", import.meta.url), "utf8");
 const ui = readFileSync(new URL("../platform/assets/autopilot-navigation.js", import.meta.url), "utf8");
 const migration = readFileSync(new URL("../migrations/098_portal_registry_verified_entry_links.sql", import.meta.url), "utf8");
-const companyMetadataMigration = readFileSync(new URL("../migrations/113_company_scoped_portal_credential_metadata.sql", import.meta.url), "utf8");
 const canaryFixture = readFileSync(new URL("../scripts/portal-access-canary-fixture.sql", import.meta.url), "utf8");
 
 test("portal credential responses expose masked metadata but no encrypted or clear secret material", () => {
@@ -32,38 +31,11 @@ test("metadata updates remain company-scoped and audits exclude notes, usernames
   assert.match(route,/portal_credential_metadata_updated/);
   assert.doesNotMatch(route,/JSON\.stringify\(\{[^}]*notes|JSON\.stringify\(\{[^}]*username|JSON\.stringify\(\{[^}]*password/s);
   assert.doesNotMatch(ui,/localStorage\.setItem\([^\n]*(?:password|username|totp|secret)/i);
-  assert.match(route,/UPDATE tender\.portal_credential_companies scope/);
-  assert.doesNotMatch(route,/UPDATE tender\.portal_credential_secrets credential\s+SET internal_label/);
 });
 
 test("schema stores separate honest access states and no MFA secrets", () => {
   for (const value of ["NICHT_REGISTRIERT","REGISTRIERUNG_OFFEN","REGISTRIERT","LOGIN_UNGEPRUEFT","LOGIN_BESTAETIGT","MFA_ERFORDERLICH","ZUGANG_GESPERRT","ZUGANG_ABGELAUFEN","MANUELLE_PRUEFUNG"]) assert.match(migration,new RegExp(value));
   assert.doesNotMatch(migration,/totp_seed|mfa_code|recovery_code/i);
-});
-
-test("metadata status contract accepts canonical values and the shipped German labels",()=>{
-  assert.equal(canonicalPortalMetadataStatus("registrationStatus","REGISTRIERT"),"REGISTRIERT");
-  assert.equal(canonicalPortalMetadataStatus("registrationStatus","Registriert"),"REGISTRIERT");
-  assert.equal(canonicalPortalMetadataStatus("loginStatus","LOGIN_BESTAETIGT"),"LOGIN_BESTAETIGT");
-  assert.equal(canonicalPortalMetadataStatus("loginStatus","Login bestätigt"),"LOGIN_BESTAETIGT");
-  assert.equal(canonicalPortalMetadataStatus("loginStatus","freier Status"),null);
-});
-
-test("metadata validation is field-specific and UI options have explicit canonical values",()=>{
-  const route=routes.slice(routes.indexOf('"/api/portal-access/:portalId/credential-metadata"'),routes.indexOf('"/api/portal-access/:portalId/credentials"',routes.indexOf('"/api/portal-access/:portalId/credential-metadata"')));
-  assert.match(route,/portal_access_metadata_validation_failed/);
-  assert.match(route,/fieldErrors/);
-  assert.match(route,/requestId:req\.id/);
-  assert.match(ui,/<option value="\$\{value\}"/);
-  assert.match(ui,/Login bestätigt/);
-  assert.match(ui,/error\.fieldErrors/);
-});
-
-test("company-scoped metadata migration is additive and preserves encrypted credential material",()=>{
-  assert.match(companyMetadataMigration,/ALTER TABLE tender\.portal_credential_companies/);
-  assert.match(companyMetadataMigration,/metadata_configured/);
-  assert.doesNotMatch(companyMetadataMigration,/\b(?:DELETE|TRUNCATE|DROP TABLE)\b/i);
-  assert.doesNotMatch(companyMetadataMigration,/ciphertext|auth_tag|\biv\b/);
 });
 
 test("an officially documented target that redirects to a portal 404 is not seeded", () => {
@@ -76,7 +48,7 @@ test("tender portal lookup is fail-closed to the authenticated company and retur
   assert.match(route,/visibleTender\(req, reply, req\.params\.tenderId\)/);
   assert.match(route,/accessibleCompanies\(req\.identity\)/);
   assert.match(route,/company_scope_forbidden/);
-  assert.match(route,/activeCredentialForCompany\(registeredScope\.portal_id, requestedCompany\)/);
+  assert.match(route,/latestCredentialTruthForCompany\(registeredScope\.portal_id, requestedCompany\)/);
   assert.match(route,/publicCredential\(scopedCredential, \{ manage: portalManage\(req\.identity\) \}\)/);
   assert.match(route,/canManage: portalManage\(req\.identity\)/);
   for (const forbidden of ["ciphertext", "auth_tag", "password", "totpSeed", "recoveryCodes"]) assert.doesNotMatch(route, new RegExp(`credential\\.${forbidden}`));

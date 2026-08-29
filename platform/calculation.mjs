@@ -1,29 +1,150 @@
-const required = ["productiveHours","baseHourlyRate","employerBurdenRate","overheadRate","riskRate","targetMarginRate"];
-const n = (value,name) => { const result=Number(value); if(!Number.isFinite(result)||result<0)throw new Error(`invalid_${name}`); return result; };
-export function calculateScenario(input,config) {
-  const missing=[...required,...(config.requiredInputs||[])].filter((key)=>input[key]===undefined||input[key]===null||input[key]==="");
-  if(missing.length)return {status:"BLOCKED",missing,items:[],totals:{}};
-  const hours=n(input.productiveHours,"productiveHours"), wage=n(input.baseHourlyRate,"baseHourlyRate");
-  const wageCost=hours*wage;
-  const supplements=Object.entries(input.supplementHours||{}).reduce((sum,[code,value])=>sum+n(value,code)*wage*n(config.supplementRates?.[code]||0,code),0);
-  const employer=wageCost*n(input.employerBurdenRate,"employerBurdenRate");
-  const absence=wageCost*n(input.absenceReserveRate||0,"absenceReserveRate");
-  const direct=wageCost+supplements+employer+absence+["material","machines","vehicles","travel","accommodation","insurance","subcontractors","recruitment","training","clearances","certificates","financing"].reduce((sum,key)=>sum+n(input[key]||0,key),0);
-  const overhead=direct*n(input.overheadRate,"overheadRate"), risk=(direct+overhead)*n(input.riskRate,"riskRate");
-  const selfCost=direct+overhead+risk;
-  const floor=selfCost, recommended=selfCost/(1-n(input.targetMarginRate,"targetMarginRate"));
-  const strategic=recommended*(1+n(input.strategyPremiumRate||0,"strategyPremiumRate"));
-  const db1=strategic-direct, db2=strategic-direct-overhead, db3=strategic-selfCost;
-  const months=n(input.contractMonths||12,"contractMonths");
-  const items=[
-    ["WAGE","Lohnkosten","productiveHours * baseHourlyRate",wageCost],
-    ["SUPPLEMENTS","Zuschläge","sum(hours * wage * rate)",supplements],
-    ["EMPLOYER","Arbeitgebernebenkosten","wageCost * employerBurdenRate",employer],
-    ["ABSENCE","Ausfallreserve","wageCost * absenceReserveRate",absence],
-    ["OVERHEAD","Verwaltung","direct * overheadRate",overhead],
-    ["RISK","Risikopuffer","(direct + overhead) * riskRate",risk],
-  ].map(([code,label,formula,amount])=>({code,label,formula,amount,unit:"EUR",source:"maintained configuration",assumptionStatus:"CONFIGURED",configVersion:config.version}));
-  return {status:"CALCULATED",missing:[],items,totals:{direct,selfCost,floor,recommended,strategic,db1,db2,db3,db1Pct:db1/strategic,db2Pct:db2/strategic,db3Pct:db3/strategic,monthly:strategic/months,annual:strategic/months*12,totalContractValue:strategic,fTE:hours/(n(config.fteAnnualHours||1600,"fteAnnualHours")*months/12)}};
-}
-export function sensitivity(input,config){return {best:calculateScenario({...input,riskRate:Number(input.riskRate)*0.75},config),base:calculateScenario(input,config),worst:calculateScenario({...input,riskRate:Number(input.riskRate)*1.5,productiveHours:Number(input.productiveHours)*1.1},config)}}
+import {
+  calculateSectorTender,
+  CALCULATION_SCHEMA_VERSION,
+} from "./sector-calculation.mjs";
 
+const REQUIRED_INPUTS = Object.freeze([
+  "productiveHours", "baseHourlyRate", "employerBurdenRate",
+  "overheadRate", "riskRate", "targetMarginRate",
+]);
+const FLAT_COST_INPUTS = Object.freeze([
+  "material", "machines", "vehicles", "travel", "accommodation",
+  "insurance", "subcontractors", "recruitment", "training",
+  "clearances", "certificates", "financing",
+]);
+const number = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+};
+const percentage = (value) => {
+  const parsed = number(value);
+  return parsed === null ? null : parsed * 100;
+};
+const blocked = (missing) => ({
+  status: "BLOCKED",
+  schemaVersion: CALCULATION_SCHEMA_VERSION,
+  missing: [...new Set(missing)],
+  items: [],
+  totals: {},
+  sandbox: true,
+  persisted: false,
+  externalTransmission: false,
+});
+
+export function calculateScenario(input = {}, config = {}) {
+  const missing = [...REQUIRED_INPUTS, ...(config.requiredInputs || [])]
+    .filter((key) => input[key] === undefined || input[key] === null || input[key] === "");
+  const fteAnnualHours = number(config.C23);
+  if (fteAnnualHours === null || fteAnnualHours === 0) missing.push("C23");
+  if (config.C23Unit !== "HOURS_PER_YEAR") missing.push("C23Unit");
+  if (missing.length) return blocked(missing);
+
+  const flatCosts = FLAT_COST_INPUTS.reduce(
+    (sum, key) => sum + (number(input[key]) || 0), 0,
+  );
+  const supplementHours = input.supplementHours || {};
+  const supplementRates = config.supplementRates || {};
+  const supplementPercent = Object.entries(supplementHours).reduce(
+    (sum, [code, hours]) =>
+      sum + (number(hours) || 0) * (number(supplementRates[code]) || 0),
+    0,
+  ) / Math.max(number(input.productiveHours) || 1, 1);
+
+  const canonical = calculateSectorTender({
+    serviceArea: config.serviceArea || input.serviceArea || null,
+    parameters: {
+      C01: number(input.baseHourlyRate),
+      C03: supplementPercent * 100,
+      C04: percentage(input.employerBurdenRate),
+      C05: 0,
+      C06: 0,
+      C07: percentage(input.absenceReserveRate || 0),
+      C08: percentage(input.overheadRate),
+      C11: flatCosts,
+      C18: percentage(input.riskRate),
+      C21: percentage(input.targetMarginRate),
+      C23: fteAnnualHours,
+    },
+    units: {
+      C08: "PERCENT", C11: "EUR", C21: "PERCENT",
+      C23: "HOURS_PER_YEAR",
+    },
+    facts: {
+      productiveHours: number(input.productiveHours),
+      duration: number(input.contractMonths) || 12,
+      workdays: input.workdays ?? "SANDBOX_SCENARIO",
+    },
+    provenance: {
+      source: "NON_PERSISTENT_MANUAL_SANDBOX",
+      configVersion: config.version || null,
+    },
+    contractMonths: number(input.contractMonths) || 12,
+  });
+  if (canonical.status !== "CALCULATED")
+    return blocked(canonical.missing || []);
+
+  const strategyPremium = number(input.strategyPremiumRate) || 0;
+  const strategic = canonical.totalPrice * (1 + strategyPremium);
+  const db1Base = canonical.totalPrice - canonical.db1;
+  const db2Base = canonical.totalPrice - canonical.db2;
+  const db3Base = canonical.totalPrice - canonical.db3;
+  const direct = canonical.directWages + canonical.supplements + canonical.employerOnCosts;
+  const selfCost = db3Base;
+  const months = number(input.contractMonths) || 12;
+  const items = [
+    ["WAGE", "Lohnkosten", canonical.directWages],
+    ["SUPPLEMENTS", "Zuschläge", canonical.supplements],
+    ["EMPLOYER", "Arbeitgebernebenkosten", canonical.employerOnCosts],
+    ["ABSENCE", "Ausfallreserve", canonical.otherAbsenceReserve],
+    ["DIRECT_COSTS", "Direkte Sachkosten", canonical.material],
+    ["OVERHEAD", "Verwaltung", canonical.overhead],
+    ["RISK", "Risikopuffer", canonical.risk],
+  ].map(([code, label, amount]) => ({
+    code, label, amount, unit: "EUR",
+    source: "NON_PERSISTENT_MANUAL_SANDBOX",
+    assumptionStatus: "USER_SUPPLIED_SANDBOX_VALUE",
+    configVersion: config.version || null,
+  }));
+
+  return {
+    status: "CALCULATED",
+    schemaVersion: CALCULATION_SCHEMA_VERSION,
+    missing: [],
+    items,
+    totals: {
+      direct,
+      selfCost,
+      floor: selfCost,
+      recommended: canonical.totalPrice,
+      strategic,
+      db1: strategic - db1Base,
+      db2: strategic - db2Base,
+      db3: strategic - db3Base,
+      db1Pct: strategic ? (strategic - db1Base) / strategic : 0,
+      db2Pct: strategic ? (strategic - db2Base) / strategic : 0,
+      db3Pct: strategic ? (strategic - db3Base) / strategic : 0,
+      monthly: strategic / months,
+      annual: strategic / months * 12,
+      totalContractValue: strategic,
+      fTE: canonical.fte,
+    },
+    canonical,
+    sandbox: true,
+    persisted: false,
+    managementComparable: true,
+    externalTransmission: false,
+  };
+}
+
+export function sensitivity(input = {}, config = {}) {
+  const scaled = (riskFactor, hoursFactor = 1) => ({
+    ...input,
+    riskRate: Number(input.riskRate) * riskFactor,
+    productiveHours: Number(input.productiveHours) * hoursFactor,
+  });
+  return {
+    best: calculateScenario(scaled(0.75), config),
+    base: calculateScenario(input, config),
+    worst: calculateScenario(scaled(1.5, 1.1), config),
+  };
+}

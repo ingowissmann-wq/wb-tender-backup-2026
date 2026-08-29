@@ -5,11 +5,12 @@ export function validTenantId(value) {
 }
 
 export async function withTenantContext(pool, context, operation) {
-  if (!validTenantId(context?.tenantId)) throw new Error("tenant_context_required");
+  const tenantId = context?.tenantId || context?.id;
+  if (!validTenantId(tenantId)) throw new Error("tenant_context_required");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query("SELECT set_config('app.tenant_id',$1,true)", [String(context.tenantId)]);
+    await client.query("SELECT set_config('app.tenant_id',$1,true)", [String(tenantId)]);
     await client.query("SELECT set_config('app.actor_user_id',$1,true)", [validTenantId(context.actorUserId) ? String(context.actorUserId) : ""]);
     const result = await operation(client);
     await client.query("COMMIT");

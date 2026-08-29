@@ -1,12 +1,17 @@
 import fs from "node:fs";
 import pg from "pg";
+import { createFixedScopedPool, loadBackgroundScope } from "../platform/scoped-pg-pool.mjs";
 
 const databaseUrlFile = process.env.DATABASE_URL_FILE || "/run/secrets/database_url";
-const pool = new pg.Pool({
-  connectionString: fs.readFileSync(databaseUrlFile, "utf8").trim(),
+const rawPool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL || fs.readFileSync(databaseUrlFile, "utf8").trim(),
   max: 1,
-  options: "-c default_transaction_read_only=on -c statement_timeout=55000",
+  options: [
+    "-c default_transaction_read_only=on -c statement_timeout=55000",
+    process.env.DATABASE_SESSION_OPTIONS,
+  ].filter(Boolean).join(" "),
 });
+const pool = createFixedScopedPool(rawPool, await loadBackgroundScope(rawPool)).pool;
 
 const scalar = async (sql) => (await pool.query(sql)).rows[0]?.value;
 try {
@@ -29,5 +34,5 @@ try {
     FROM tender.portal_registry`)).rows[0];
   console.log(JSON.stringify({ readOnly:true, capturedAt:new Date().toISOString(), tableCounts, decisionHash, regionInboxLinkHash, portalAccessByCompany, registry }, null, 2));
 } finally {
-  await pool.end();
+  await rawPool.end();
 }

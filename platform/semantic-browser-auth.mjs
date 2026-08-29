@@ -6,28 +6,10 @@ const hostsFor=portal=>new Set([portal.canonical_domain,...(portal.allowed_subdo
 const hostAllowed=(host,allowed)=>allowed.has(normalizeHost(host));
 const loginWords=/anmeld|login|sign\s*in|weiter|next|fortfahren|continue/i;
 const accountWords=/abmeld|logout|mein konto|my account|profil|account|organisation|organization/i;
-// A generic mention of MFA (for example in help/footer text) is not a
-// challenge. Only an interactive code control or an explicit push approval
-// instruction may stop a correlated login as MFA_REQUIRED.
-export function authoritativeMfaChallenge({otpVisible=false,text="",html=""}={}){
-  if(otpVisible)return true;
-  const source=`${String(text)}\n${String(html)}`;
-  return /(?:bestätigen|genehmigen|approve|confirm).{0,100}(?:anmeldung|login|sign.?in|push).{0,100}(?:app|gerät|device|smartphone)/i.test(source)||
-    /(?:push.{0,40}(?:bestätigen|genehmigen|approve)|(?:authenticator|authentifizierungs).{0,60}(?:bestätigen|genehmigen))/i.test(source);
-}
+const mfaWords=/mfa|mehrfaktor|two.factor|2fa|authenticator|verification code|bestätigungscode|einmalcode|push.{0,20}bestätigen/i;
+const captchaWords=/captcha|recaptcha|hcaptcha|ich bin kein roboter|i am not a robot|sicherheitsabfrage/i;
 const failureWords=/falsch|ungültig|incorrect|invalid|gesperrt|locked|fehlgeschlagen|failed/i;
 const consentWords=/nur notwendige|ablehnen|reject|alle akzeptieren|akzeptieren|zustimmen|accept all|allow all|einverstanden/i;
-const maintenanceWords=/wartungsarbeiten|maintenance(?:\s+work|\s+window|\s+mode)?|vorübergehend(?:\s+technisch)?\s+nicht\s+verfügbar|temporarily\s+unavailable|service\s+unavailable/i;
-
-export function portalAvailabilityFailure({status=0,title="",text=""}={}){
-  const code=Number(status)||0,content=`${String(title)}\n${String(text)}`;
-  return code>=500||maintenanceWords.test(content);
-}
-
-export function portalNavigationFailure(error){
-  const message=String(error?.message||"");
-  return error?.name==="TimeoutError"||/net::ERR_(?:CONNECTION|NAME_NOT_RESOLVED|DNS|ADDRESS|SSL|TLS|CERT|HTTP2|TIMED_OUT|NETWORK_CHANGED|INTERNET_DISCONNECTED|PROXY_CONNECTION_FAILED)/i.test(message);
-}
 
 const visible=locator=>locator.first().isVisible().catch(()=>false);
 async function firstVisible(locators){for(const locator of locators)if(await visible(locator))return locator.first();return null}
@@ -52,10 +34,38 @@ async function semanticInput(page,kind){
 async function clickSemantic(page,words=loginWords){for(const frame of page.frames()){const match=await firstVisible([frame.getByRole("button",{name:words}),frame.getByRole("link",{name:words}),frame.locator('button[type="submit"],input[type="submit"],input[type="image"]')]);if(match){await Promise.allSettled([page.waitForLoadState("domcontentloaded",{timeout:15000}),match.click({timeout:10000})]);return true}}return false}
 async function consent(page){for(const frame of page.frames()){const match=await firstVisible([frame.getByRole("button",{name:consentWords}),frame.getByRole("link",{name:consentWords})]);if(match){await match.click({timeout:5000}).catch(()=>{});return}}}
 async function bodyText(page){return String(await page.locator("body").innerText({timeout:5000}).catch(()=>"" )).slice(0,20000)}
+export function classifyInteractiveLoginChallenge({text="",otpVisible=false,captchaVisible=false}={}){
+  if(captchaVisible||captchaWords.test(String(text)))return "CAPTCHA_MANUELL_ERFORDERLICH";
+  if(otpVisible||mfaWords.test(String(text)))return "MFA_BESTÄTIGUNG_ERFORDERLICH";
+  return null;
+}
+export function authoritativeMfaChallenge({text="",html="",otpVisible=false}={}){
+  if(otpVisible)return true;
+  const source=`${String(text)}\n${String(html)}`;
+  return /(?:bestätigen|genehmigen|approve|confirm).{0,100}(?:anmeldung|login|sign.?in|push).{0,100}(?:app|gerät|device|smartphone)/i.test(source)||
+    /(?:push.{0,40}(?:bestätigen|genehmigen|approve)|(?:authenticator|authentifizierungs).{0,60}(?:bestätigen|genehmigen))/i.test(source);
+}
+export function portalAvailabilityFailure({status=0,title="",text=""}={}){
+  return Number(status)>=500 || /wartungsarbeiten|maintenance|temporarily unavailable|vorübergehend nicht erreichbar/i.test(`${title}\n${text}`);
+}
+export function portalNavigationFailure(error){
+  return /ERR_(?:SSL|CERT|TLS|NAME_NOT_RESOLVED|CONNECTION|TIMED_OUT|NETWORK_CHANGED)|net::|navigation timeout/i.test(String(error?.message||""));
+}
+async function interactiveLoginChallenge(page,text){
+  const otp=await firstVisible(page.frames().flatMap(frame=>[
+    frame.locator('input[autocomplete="one-time-code"],input[name*="otp" i],input[id*="otp" i],input[name*="totp" i],input[id*="totp" i],input[name*="mfa" i],input[id*="mfa" i],input[name*="one-time" i],input[id*="one-time" i]'),
+    frame.getByLabel(/bestätigungscode|einmalcode|verification code|authenticator|otp|tan/i),
+  ]));
+  const captcha=await firstVisible(page.frames().flatMap(frame=>[
+    frame.locator('iframe[src*="recaptcha" i],iframe[src*="hcaptcha" i],textarea[name="g-recaptcha-response"],textarea[name="h-captcha-response"],input[name*="captcha" i],img[src*="captcha" i]'),
+    frame.getByText(/ich bin kein roboter|i am not a robot|sicherheitsabfrage/i),
+  ]));
+  return classifyInteractiveLoginChallenge({text,otpVisible:Boolean(otp),captchaVisible:Boolean(captcha)});
+}
 const sessionInvalidWords=/session.{0,25}(abgelaufen|expired)|sitzung.{0,25}abgelaufen|erneut.{0,20}anmeld/i;
 const authenticatedWords=/abmeld|logout|mein konto|profil|organisation|vergabeverfahren|vergabeunterlagen|bieterbereich|workflowopen|wf_evalink/i;
 const safeBrowserFailure=(error,phase)=>({
-  resultCode:portalNavigationFailure(error)?"PORTAL_NICHT_ERREICHBAR":"TECHNISCHER_CONNECTORFEHLER",
+  resultCode:error?.name==="TimeoutError"?"PORTAL_NICHT_ERREICHBAR":"TECHNISCHER_CONNECTORFEHLER",
   failurePhase:phase,
   failureClass:String(error?.name||"Error").slice(0,80),
   failureReason:String(error?.message||"browser operation failed").replace(/https?:\/\/[^\s]+/gi,"[portal-url]").slice(0,240)
@@ -106,6 +116,27 @@ export function cookieHeaderForUrl(cookies,url){const target=new URL(url),path=t
   const domain=normalizeHost(String(cookie.domain||"").replace(/^\./,"")),cookiePath=String(cookie.path||"/")||"/",domainOk=normalizeHost(target.hostname)===domain||normalizeHost(target.hostname).endsWith(`.${domain}`),pathOk=path===cookiePath||path.startsWith(cookiePath.endsWith("/")?cookiePath:`${cookiePath}/`),secureOk=!cookie.secure||target.protocol==="https:",fresh=!cookie.expires||cookie.expires<0||cookie.expires>now;return domainOk&&pathOk&&secureOk&&fresh
 }).map(cookie=>`${cookie.name}=${cookie.value}`).join("; ")}
 
+export async function inspectPortalLoginEntryWithBrowser({portal,timeoutMs=60_000,headless=true}={}){
+  const allowed=hostsFor(portal),entry=new URL(portal.authentication_entry_url||portal.login_path||"/",`https://${portal.canonical_domain}`).href;
+  if(!hostAllowed(new URL(entry).hostname,allowed))return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};
+  const browser=await chromium.launch({headless,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||"/usr/bin/chromium-browser",args:["--disable-dev-shm-usage","--no-sandbox"]});
+  const context=await browser.newContext({javaScriptEnabled:true,locale:"de-DE"}),page=await context.newPage();
+  let forbidden=false,phase="INITIAL_NAVIGATION";
+  page.on("framenavigated",frame=>{if(frame===page.mainFrame()){try{const url=new URL(frame.url());if(url.protocol!=="about:"&&!hostAllowed(url.hostname,allowed))forbidden=true}catch{}}});
+  try{
+    await page.goto(entry,{waitUntil:"domcontentloaded",timeout:timeoutMs});await consent(page);
+    if(forbidden)return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};
+    phase="LOGIN_FORM_DISCOVERY";
+    let username=await semanticInput(page,"username"),password=await semanticInput(page,"password"),navigationOnly=false;
+    if(!username&&!password){navigationOnly=await clickSemantic(page);if(navigationOnly){await page.waitForTimeout(900);await consent(page);username=await semanticInput(page,"username");password=await semanticInput(page,"password")}}
+    if(forbidden)return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};
+    const text=await bodyText(page),challenge=await interactiveLoginChallenge(page,text),current=new URL(page.url());
+    return {resultCode:username||password||challenge?"LOGIN_ENTRY_DISCOVERED":"LOGIN_FORMULAR_GEAENDERT",
+      canonicalHost:normalizeHost(current.hostname),path:current.pathname,usernameField:Boolean(username),passwordField:Boolean(password),
+      navigationOnly,interactiveChallenge:challenge,externalWrite:false};
+  }catch(error){return safeBrowserFailure(error,phase)}finally{await context.close().catch(()=>{});await browser.close().catch(()=>{})}
+}
+
 export function classifyDeutscheEvergabeWorkflow(html=""){
   const source=String(html);
   if(/href=["'][^"']*WorkflowOpen[^"']*A=WF_VUDownload[^"']*["']/i.test(source))return "WF_VU_DOWNLOAD";
@@ -121,10 +152,7 @@ export async function authenticatePortalWithBrowser({portal,credential,targetUrl
   let forbidden=false,phase="INITIAL_NAVIGATION";
   page.on("framenavigated",frame=>{if(frame===page.mainFrame()){try{const url=new URL(frame.url());if(url.protocol!=="about:"&&!hostAllowed(url.hostname,allowed))forbidden=true}catch{}}});
   try{
-    const navigation=await page.goto(entry,{waitUntil:"domcontentloaded",timeout:timeoutMs});await consent(page);if(forbidden)return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};
-    const initialText=await bodyText(page),initialTitle=await page.title().catch(()=>"");
-    if(portalAvailabilityFailure({status:navigation?.status(),title:initialTitle,text:initialText}))return {resultCode:"PORTAL_NICHT_ERREICHBAR",failurePhase:"INITIAL_NAVIGATION",failureReason:"Portal temporarily unavailable or under maintenance"};
-    phase="LOGIN_FORM_DISCOVERY";
+    await page.goto(entry,{waitUntil:"domcontentloaded",timeout:timeoutMs});await consent(page);if(forbidden)return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};phase="LOGIN_FORM_DISCOVERY";
     let username,password,portalSubmit=null;
     if(portal.adapter_id==="dtvp"){
       password=page.locator('input[type="password"]').first();
@@ -136,11 +164,8 @@ export async function authenticatePortalWithBrowser({portal,credential,targetUrl
     if(username){await username.fill(String(credential.username||""));password=await semanticInput(page,"password");if(!password){await clickSemantic(page);await page.waitForTimeout(750);await consent(page);password=await semanticInput(page,"password")}}
     if(!password)return {resultCode:"LOGIN_FORMULAR_GEAENDERT"};
     phase="CREDENTIAL_SUBMISSION";await password.fill(String(credential.password||""));if(portalSubmit)await Promise.all([page.waitForNavigation({waitUntil:"domcontentloaded",timeout:30000}).catch(()=>null),portalSubmit.click({timeout:10000,noWaitAfter:true}).catch(error=>{if(error?.name!=="TimeoutError")throw error})]);else await clickSemantic(page);await page.waitForTimeout(1200);await consent(page);if(forbidden)return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};
-    const text=await bodyText(page),otp=await firstVisible(page.frames().flatMap(frame=>[
-      frame.locator('input[autocomplete="one-time-code"]'),
-      frame.locator('input[name*="otp" i],input[id*="otp" i],input[name*="mfa" i],input[id*="mfa" i],input[name*="tan" i],input[id*="tan" i],input[name*="verification-code" i],input[id*="verification-code" i]')
-    ])),html=await page.content().catch(()=>"");
-    if(authoritativeMfaChallenge({otpVisible:Boolean(otp),text,html}))return {resultCode:"MFA_BESTÄTIGUNG_ERFORDERLICH",mfaUrl:page.url()};
+    const text=await bodyText(page),interactiveChallenge=await interactiveLoginChallenge(page,text);
+    if(interactiveChallenge)return {resultCode:interactiveChallenge,continuationUrl:page.url()};
     if(failureWords.test(text)&&await semanticInput(page,"password"))return {resultCode:"BENUTZERNAME_ODER_PASSWORT_FALSCH"};
     const loginStill=Boolean(await semanticInput(page,"password")),accountVisible=accountWords.test(text);
     if(loginStill&&!accountVisible)return {resultCode:"BENUTZERNAME_ODER_PASSWORT_FALSCH"};
@@ -207,26 +232,59 @@ export async function downloadPublicEvergabeOnlineArchive(targetUrl,{timeoutMs=6
   }finally{await context.close().catch(()=>{});await browser.close().catch(()=>{})}
 }
 
-export async function downloadPublicDuesseldorfNetServerArchive(targetUrl,{timeoutMs=60_000,maxBytes=250_000_000}={}){
+export async function downloadPublicNetServerArchive(targetUrl,{expectedHost,timeoutMs=60_000,maxBytes=250_000_000}={}){
   const target=new URL(targetUrl);
-  if(target.protocol!=="https:"||target.hostname!=="vergabe.duesseldorf.de"||target.pathname!=="/NetServer/TenderingProcedureDetails"||target.searchParams.get("function")!=="_Details"||!/^54321-Tender-[a-z0-9-]+$/i.test(target.searchParams.get("TenderOID")||""))throw new Error("duesseldorf_netserver_target_forbidden");
+  const boundHost=String(expectedHost||"").trim().toLowerCase();
+  if(!boundHost||target.protocol!=="https:"||target.hostname.toLowerCase()!==boundHost||target.pathname!=="/NetServer/TenderingProcedureDetails"||target.searchParams.get("function")!=="_Details"||!/^54321-(?:Net)?Tender-[a-z0-9-]+$/i.test(target.searchParams.get("TenderOID")||""))throw new Error("netserver_target_forbidden");
   const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||"/usr/bin/chromium-browser",args:["--disable-dev-shm-usage","--no-sandbox"]}),context=await browser.newContext({acceptDownloads:true,javaScriptEnabled:true,locale:"de-DE"}),page=await context.newPage();
   try{
     await page.goto(target.href,{waitUntil:"domcontentloaded",timeout:timeoutMs});
-    if(new URL(page.url()).hostname!==target.hostname)throw new Error("duesseldorf_netserver_redirect_forbidden");
+    if(new URL(page.url()).hostname!==target.hostname)throw new Error("netserver_redirect_forbidden");
     const versions=page.locator("a.zipFileContents[data-oid][data-token]");
-    if(!await versions.count())throw new Error("duesseldorf_netserver_archive_control_missing");
+    if(!await versions.count())throw new Error("netserver_archive_control_missing");
     await versions.first().click({timeout:15_000});
     const form=page.locator("form#downloadSelection"),selectAll=form.locator("input[type=button]").first(),submit=form.locator("input[type=submit]").first();
     await form.waitFor({state:"visible",timeout:15_000});
-    if(!await selectAll.isVisible().catch(()=>false)||!await submit.isVisible().catch(()=>false))throw new Error("duesseldorf_netserver_archive_form_missing");
+    if(!await selectAll.isVisible().catch(()=>false)||!await submit.isVisible().catch(()=>false))throw new Error("netserver_archive_form_missing");
     await selectAll.click({timeout:10_000});
     const [download]=await Promise.all([page.waitForEvent("download",{timeout:timeoutMs}),submit.click({timeout:15_000})]);
-    const failure=await download.failure();if(failure)throw new Error("duesseldorf_netserver_download_failed");
+    const failure=await download.failure();if(failure)throw new Error("netserver_download_failed");
     const stream=await download.createReadStream(),chunks=[];let bytes=0;
     for await(const chunk of stream){bytes+=chunk.length;if(bytes>maxBytes)throw new Error("document_size_invalid");chunks.push(Buffer.from(chunk))}
     const buffer=Buffer.concat(chunks),name=String(download.suggestedFilename()||"Vergabeunterlagen.zip").replace(/[^\p{L}\p{N}._ -]/gu,"_").slice(0,240);
-    if(buffer[0]!==0x50||buffer[1]!==0x4b)throw new Error("duesseldorf_netserver_archive_signature_invalid");
+    if(buffer[0]!==0x50||buffer[1]!==0x4b)throw new Error("netserver_archive_signature_invalid");
     return {status:"FETCHED",httpStatus:200,url:target.href,mime:"application/zip",disposition:`attachment; filename="${name}"`,buffer,browserBound:true,authenticated:false,externalWrite:false};
   }finally{await context.close().catch(()=>{});await browser.close().catch(()=>{})}
+}
+
+export async function downloadPublicAIBietercockpitArchive(targetUrl,{timeoutMs=60_000,maxBytes=500_000_000}={}){
+  const target=new URL(targetUrl),expectedHost="www.deutsches-ausschreibungsblatt.de";
+  if(target.protocol!=="https:"||target.hostname!==expectedHost||!/^\/VN\/[A-Za-z0-9._-]+$/.test(target.pathname)||target.username||target.password)throw new Error("ai_bietercockpit_target_forbidden");
+  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||"/usr/bin/chromium-browser",args:["--disable-dev-shm-usage","--no-sandbox"]}),context=await browser.newContext({acceptDownloads:true,javaScriptEnabled:true,locale:"de-DE"}),page=await context.newPage();
+  try{
+    await page.goto(target.href,{waitUntil:"domcontentloaded",timeout:timeoutMs});await page.waitForTimeout(1_500);await consent(page);
+    const finalUrl=new URL(page.url()),tenderKey=finalUrl.hash.match(/^#\/([a-f0-9]{16,64})$/i)?.[1];
+    if(finalUrl.hostname!==expectedHost||finalUrl.pathname!=="/ausschreibung"||!tenderKey)throw new Error("ai_bietercockpit_redirect_forbidden");
+    const control=page.locator(`a[href="/lookup/documents/initiateDownload/${tenderKey}"]`).first();
+    if(!await control.isVisible().catch(()=>false)||!/Vergabeunterlagen/i.test(await control.innerText().catch(()=>"")))throw new Error("ai_bietercockpit_archive_control_missing");
+    const href=await control.getAttribute("href"),downloadUrl=new URL(href,finalUrl);
+    if(downloadUrl.hostname!==expectedHost||downloadUrl.pathname!==`/lookup/documents/initiateDownload/${tenderKey}`)throw new Error("ai_bietercockpit_download_target_forbidden");
+    const initiated=await context.request.get(downloadUrl.href,{headers:{referer:page.url()},timeout:timeoutMs});
+    if(!initiated.ok())throw new Error("ai_bietercockpit_download_initiation_failed");
+    const initiationBody=await initiated.body();if(initiationBody.length>2_000_000)throw new Error("ai_bietercockpit_download_initiation_invalid");
+    if(!/href=["']\/lookup\/download\/getZip["']/i.test(initiationBody.toString("utf8")))throw new Error("ai_bietercockpit_zip_control_missing");
+    const zipUrl=`https://${expectedHost}/lookup/download/getZip`,response=await context.request.get(zipUrl,{headers:{referer:downloadUrl.href},timeout:timeoutMs});
+    if(!response.ok())throw new Error("ai_bietercockpit_download_failed");
+    const buffer=await response.body();if(buffer.length>maxBytes)throw new Error(`document_size_invalid:${buffer.length}`);
+    const disposition=response.headers()["content-disposition"]||"",rawName=disposition.match(/filename\*?=(?:UTF-8''|["']?)([^"';]+)/i)?.[1]||"Vergabeunterlagen.zip",
+      name=String(decodeURIComponent(rawName)).replace(/[^\p{L}\p{N}._ -]/gu,"_").slice(0,240);
+    if(buffer[0]!==0x50||buffer[1]!==0x4b)throw new Error(`ai_bietercockpit_archive_signature_invalid:${String(response.headers()["content-type"]||"").slice(0,80)}:${buffer.length}:${buffer.subarray(0,8).toString("hex")}`);
+    return {status:"FETCHED",httpStatus:200,url:target.href,mime:"application/zip",disposition:`attachment; filename="${name}"`,buffer,browserBound:true,authenticated:false,externalWrite:false};
+  }finally{await context.close().catch(()=>{});await browser.close().catch(()=>{})}
+}
+
+// Backward-compatible, still exactly bound wrapper for the production-tested
+// Düsseldorf host. New hosts must be bound from portal_registry by the caller.
+export function downloadPublicDuesseldorfNetServerArchive(targetUrl,options={}){
+  return downloadPublicNetServerArchive(targetUrl,{...options,expectedHost:"vergabe.duesseldorf.de"});
 }

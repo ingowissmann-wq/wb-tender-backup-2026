@@ -1,0 +1,14 @@
+FROM wb-tender-real-operations:20260820-portal-save-verify-exact-binding.2
+ARG RELEASE_VERSION=20260820-portal-ted-capabilities.1
+ARG SOURCE_FINGERPRINT
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      wb.release.scope="portal-ted-capability-classification-only" \
+      wb.release.base="sha256:8aa59fe53947eb8af9dd3faf00b36b0aefac94a499d55fccbdcfabc1f8259c8c"
+COPY --chown=root:root platform/portal-capability-policy.mjs /app/platform/portal-capability-policy.mjs
+COPY --chown=root:root platform/portal-credentials.mjs /app/platform/portal-credentials.mjs
+COPY --chown=root:root platform/portal-navigation.mjs /app/platform/portal-navigation.mjs
+COPY --chown=root:root platform/portal-management-search.mjs /app/platform/portal-management-search.mjs
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs
+COPY --chown=root:root platform/assets/autopilot-navigation.js /app/platform/assets/autopilot-navigation.js
+COPY --chown=root:root migrations/103_portal_credential_capability_scope.sql /app/migrations/103_portal_credential_capability_scope.sql

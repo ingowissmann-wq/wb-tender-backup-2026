@@ -1,5 +1,14 @@
 BEGIN;
 
+-- 087 is deployable before the broader Tender runtime-role migration (108).
+-- Keep the shared SaaS execution role non-login and fail-safe when it has not
+-- yet been provisioned by an earlier environment bootstrap.
+DO $$ BEGIN
+  IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='saas_runtime') THEN
+    CREATE ROLE saas_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  END IF;
+END $$;
+
 ALTER TABLE saas.iam_subject_bindings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE saas.iam_subject_bindings FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON saas.iam_subject_bindings;

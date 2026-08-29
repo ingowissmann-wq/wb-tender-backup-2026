@@ -46,7 +46,9 @@ const PDF_STANDARD_FONT_DATA_URL = new URL(
 export const PARSER_VERSION = "wb-binary-parsers/2.1.0";
 export const PARSER_LIMITS = Object.freeze({
   maxBytes: 50_000_000,
-  maxArchiveBytes: 250_000_000,
+  maxBinaryAttachmentBytes: 100*1024*1024,
+  maxArchiveInputBytes: 400_000_000,
+  maxArchiveBytes: 500_000_000,
   maxArchiveEntries: 2_000,
   maxArchiveRatio: 100,
   maxArchiveDepth: 2,
@@ -77,6 +79,8 @@ const MIME_BY_EXT = new Map([
   [".d81", "application/xml"], [".d82", "application/xml"], [".d83", "application/xml"],
   [".p81", "application/xml"], [".p82", "application/xml"], [".p83", "application/xml"],
   [".zip", "application/zip"],
+  [".dwg", "image/vnd.dwg"],
+  [".log", "text/plain"],
 ]);
 const sha256 = (buffer) => crypto.createHash("sha256").update(buffer).digest("hex");
 const entityDecode = (text) => String(text)
@@ -91,7 +95,9 @@ function assertEnvelope({buffer, name, mediaType}) {
   if (!Buffer.isBuffer(buffer)) throw new Error("parser_buffer_required");
   if (!name || name.includes("\0") || path.isAbsolute(name) || name.split(/[\\/]/).includes(".."))
     throw new Error("parser_path_invalid");
-  if (buffer.length === 0 || buffer.length > PARSER_LIMITS.maxBytes) throw new Error("parser_size_invalid");
+  const inputLimit=path.extname(name).toLowerCase()===".zip"?PARSER_LIMITS.maxArchiveInputBytes:
+    path.extname(name).toLowerCase()===".dwg"?PARSER_LIMITS.maxBinaryAttachmentBytes:PARSER_LIMITS.maxBytes;
+  if (buffer.length === 0 || buffer.length > inputLimit) throw new Error("parser_size_invalid");
   const extension = path.extname(name).toLowerCase();
   const expected = MIME_BY_EXT.get(extension);
   if (!expected) throw new Error("parser_extension_forbidden");
@@ -107,6 +113,7 @@ function assertEnvelope({buffer, name, mediaType}) {
     throw new Error("parser_signature_mismatch");
   if (extension === ".doc" && !buffer.subarray(0,8).equals(Buffer.from([0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1])))
     throw new Error("parser_signature_mismatch");
+  if(extension===".dwg"&&!/^AC10\d{2}$/.test(buffer.subarray(0,6).toString("ascii")))throw new Error("parser_signature_mismatch");
   return {extension, expectedMime: expected};
 }
 
@@ -426,6 +433,8 @@ export async function parseBinaryDocument(input) {
     if ([".html",".htm"].includes(envelope.extension)) return parseHtmlDocument(buffer);
     if (envelope.extension === ".xls") return parseLegacyXls(buffer);
     if (envelope.extension === ".doc") return parseLegacyDoc(buffer);
+    if (envelope.extension === ".dwg") return {type:"DWG",formatVersion:buffer.subarray(0,6).toString("ascii"),manualReview:true,warning:"VORHANDEN_MANUELL_ZU_PRÜFEN"};
+    if (envelope.extension === ".log") return {...parseCsvDocument(buffer),type:"LOG",manualReview:true};
     if (envelope.extension === ".zip") return {type:"ZIP",archive:await inspectZip(buffer)};
     throw new Error("parser_not_supported");
   })();

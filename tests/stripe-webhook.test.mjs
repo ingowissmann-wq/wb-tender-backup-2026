@@ -116,17 +116,32 @@ test("Stripe adapter supports paid and failed invoices with old and current subs
   const adapter = stripeAdapter();
   const paid = Buffer.from(JSON.stringify({ id: "evt_invoice_paid", type: "invoice.paid", data: { object: {
     id: "in_paid", status: "paid", paid: true, customer: "cus_test", billing_reason: "subscription_cycle",
+    lines: { data: [{ price: { id: "price_crmAnnual" } }] },
     parent: { type: "subscription_details", subscription_details: { subscription: "sub_test", metadata: { tenant_id: TENANT_ID } } },
   } } }));
   const paidEvent = adapter.verifyWebhook(paid, signatureFor(paid));
   assert.equal(paidEvent.type, "invoice.paid");
   assert.equal(paidEvent.subscriptionRef, "sub_test");
   assert.equal(paidEvent.billingReason, "subscription_cycle");
+  assert.equal(paidEvent.priceId, "price_crmAnnual");
 
   const failed = Buffer.from(JSON.stringify({ id: "evt_invoice_failed", type: "invoice.payment_failed", data: { object: {
     id: "in_failed", paid: false, customer: "cus_test", subscription: "sub_test", subscription_details: { metadata: { tenant_id: TENANT_ID } },
   } } }));
   assert.equal(adapter.verifyWebhook(failed, signatureFor(failed)).type, "payment.failed");
+});
+
+test("signed Stripe subscription cancellation resolves the bound price and subscription", () => {
+  const adapter = stripeAdapter();
+  const body = Buffer.from(JSON.stringify({ id: "evt_subscription_deleted", type: "customer.subscription.deleted", data: { object: {
+    id: "sub_test", status: "canceled", customer: "cus_test", metadata: { tenant_id: TENANT_ID, commercial_product_key: "wb_crm" },
+    items: { data: [{ price: { id: "price_crmAnnual" } }] },
+  } } }));
+  const event = adapter.verifyWebhook(body, signatureFor(body));
+  assert.equal(event.type, "subscription.canceled");
+  assert.equal(event.subscriptionRef, "sub_test");
+  assert.equal(event.priceId, "price_crmAnnual");
+  assert.equal(event.requestedProductKey, "wb_crm");
 });
 
 test("unpaid checkout and inconsistent invoice.paid events never reach billing state processing", async (t) => {
@@ -169,7 +184,36 @@ test("checkout preparation uses the selected price against an isolated mock only
   assert.equal(checkout.id, "cs_test_internal_only");
   assert.equal(observed.method, "POST");
   assert.equal(observed.authorization, "Bearer sk_test_isolated_only");
-  assert.equal(observed.idempotency, `wb-trial-${TENANT_ID}`);
+  assert.equal(observed.idempotency, `wb-checkout-${TENANT_ID}-price_isolatedCore`);
   assert.equal(observed.body.get("line_items[0][price]"), "price_isolatedCore");
   assert.equal(observed.body.get("client_reference_id"), TENANT_ID);
+  assert.equal(observed.body.get("metadata[stripe_price_id]"), null);
+});
+
+test("paid-trial checkout is one-time and signed completion carries payment binding without trusting price metadata", async (t) => {
+  let observed;
+  const provider = http.createServer(async (req, res) => {
+    let body = ""; for await (const chunk of req) body += chunk;
+    observed = new URLSearchParams(body);
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ id: "cs_trial_isolated", url: "https://checkout.example.invalid/trial" }));
+  });
+  provider.listen(0, "127.0.0.1"); await once(provider, "listening");
+  t.after(() => provider.close());
+  const adapter = new StripeBillingAdapter({ secretKey: "sk_test_isolated_only", webhookSecret: WEBHOOK_SECRET,
+    publicBaseUrl: "https://saas.example.invalid", apiBase: `http://127.0.0.1:${provider.address().port}`, now: () => NOW });
+  await adapter.createCheckout({ tenantId: TENANT_ID, priceId: "price_trialIsolated", productKey: "wb_business_suite_trial_14d", billingInterval: "ONE_TIME" });
+  assert.equal(observed.get("mode"), "payment");
+  assert.equal(observed.get("subscription_data[metadata][tenant_id]"), null);
+  assert.equal(observed.get("metadata[stripe_price_id]"), null);
+  const raw = Buffer.from(JSON.stringify({ id: "evt_trial_paid", type: "checkout.session.completed", data: { object: {
+    id: "cs_trial_isolated", mode: "payment", payment_status: "paid", client_reference_id: TENANT_ID,
+    customer: "cus_trial", payment_intent: "pi_trial", metadata: { tenant_id: TENANT_ID, commercial_product_key: "wb_business_suite_trial_14d", stripe_price_id: "price_untrusted" },
+  } } }));
+  const event = adapter.verifyWebhook(raw, signatureFor(raw));
+  assert.equal(event.type, "payment.confirmed");
+  assert.equal(event.checkoutMode, "payment");
+  assert.equal(event.paymentRef, "pi_trial");
+  assert.equal(event.priceId, null);
+  assert.equal(event.metadataPriceHint, "price_untrusted");
 });

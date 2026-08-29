@@ -28,7 +28,10 @@ export const PORTAL_ADAPTER_CATALOG=Object.freeze([
   definition("vms","VMS"),
   definition("subreport","subreport"),
   definition("bi-medien","bi-medien"),
+  definition("aumass","AUMASS eVergabe"),
   definition("evergabe-de","evergabe.de"),
+  definition("eu-funding-tenders","EU Funding & Tenders / eSubmission"),
+  definition("etenders-ireland","eTenders Ireland"),
   definition("kommunalportal","Kommunale Portale"),
   definition("bundeslandportal","Bundesländerportale"),
   definition("generic-public-procurement","Sonstige öffentliche Vergabeplattformen")

@@ -5,4 +5,4 @@ set -eu
 [ "${EXTERNAL_SUBMISSION_ENABLED:-false}" = false ] || { echo 'FATAL: external submission must remain disabled' >&2; exit 78; }
 [ "${WB_TENDER_ALLOW_EXTERNAL_SUBMISSION:-false}" = false ] || { echo 'FATAL: external submission override must remain disabled' >&2; exit 78; }
 [ -n "${DATABASE_URL_FILE:-}" ] && [ -r "$DATABASE_URL_FILE" ] || { echo 'FATAL: DATABASE_URL_FILE is required' >&2; exit 78; }
-exec node platform/source-ingestion.mjs
+exec node /app/platform/source-ingestion.mjs

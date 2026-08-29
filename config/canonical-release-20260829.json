@@ -1,0 +1,21 @@
+{
+  "release": "20260829-canonical-source-c23-shadow",
+  "requiredLedgerHead": "0154-phase2-company-scoped-resolver-jobs",
+  "migrations": [
+    {
+      "version": "0155-c23-canonical-calculation-contract",
+      "path": "migrations/155_c23_canonical_calculation_contract.sql",
+      "sha256": "818accad458e2de152038a547152200cb598f51d309a335bb20bb16e65953e49"
+    }
+  ],
+  "rollback": [
+    {
+      "version": "0155-c23-canonical-calculation-contract-down",
+      "path": "migrations/155_c23_canonical_calculation_contract.down.sql",
+      "sha256": "820fa9efd95cc40de9aeb6b37ceb661c2582864f2ad71f3f1b2941133ce21abd"
+    }
+  ],
+  "externalSubmissionEnabled": false,
+  "productionActivation": false,
+  "mode": "ISOLATED_CLONE_THEN_SHADOW"
+}

@@ -1,3 +1,7 @@
+import { canonicalPortalAccessStatus } from "./canonical-portal-access.mjs";
+
+export { canonicalPortalAccessStatus } from "./canonical-portal-access.mjs";
+
 const text = (value) => String(value ?? "");
 
 export function normalizePortalSearch(value) {
@@ -26,22 +30,6 @@ export function portalSearchText(portal) {
     ...(portal.serviceRoles || []),
     ...(portal.credentialAccountTypes || []),
   ].map(normalizePortalSearch).join(" ");
-}
-
-export function canonicalPortalAccessStatus({ configured, sessionEffectiveStatus, jobStatus, jobResultCode, mfaRequired }) {
-  if (!configured) return "NO_ACCESS";
-  if (["QUEUED", "PENDING", "CLAIMED", "RETRY", "RUNNING"].includes(jobStatus))
-    return "CHECK_RUNNING";
-  if (sessionEffectiveStatus === "ACTIVE") return "LOGGED_IN";
-  if (mfaRequired || ["MFA_REQUIRED", "MFA_BESTÄTIGUNG_ERFORDERLICH"].includes(jobResultCode)) return "MFA_REQUIRED";
-  if (["PORTAL_UNREACHABLE", "NETWORK_ERROR", "TIMEOUT"].includes(jobResultCode))
-    return "PORTAL_UNREACHABLE";
-  if (["INVALID_CREDENTIALS", "LOGIN_FAILED", "LOGIN_FORMULAR_GEAENDERT", "DEAD_LETTER"].includes(jobResultCode) || jobStatus === "DEAD_LETTER")
-    return "LOGIN_FAILED";
-  if (["EXPIRED", "REVOKED", "RELOGIN_REQUIRED_INACTIVE"].includes(sessionEffectiveStatus))
-    return "RELOGIN_REQUIRED";
-  if (!sessionEffectiveStatus) return "ACCESS_CONFIGURED";
-  return "STATUS_UNKNOWN";
 }
 
 const booleanFilter = (value) => value === true || value === "true" || value === "1";

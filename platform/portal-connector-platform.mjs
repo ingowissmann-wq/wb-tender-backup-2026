@@ -28,7 +28,7 @@ export function classifyPortalMembership({sessionActive=false,authenticated=fals
 }
 export const PORTAL_ERROR_CLASSES=new Set([
   "LOGIN_REQUIRED","MFA_REQUIRED","SESSION_EXPIRED","CREDENTIALS_NOT_CONFIGURED","PORTAL_UNREACHABLE",
-  "DOWNLOAD_LINK_UNRESOLVED","NO_BOUND_DOCUMENT_CONTEXT","EXTERNAL_DOCUMENT_REQUEST_REQUIRED","DOCUMENT_NOT_FOUND","ACCESS_DENIED",
+  "DOWNLOAD_LINK_UNRESOLVED","EXTERNAL_DOCUMENT_REQUEST_REQUIRED","DOCUMENT_NOT_FOUND","ACCESS_DENIED",
   "LOGIN_PAGE_RETURNED_AS_DOCUMENT","MIME_TYPE_INVALID","ZIP_INVALID","PARSER_FAILED","RATE_LIMITED",
   "TIMEOUT","PARTNER_SYSTEM_NOT_ALLOWED","TENDER_LOT_ASSIGNMENT_UNRESOLVED","BOARD_APPROVAL_REQUIRED",
   "EXTERNAL_ACTION_LOCKED","PARTICIPATION_NOT_IMPLEMENTED_BY_ADAPTER","ADAPTER_OPERATION_FAILED"
@@ -176,6 +176,26 @@ export class GenericHttpConnector extends PortalConnectorContract {
   async logoutOrDestroySession(session){session?.cookies?.clear();if(session)for(const key of Object.keys(session))session[key]=null}
 }
 
+export class ProtocolReplayConnector extends GenericHttpConnector {
+  async initializeSession(context={}){return {cookies:new Map(),createdAt:Date.now(),readOnly:true,authenticated:Boolean(context.snapshot?.authenticated)}}
+  async detectLoginForm(_session,context={}){return context.snapshot?.loginRequired?{username:true,password:true,csrf:Boolean(context.snapshot?.csrf)}:null}
+  async submitCredentials(session,credential,_form,context={}){if(!credential?.username||!credential?.password)throw new Error("CREDENTIALS_NOT_CONFIGURED");session.authenticated=context.snapshot?.credentialOutcome==="SUCCESS";return session}
+  async detectLoginSuccess(session,context={}){return Boolean(session?.authenticated||context.snapshot?.authenticated||context.snapshot?.publicAccess)}
+  async detectMfa(_session,context={}){return Boolean(context.snapshot?.mfaRequired)}
+  async detectCaptcha(_session,context={}){return Boolean(context.snapshot?.captchaRequired)}
+  async openTenderSearch(context={}){return {status:"SEARCH_OPEN",query:context.externalId||context.tenderId||null}}
+  async locateTender(context={}){if(!context.snapshot?.tender)throw new Error("TENDER_LOT_ASSIGNMENT_UNRESOLVED");return context.snapshot.tender}
+  async openTenderDetail(context={}){return context.snapshot?.tender||this.locateTender(context)}
+  async openDocumentArea(context={}){return {status:"DOCUMENT_AREA_OPEN",tender:context.snapshot?.tender||null}}
+  async listDocuments(context={}){return (context.snapshot?.documents||[]).map(document=>{const target=this.followAllowedRedirects(document.url,{priorUrl:`https://${this.profile.canonical_domain}/`,maxRedirectsSeen:0});return {id:String(document.id||""),name:String(document.name||""),url:target.href,protected:Boolean(document.protected),amendment:Boolean(document.amendment)}})}
+  async resolveDownloadAction(document){if(!document?.url)throw new Error("DOWNLOAD_LINK_UNRESOLVED");return {method:"GET",url:this.followAllowedRedirects(document.url,{priorUrl:`https://${this.profile.canonical_domain}/`,maxRedirectsSeen:0}).href,document}}
+  async downloadDocument(action,context={}){if(typeof context.fetchDocument!=="function")throw new Error("DOWNLOAD_LINK_UNRESOLVED");return context.fetchDocument(action,{externalWrite:false})}
+  async verifyDownloadedFile(document){return Boolean(document?.sha256&&/^[a-f0-9]{64}$/.test(document.sha256)&&Number(document.sizeBytes)>0)}
+}
+
+export class EuFundingTendersConnector extends ProtocolReplayConnector {}
+export class ETendersIrelandConnector extends ProtocolReplayConnector {}
+
 export class BoundedBrowserSession {
   static active=0;
   static maximum=Number(process.env.PORTAL_BROWSER_MAX_CONCURRENCY||1);
@@ -192,6 +212,8 @@ export function safeDiagnostic(value){
 
 export function adapterFor(profile){
   if(!profile?.adapter_id||profile.validation_status==="ADAPTER_REPAIR_REQUIRED"||profile.enabled!==true)throw Object.assign(new Error("UNKNOWN_PORTAL_ADAPTER_REQUIRED"),{code:"UNKNOWN_PORTAL_ADAPTER_REQUIRED"});
+  if(profile.adapter_id==="eu-funding-tenders")return new EuFundingTendersConnector(profile);
+  if(profile.adapter_id==="etenders-ireland")return new ETendersIrelandConnector(profile);
   return profile.login_strategy==="SOURCE_RESOLVER"?new SourceResolverConnector(profile):new GenericHttpConnector(profile);
 }
 

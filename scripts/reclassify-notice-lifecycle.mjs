@@ -79,6 +79,15 @@ try {
         FROM lifecycle_plan_stage s CROSS JOIN LATERAL jsonb_array_elements(s.plan->'lots') lot
         LEFT JOIN LATERAL(SELECT evidence.id FROM tender.tender_deadline_evidence evidence WHERE evidence.tender_id=s.id AND evidence.lot_key=lot->>'lotKey' AND evidence.is_current AND evidence.parsing_status='EXACT' AND lot->>'deadlineQuality'='EXACT' ORDER BY evidence.id LIMIT 1)e ON true
         ON CONFLICT(tender_id,lot_key) DO UPDATE SET lifecycle_status=excluded.lifecycle_status,participation_status=excluded.participation_status,participation_block_reason=excluded.participation_block_reason,offer_deadline=excluded.offer_deadline,deadline_quality=excluded.deadline_quality,deadline_evidence_id=excluded.deadline_evidence_id,is_current=true,updated_at=now()`);
+      await client.query(`INSERT INTO tender.lots(tender_id,external_id,title,deadline,source_reference_id)
+        SELECT life.tender_id,life.lot_key,life.lot_key,life.offer_deadline,reference.id
+        FROM tender.tender_lot_lifecycles life
+        LEFT JOIN LATERAL(SELECT source.id FROM tender.source_references source
+          WHERE source.tender_id=life.tender_id ORDER BY source.retrieved_at DESC,source.id DESC LIMIT 1)reference ON true
+        WHERE life.is_current AND life.lot_key IS NOT NULL AND btrim(life.lot_key)<>''
+        ON CONFLICT(tender_id,external_id) WHERE external_id IS NOT NULL DO UPDATE
+        SET deadline=coalesce(excluded.deadline,tender.lots.deadline),
+            source_reference_id=coalesce(tender.lots.source_reference_id,excluded.source_reference_id)`);
       await client.query(`INSERT INTO tender.tender_notice_relationships(source_tender_id,related_tender_id,source_code,source_external_id,related_external_id,procedure_identifier,relationship_type,evidence)
         SELECT s.id,related.id,s.plan->>'source',s.plan->>'externalId',r->>'relatedExternalId',nullif(r->>'procedureIdentifier',''),r->>'relationshipType',jsonb_build_object('planSha256',$1::text,'correctionRunId',$2::text)
         FROM lifecycle_plan_stage s CROSS JOIN LATERAL jsonb_array_elements(s.plan->'relations') r LEFT JOIN tender.tenders related ON related.source_code=s.plan->>'source' AND related.external_id=r->>'relatedExternalId'

@@ -1,13 +1,15 @@
 import fs from "node:fs";
 import pg from "pg";
+import { createFixedScopedPool, loadBackgroundScope } from "../platform/scoped-pg-pool.mjs";
 
 const connectionString =
   process.env.DATABASE_URL ||
   fs.readFileSync(process.env.DATABASE_URL_FILE || "/run/secrets/database_url", "utf8").trim();
-const client = new pg.Client({ connectionString });
+const rawPool = new pg.Pool({ connectionString });
+const backgroundScope = await loadBackgroundScope(rawPool);
+const client = await createFixedScopedPool(rawPool, backgroundScope).pool.connect();
 const scalar = async (sql, params = []) => Number((await client.query(sql, params)).rows[0].count);
 
-await client.connect();
 try {
   await client.query("BEGIN TRANSACTION READ ONLY");
   const transmittedColumns = (
@@ -150,5 +152,6 @@ try {
   await client.query("ROLLBACK").catch(() => {});
   throw error;
 } finally {
-  await client.end();
+  await client.release();
+  await rawPool.end();
 }

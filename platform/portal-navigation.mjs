@@ -1,6 +1,7 @@
 import { loadTenderLinkEvidence } from "./tender-link-evidence.mjs";
+import { tenderCredentialPortalEligibility } from "./portal-credentials.mjs";
 
-export const PORTAL_NAVIGATION_RELEASE = "portal-management-20260820.4-ted-capabilities";
+export const PORTAL_NAVIGATION_RELEASE = "portal-management-20260827.2-generic-credential-verification";
 
 export const validPortalNavigationUuid = (value) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -81,7 +82,7 @@ const confirmedPortalMappings = async (pool, rows) => {
     [tenderIds],
   );
   return new Map(
-    result.rows.map((row) => [
+    result.rows.filter((row)=>tenderCredentialPortalEligibility(row).eligible).map((row) => [
       `${row.tender_id}:${row.company_id}`,
       String(row.portal_id),
     ]),
@@ -100,20 +101,73 @@ export async function decoratePortalNavigation(
     confirmedPortalMappings(pool, rows),
   ]);
   const detectedIds=[...new Set([...evidence.values()].filter((item)=>item?.portalMapping?.status==="EINDEUTIG_ZUGEORDNET").map((item)=>item.portalMapping.portalId).filter(validPortalNavigationUuid))];
-  const eligibleDetected=new Set(detectedIds.length?(await pool.query("SELECT id FROM tender.portal_registry WHERE id=ANY($1::uuid[])",[detectedIds])).rows.map((portal)=>String(portal.id)):[]);
+  const eligibleDetected=new Set(detectedIds.length?(await pool.query("SELECT * FROM tender.portal_registry WHERE id=ANY($1::uuid[])",[detectedIds])).rows.filter((portal)=>tenderCredentialPortalEligibility(portal).eligible).map((portal)=>String(portal.id)):[]);
+
+  const resolvedPortals = new Map();
+  for (const row of rows) {
+    const tenderId = String(row.tender_id || row.id || "");
+    const companyId = String(row.portal_navigation_company_id || row.company_id || "");
+    const linkEvidence = evidence.get(tenderId);
+    const confirmedPortalId = confirmed.get(`${tenderId}:${companyId}`);
+    const detectedPortalId =
+      linkEvidence?.portalMapping?.status === "EINDEUTIG_ZUGEORDNET" &&
+      eligibleDetected.has(String(linkEvidence.portalMapping.portalId))
+        ? String(linkEvidence.portalMapping.portalId)
+        : null;
+    const portalId = confirmedPortalId || detectedPortalId || null;
+    if (portalId && validPortalNavigationUuid(companyId))
+      resolvedPortals.set(`${tenderId}:${companyId}`, String(portalId));
+  }
+
+  const portalIds = [...new Set(resolvedPortals.values())];
+  const companyIds = [...new Set(
+    rows
+      .map((row) => String(row.portal_navigation_company_id || row.company_id || ""))
+      .filter(validPortalNavigationUuid)
+  )];
+  const activeBindings = new Set();
+
+  if (portalIds.length && companyIds.length) {
+    const bindingResult = await pool.query(
+      `SELECT credential.portal_id, scope.company_id
+         FROM tender.portal_credential_secrets credential
+         JOIN tender.portal_credential_companies scope
+           ON scope.credential_id=credential.id AND scope.active=true
+         JOIN tender.enterprise_company_links company
+           ON company.company_id=scope.company_id AND company.active=true
+         JOIN tender.portal_registry portal
+           ON portal.id=credential.portal_id
+        WHERE credential.portal_id=ANY($1::uuid[])
+          AND scope.company_id=ANY($2::uuid[])
+          AND credential.status='ACTIVE'
+          AND credential.revoked_at IS NULL
+          AND (credential.valid_until IS NULL OR credential.valid_until>now())
+          AND (
+            credential.account_type IS NULL OR (
+              credential.bound_host=lower(portal.canonical_domain)
+              AND 'BID_SUBMISSION'=ANY(
+                coalesce(credential.authorized_capabilities,'{}'::text[])
+              )
+            )
+          )
+        GROUP BY credential.portal_id,scope.company_id
+        HAVING count(DISTINCT credential.id)=1`,
+      [portalIds, companyIds],
+    );
+    for (const binding of bindingResult.rows)
+      activeBindings.add(`${binding.portal_id}:${binding.company_id}`);
+  }
+
   return rows.map((row) => {
     const tenderId = String(row.tender_id || row.id || ""),
       companyId = String(row.portal_navigation_company_id || row.company_id || ""),
-      linkEvidence = evidence.get(tenderId),
-      confirmedPortalId = confirmed.get(`${tenderId}:${companyId}`),
-      detectedPortalId =
-        linkEvidence?.portalMapping?.status === "EINDEUTIG_ZUGEORDNET"
-          && eligibleDetected.has(String(linkEvidence.portalMapping.portalId))
-          ? linkEvidence.portalMapping.portalId
-          : null,
-      portalId = confirmedPortalId || detectedPortalId || null;
+      portalId = resolvedPortals.get(`${tenderId}:${companyId}`) || null;
     return {
       ...row,
+      portal_access_connected: Boolean(
+        row.portal_access_connected ||
+        (portalId && activeBindings.has(`${portalId}:${companyId}`))
+      ),
       portal_navigation_href: portalNavigationHref({
         uiBase,
         tenderId,

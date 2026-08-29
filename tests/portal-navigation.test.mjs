@@ -97,8 +97,8 @@ test("TED and DOE publication sources are never treated as procurement portals",
     normalized_data: { raw: { uri: "https://oeffentlichevergabe.de/api/notices/example?format=ocds" } },
     enrichment_documents: [],
   });
-  assert.equal(ted.portalMapping.status, "MANUELLE_PRUEFUNG");
-  assert.equal(doe.portalMapping.status, "MANUELLE_PRUEFUNG");
-  assert.equal(ted.missingReasons.procurementPortal, "Vergabeportal in der Quelle nicht angegeben");
-  assert.equal(doe.missingReasons.procurementPortal, "Vergabeportal in der Quelle nicht angegeben");
+  assert.equal(ted.portalMapping.status, "PORTAL_ASSIGNMENT_REVIEW_REQUIRED");
+  assert.equal(doe.portalMapping.status, "PORTAL_ASSIGNMENT_REVIEW_REQUIRED");
+  assert.equal(ted.missingReasons.procurementPortal, "Kein autoritatives Vergabeportal ermittelt – Portalzuordnung prüfen");
+  assert.equal(doe.missingReasons.procurementPortal, "Kein autoritatives Vergabeportal ermittelt – Portalzuordnung prüfen");
 });

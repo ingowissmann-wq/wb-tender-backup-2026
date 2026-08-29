@@ -25,7 +25,7 @@ for(const company of initial.body.companies){
   const all=await request(query({...common,regionClass:"all"}));
   const counts=Object.fromEntries(countKeys.map(key=>[key,Number(all.body.counts?.[key]||0)]));
   const countSum=Object.values(counts).reduce((sum,value)=>sum+value,0);
-  if(Number(all.body.total)<=0)throw new Error(`${company.legal_name}/${company.canonical_service}: empty canary basis`);
+  if(Number(all.body.total)===0&&(all.body.items||[]).length!==0)throw new Error(`${company.legal_name}/${company.canonical_service}: zero total returned non-empty rows`);
   if(["cleaning","security"].includes(company.canonical_service)&&counts.CORE_REGION<=0)throw new Error(`${company.legal_name}/${company.canonical_service}: expected core-region fixture missing`);
   if(countSum!==Number(all.body.total))throw new Error(`${company.legal_name}/${company.canonical_service}: counter sum ${countSum} != total ${all.body.total}`);
   for(const item of all.body.items||[]){

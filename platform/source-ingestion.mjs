@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import JSZip from "jszip";
 import pg from "pg";
+import { createFixedScopedPool, loadBackgroundScope } from "./scoped-pg-pool.mjs";
 import { reclassify } from "../scripts/reclassify-service-relevance.mjs";
 import { runTenderCleanup, tombstoneImportDecision } from "./tender-cleanup.mjs";
 import { runInboxPipeline } from "./inbox-pipeline.mjs";
@@ -15,7 +16,6 @@ const TED_FIELDS = Object.freeze([
   "classification-cpv", "place-of-performance", "notice-type",
   "notice-subtype", "form-type", "procedure-identifier", "previous-notice-id-proc",
   "identifier-lot", "deadline-receipt-tender-date-lot", "deadline-receipt-tender-time-lot", "links",
-  "document-url-lot", "document-restricted-url-lot", "submission-url-lot", "buyer-profile",
 ]);
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const json = (value) => JSON.stringify(value ?? null);
@@ -379,6 +379,11 @@ async function persistLifecycleMetadata(client, tenderId, normalized) {
       ON CONFLICT(tender_id,lot_key) DO UPDATE SET lifecycle_status=excluded.lifecycle_status,participation_status=excluded.participation_status,
         participation_block_reason=excluded.participation_block_reason,offer_deadline=excluded.offer_deadline,deadline_quality=excluded.deadline_quality,
         deadline_evidence_id=excluded.deadline_evidence_id,is_current=true,updated_at=now()`, [tenderId, lot.lotKey, lot.lifecycleStatus, lot.participationStatus, lot.blockReason, lot.deadlineUtc, lot.deadlineQuality, evidenceIds.get(lot.lotKey) || null]);
+    await client.query(`INSERT INTO tender.lots(tender_id,external_id,title,deadline)
+      VALUES($1,$2,$2,$3)
+      ON CONFLICT(tender_id,external_id) WHERE external_id IS NOT NULL DO UPDATE
+      SET deadline=coalesce(excluded.deadline,tender.lots.deadline)`,
+    [tenderId,lot.lotKey,lot.deadlineUtc]);
   }
 }
 
@@ -570,6 +575,30 @@ export async function importFetchedDay(pool, fetched, { triggerKind = "MANUAL" }
     classificationTenderIds = unique(classificationTenderIds);
     pipelineTenderIds = unique(pipelineTenderIds);
     const relevance = classificationTenderIds.length ? await reclassify(pool, { dryRun: false, tenderIds: classificationTenderIds, suppressPipelineEnqueue: true }) : { tenders: 0, inserted: 0 };
+    const portalResolutionQueued = pipelineTenderIds.length
+      ? (
+          await pool.query(
+            `INSERT INTO tender.autopilot_queue(
+                tender_id,tender_version_id,company_id,reason,request_id,action_type,idempotency_key,
+                status,current_step,max_attempts)
+              SELECT candidate.id,version.id,relevance.company_id,'SOURCE_IMPORT_AUTHORITATIVE_PORTAL_RESOLUTION',
+                gen_random_uuid(),'RESOLVE_NOTICE_PORTALS',
+                concat('portal-resolution:',candidate.id,':',version.id,':',relevance.company_id),
+                'QUEUED','PORTAL_EVIDENCE_QUEUED',5
+              FROM tender.tenders candidate
+              JOIN LATERAL(SELECT current_version.id FROM tender.tender_versions current_version
+                WHERE current_version.tender_id=candidate.id
+                ORDER BY current_version.version DESC,current_version.created_at DESC,current_version.id DESC LIMIT 1) version ON true
+              JOIN tender.current_service_relevance relevance ON relevance.tender_id=candidate.id
+                AND relevance.relevance_status IN('RELEVANT','REVIEW_REQUIRED')
+                AND relevance.primary_company=true
+              WHERE candidate.id=ANY($1::uuid[])
+              GROUP BY candidate.id,version.id,relevance.company_id
+              ON CONFLICT DO NOTHING`,
+            [pipelineTenderIds],
+          )
+        ).rowCount
+      : 0;
     const lifecycleRollover = await expireElapsedLifecycleDeadlines(pool, { now: new Date() });
     const inboxPipeline = pipelineTenderIds.length ? await runInboxPipeline(pool, { tenderIds: pipelineTenderIds, sourceRunId: schedulerRunId, runKind: triggerKind === "SCHEDULED" ? "SCHEDULED" : "MANUAL", batchSize: Number(process.env.INBOX_PIPELINE_BATCH_SIZE || 100) }) : { passed: true, checked: 0, matched: 0, inboxCreated: 0, regionCreated: 0, skipped: 0 };
     const downstreamFailed = !inboxPipeline.passed, errorCount = counts.quarantined + (downstreamFailed ? 1 : 0), status = errorCount ? "PARTIAL_FAILURE" : "SUCCESS", nextRun = nextBerlinRun();
@@ -577,7 +606,7 @@ export async function importFetchedDay(pool, fetched, { triggerKind = "MANUAL" }
     await pool.query("UPDATE tender.scheduler_runs SET status=$2,outcome_status=$2,finished_at=now(),read_count=$3,new_count=$4,updated_count=$5,duplicate_count=$6,rejected_count=$7,error_count=$8,quarantined_count=$9,cursor_after=$10,next_run_at=$11,retry_count=$12,rate_limit_count=$13,error_code=$14,tombstone_skipped_count=$15,reactivated_count=$16 WHERE id=$1", [schedulerRunId, status, counts.read, counts.new, counts.updated, counts.duplicate, counts.rejected, errorCount, counts.quarantined, fetched.cursorAfter, nextRun, Number(fetched.retryCount || 0), Number(fetched.rateLimitCount || 0), counts.quarantined ? "RECORDS_QUARANTINED" : downstreamFailed ? "INBOX_PIPELINE_PARTIAL_FAILURE" : null,counts.tombstoned,counts.reactivated]);
     if (status !== "SUCCESS") await pool.query("UPDATE tender.scheduler_sources SET last_failure_at=now(),retry_count=retry_count+1,next_run_at=$2,updated_at=now() WHERE source_code=$1", [fetched.sourceCode, nextRun]);
     else await pool.query("UPDATE tender.scheduler_sources SET last_success_at=now(),last_failure_at=NULL,retry_count=0,cursor_value=$2,next_run_at=$3,updated_at=now() WHERE source_code=$1", [fetched.sourceCode, fetched.cursorAfter, nextRun]);
-    return { passed: status === "SUCCESS", sourceCode: fetched.sourceCode, day: fetched.day, schedulerRunId, importRunId, counts, relevance, lifecycleRollover, inboxPipeline, nextRunAt: nextRun.toISOString(), externalWrite: false };
+    return { passed: status === "SUCCESS", sourceCode: fetched.sourceCode, day: fetched.day, schedulerRunId, importRunId, counts, relevance, lifecycleRollover, inboxPipeline, portalResolutionQueued, nextRunAt: nextRun.toISOString(), externalWrite: false };
   } catch (error) {
     if (!committed) await client.query("ROLLBACK").catch(() => {});
     else if (schedulerRunId && importRunId) {
@@ -614,7 +643,8 @@ async function renewLease(pool, sourceCode, ownerId) {
 export async function runIngestion({ once = false } = {}) {
   if (String(process.env.EXTERNAL_SUBMISSION_ENABLED).toLowerCase() !== "false" || String(process.env.WB_TENDER_ALLOW_EXTERNAL_SUBMISSION).toLowerCase() !== "false") throw new Error("external submission must remain hard-disabled");
   const connectionString = process.env.DATABASE_URL || readFileSync(process.env.DATABASE_URL_FILE, "utf8").toString().trim();
-  const pool = new pg.Pool({ connectionString, max: 4, options: "-c tender.pipeline_job_id=DAILY_INBOX_PIPELINE" });
+  const rawPool = new pg.Pool({ connectionString, max: 4, options: "-c tender.pipeline_job_id=DAILY_INBOX_PIPELINE" });
+  const pool = createFixedScopedPool(rawPool, await loadBackgroundScope(rawPool)).pool;
   const workerId = crypto.randomUUID();
   const sources = String(process.env.INGESTION_SOURCES || "TED,DOE").split(",").map((value) => value.trim().toUpperCase()).filter((value) => PUBLIC_SOURCES.includes(value));
   if (!sources.length) throw new Error("no supported ingestion source configured");
@@ -623,6 +653,10 @@ export async function runIngestion({ once = false } = {}) {
   const failures = [], completed = [];
   try {
     do {
+      // Materialize the time-derived state once per scheduler cycle. The
+      // narrowly granted SECURITY DEFINER function cannot read or mutate any
+      // other session state and keeps raw status aligned with fail-closed truth.
+      await pool.query("SELECT tender.materialize_expired_portal_sessions()");
       const configured = (await pool.query("SELECT * FROM tender.scheduler_sources WHERE source_code=ANY($1::text[]) ORDER BY source_code", [sources])).rows;
       for (const source of configured) {
         if (!explicitFrom && !dueSource(source)) continue;

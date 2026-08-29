@@ -31,7 +31,7 @@ test("TED evidence separates the original notice from documents and never invent
   assert.equal(evidence.originalNotice.targetType, "ORIGINAL_NOTICE");
   assert.equal(evidence.documents[0].targetType, "DOCUMENTS");
   assert.equal(evidence.procurementPortal, null);
-  assert.equal(evidence.missingReasons.procurementPortal, "Vergabeportal in der Quelle nicht angegeben");
+  assert.equal(evidence.missingReasons.procurementPortal, "Kein autoritatives Vergabeportal ermittelt – Portalzuordnung prüfen");
   assert.equal(evidence.electronicSubmission, null);
   assert.equal(evidence.documentEvidence.code, "FETCH_NOT_RUN");
 });
@@ -54,6 +54,26 @@ test("DOE OCDS API is technical evidence while an explicit registry-bound tender
   assert.equal(evidence.portalMapping.status, "EINDEUTIG_ZUGEORDNET");
   assert.equal(evidence.electronicSubmission, null);
   assert.equal(evidence.documentEvidence.code, "LINKS_NOT_EXTRACTED");
+});
+
+test("persisted role resolution outranks TED publication links and binds the external portal", () => {
+  const evidence = buildTenderLinkEvidence({
+    source_code: "TED",
+    source_url: "https://ted.europa.eu/en/notice/1",
+    external_id: "1",
+    normalized_data: { raw: { links: { html: { ENG: "https://ted.europa.eu/en/notice/1" } } } },
+    authoritative_portal_resolutions: [{
+      evidence_role: "SUBMISSION",
+      resolution_status: "UNIQUE_EVIDENCE",
+      portal_id: portal.id,
+      exact_host: portal.canonical_domain,
+      evidence_url: "https://vergabe.example.de/project/1",
+    }],
+  }, [portal]);
+  assert.equal(evidence.procurementPortal.portalId, portal.id);
+  assert.equal(evidence.procurementPortal.canonicalHost, "vergabe.example.de");
+  assert.equal(evidence.portalMapping.evidenceRole, "SUBMISSION");
+  assert.notEqual(evidence.procurementPortal.canonicalHost, "ted.europa.eu");
 });
 
 test("an unregistered or merely related host is not promoted to procurement portal", () => {

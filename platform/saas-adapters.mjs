@@ -5,6 +5,7 @@ export class UnconfiguredEmailAdapter {
   get configured() { return false; }
   async sendVerification() { throw new Error("email_provider_not_configured"); }
   async sendInvitation() { throw new Error("email_provider_not_configured"); }
+  async sendTrialReminder() { throw Object.assign(new Error("email_provider_not_configured"), { deliveryAttempted: false }); }
 }
 
 export class UnconfiguredBillingAdapter {
@@ -60,6 +61,14 @@ const stripeTenantId = (stripeType, object) => {
     || object?.subscription_details?.metadata?.tenant_id;
 };
 
+const stripePriceId = (stripeType, object) => {
+  const lines = object?.lines?.data || object?.line_items?.data || object?.items?.data || [];
+  const line = lines.find((item) => item?.price?.id || item?.pricing?.price_details?.price);
+  // Metadata is not authoritative for pricing. Checkout completion is matched
+  // to the server-side checkout/offer record; invoices use their actual line.
+  return line?.price?.id || line?.pricing?.price_details?.price || null;
+};
+
 export class StripeBillingAdapter {
   constructor({ secretKey, webhookSecret, publicBaseUrl, priceIds = {}, apiBase = "https://api.stripe.com", now = () => Date.now() }) {
     if (!String(secretKey || "").startsWith("sk_")) throw new Error("stripe_secret_key_invalid");
@@ -69,14 +78,17 @@ export class StripeBillingAdapter {
   }
   get provider() { return "stripe"; }
   get configured() { return true; }
-  async createCheckout({ tenantId, plan, successUrl = `${this.publicBaseUrl}/saas/payment-complete`, cancelUrl = `${this.publicBaseUrl}/saas/pricing` }) {
-    const price = this.priceIds[String(plan || "").toUpperCase()];
+  async createCheckout({ tenantId, plan, priceId, productKey, billingInterval = "MONTH", successUrl = `${this.publicBaseUrl}/saas/payment-complete`, cancelUrl = `${this.publicBaseUrl}/saas/pricing` }) {
+    const price = priceId || this.priceIds[String(plan || "").toUpperCase()];
     if (!price || !/^price_[A-Za-z0-9]+$/.test(price)) throw new Error("stripe_plan_price_not_configured");
-    const body = new URLSearchParams({ mode: "subscription", "line_items[0][price]": price, "line_items[0][quantity]": "1", success_url: successUrl, cancel_url: cancelUrl, client_reference_id: tenantId, "metadata[tenant_id]": tenantId, "subscription_data[metadata][tenant_id]": tenantId });
-    const response = await fetch(`${this.apiBase}/v1/checkout/sessions`, { method: "POST", headers: { authorization: `Bearer ${this.secretKey}`, "content-type": "application/x-www-form-urlencoded", "idempotency-key": `wb-trial-${tenantId}` }, body });
+    const oneTime = billingInterval === "ONE_TIME";
+    const body = new URLSearchParams({ mode: oneTime ? "payment" : "subscription", "line_items[0][price]": price, "line_items[0][quantity]": "1", success_url: successUrl, cancel_url: cancelUrl, client_reference_id: tenantId, "metadata[tenant_id]": tenantId });
+    if (!oneTime) body.set("subscription_data[metadata][tenant_id]", tenantId);
+    if (productKey) { body.set("metadata[commercial_product_key]", productKey); if (!oneTime) body.set("subscription_data[metadata][commercial_product_key]", productKey); }
+    const response = await fetch(`${this.apiBase}/v1/checkout/sessions`, { method: "POST", headers: { authorization: `Bearer ${this.secretKey}`, "content-type": "application/x-www-form-urlencoded", "idempotency-key": `wb-checkout-${tenantId}-${price}` }, body });
     const payload = await response.json();
     if (!response.ok || !payload.id || !payload.url) throw new Error(`stripe_checkout_failed_${response.status}`);
-    return { id: payload.id, url: payload.url };
+    return { id: payload.id, url: payload.url, priceId: price, productKey: productKey || null };
   }
   verifyWebhook(rawBody, signatureHeader) {
     if (!Buffer.isBuffer(rawBody) || rawBody.length === 0) throw new Error("billing_webhook_raw_body_required");
@@ -91,21 +103,30 @@ export class StripeBillingAdapter {
     if (!/^evt_[A-Za-z0-9_]+$/.test(String(stripe?.id || "")) || typeof stripe?.type !== "string") throw new Error("billing_webhook_payload_invalid");
     const object = stripe?.data?.object;
     if (!object || typeof object !== "object" || Array.isArray(object)) throw new Error("billing_webhook_payload_invalid");
-    const supported = new Set(["checkout.session.completed", "invoice.paid", "invoice.payment_failed"]);
+    const supported = new Set(["checkout.session.completed", "invoice.paid", "invoice.payment_failed", "customer.subscription.deleted"]);
     if (!supported.has(stripe.type)) return { id: stripe.id, provider: "stripe", stripeType: stripe.type, ignored: true };
     const tenantId = stripeTenantId(stripe.type, object);
     let type;
-    if (stripe.type === "checkout.session.completed" && object.payment_status === "paid" && object.mode === "subscription" && object.id) type = "payment.confirmed";
+    if (stripe.type === "checkout.session.completed" && object.payment_status === "paid" && ["subscription", "payment"].includes(object.mode) && object.id) type = "payment.confirmed";
     else if (stripe.type === "invoice.paid" && object.status === "paid" && object.paid === true) type = "invoice.paid";
     else if (stripe.type === "invoice.payment_failed" && object.paid !== true) type = "payment.failed";
+    else if (stripe.type === "customer.subscription.deleted" && object.status === "canceled") type = "subscription.canceled";
     else throw new Error("billing_event_unsupported_or_unpaid");
     if (!stripe.id || !tenantId) throw new Error("billing_webhook_payload_invalid");
+    const priceId = stripePriceId(stripe.type, object);
+    const metadataPriceHint = object?.metadata?.stripe_price_id || null;
+    const legacyPlan = Object.entries(this.priceIds).find(([, configured]) => configured === (priceId || metadataPriceHint))?.[0] || null;
     return {
       id: stripe.id, type, tenantId, provider: "stripe", stripeType: stripe.type,
+      checkoutMode: stripe.type === "checkout.session.completed" ? object.mode : null,
       checkoutRef: stripe.type === "checkout.session.completed" ? object.id : null,
       customerRef: object.customer || null,
-      subscriptionRef: stripe.type === "checkout.session.completed" ? object.subscription : stripeInvoiceSubscription(object),
+      subscriptionRef: stripe.type === "checkout.session.completed" ? object.subscription : stripe.type === "customer.subscription.deleted" ? object.id : stripeInvoiceSubscription(object),
+      paymentRef: stripe.type === "checkout.session.completed" ? object.payment_intent || null : null,
       billingReason: stripe.type === "invoice.paid" ? object.billing_reason || null : null,
+      priceId, legacyPlan, metadataPriceHint,
+      requestedProductKey: object?.metadata?.commercial_product_key || object?.parent?.subscription_details?.metadata?.commercial_product_key || object?.subscription_details?.metadata?.commercial_product_key || null,
+      periodEnd: object?.period_end ? new Date(object.period_end * 1000) : null,
     };
   }
 }
@@ -145,6 +166,21 @@ export class SmtpEmailAdapter {
     if (!result.accepted?.length) throw new Error("smtp_recipient_rejected");
     return { accepted: true, messageId: result.messageId };
   }
+  async sendTrialReminder({ to, subject, text, html, idempotencyKey }) {
+    to = String(to || "").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to) || /[\r\n]/.test(`${to}${subject || ""}${idempotencyKey || ""}`))
+      throw Object.assign(new Error("smtp_recipient_invalid"), { deliveryAttempted: false });
+    if (!String(subject || "").includes("14-Tage-Testphase") || !String(text || "").includes("Reguläres Paket wählen"))
+      throw Object.assign(new Error("trial_reminder_content_invalid"), { deliveryAttempted: false });
+    try {
+      const safeId = String(idempotencyKey || crypto.randomUUID()).replace(/[^a-zA-Z0-9._-]/g, "");
+      const result = await this.transport.sendMail({ from: this.from, to, subject, text, html, messageId: `<${safeId}@wb-trial.local>` });
+      if (!result.accepted?.length) throw new Error("smtp_recipient_rejected");
+      return { accepted: true, messageId: result.messageId };
+    } catch (error) {
+      throw Object.assign(new Error(String(error.message || "smtp_delivery_failed")), { deliveryAttempted: true });
+    }
+  }
 }
 
 export const verificationToken = () => crypto.randomBytes(32).toString("base64url");
@@ -154,3 +190,5 @@ export const hashVerificationToken = (token, pepper) => {
 };
 export const customerIdentityHash = (email, pepper) =>
   hashVerificationToken(String(email || "").trim().toLowerCase(), pepper);
+export const normalizedCompanyIdentity = (company) => String(company || "").normalize("NFKC").trim().toLowerCase()
+  .replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ");

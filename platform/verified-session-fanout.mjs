@@ -24,6 +24,11 @@ export async function enqueueVerifiedSessionFanout(pool,sessionId,{client:provid
       JOIN LATERAL(SELECT version.id FROM tender.tender_versions version WHERE version.tender_id=tender.id ORDER BY version.version DESC LIMIT 1)tender_version ON true
       JOIN LATERAL(SELECT version.id FROM tender.enrichment_versions version WHERE version.tender_id=tender.id AND version.historical=false ORDER BY version.version DESC LIMIT 1)enrichment ON true
       WHERE relevance.company_id=$2 AND relevance.relevance_status='RELEVANT' AND relevance.service_scope_gate='PASSED'
+        AND EXISTS(SELECT 1 FROM tender.current_registered_tender_company_portals registered
+          WHERE registered.tender_id=relevance.tender_id
+            AND registered.company_id=relevance.company_id
+            AND registered.portal_id=$3
+            AND registered.credential_id=$4)
         AND EXISTS(SELECT 1 FROM tender.enrichment_documents document
           LEFT JOIN tender.enrichment_lots document_lot ON document_lot.id=document.lot_id
           JOIN tender.portal_registry portal ON portal.id=$3
@@ -52,6 +57,14 @@ export async function enqueueVerifiedSessionFanout(pool,sessionId,{client:provid
       FROM dispatches dispatch JOIN affected_contexts context ON context.tender_id=dispatch.tender_id
         AND context.company_id=dispatch.company_id AND context.lot_key=dispatch.lot_key
       WHERE dispatch.job_id IS NULL
+        AND NOT EXISTS(SELECT 1 FROM tender.autopilot_queue active_job
+          WHERE active_job.action_type='RUN_FULL_PIPELINE'
+            AND active_job.tender_id=context.tender_id
+            AND active_job.company_id=context.company_id
+            AND coalesce(active_job.lot_key,'')=context.lot_key
+            AND active_job.portal_id=$3 AND active_job.credential_id=$4
+            AND active_job.enrichment_version_id=context.enrichment_version_id
+            AND active_job.status IN('PENDING','CLAIMED','RETRY','QUEUED','RUNNING'))
       ON CONFLICT(idempotency_key) WHERE status IN('PENDING','CLAIMED','RETRY','QUEUED','RUNNING')
         DO UPDATE SET idempotency_key=excluded.idempotency_key RETURNING id,idempotency_key
     ) UPDATE tender.portal_session_context_dispatches dispatch
@@ -61,6 +74,19 @@ export async function enqueueVerifiedSessionFanout(pool,sessionId,{client:provid
       SET job_id=job.id,dispatch_status='QUEUED',queued_at=coalesce(dispatch.queued_at,now())
       FROM tender.autopilot_queue job WHERE dispatch.session_id=$1
         AND job.idempotency_key='VERIFIED_SESSION_FANOUT:'||$1||':'||dispatch.tender_id||':'||dispatch.company_id||':'||coalesce(nullif(dispatch.lot_key,''),'_tender')`,[session.id]);
+    await client.query(`WITH existing AS(
+      SELECT DISTINCT ON(dispatch.id) dispatch.id dispatch_id,job.id job_id
+      FROM tender.portal_session_context_dispatches dispatch
+      JOIN tender.autopilot_queue job ON job.action_type='RUN_FULL_PIPELINE'
+        AND job.tender_id=dispatch.tender_id AND job.company_id=dispatch.company_id
+        AND coalesce(job.lot_key,'')=dispatch.lot_key
+        AND job.portal_id=dispatch.portal_id AND job.credential_id=dispatch.credential_id
+        AND job.status IN('PENDING','CLAIMED','RETRY','QUEUED','RUNNING')
+      WHERE dispatch.session_id=$1 AND dispatch.job_id IS NULL
+      ORDER BY dispatch.id,job.created_at DESC,job.id DESC
+    ) UPDATE tender.portal_session_context_dispatches dispatch
+      SET job_id=existing.job_id,dispatch_status='QUEUED',queued_at=coalesce(dispatch.queued_at,now())
+      FROM existing WHERE dispatch.id=existing.dispatch_id`,[session.id]);
     await client.query(`UPDATE tender.portal_login_continuations continuation SET status='LOGIN_SUCCESSFUL',job_id=dispatch.job_id,completed_at=coalesce(continuation.completed_at,now())
       FROM tender.portal_session_context_dispatches dispatch WHERE dispatch.session_id=$1 AND dispatch.job_id IS NOT NULL
         AND continuation.portal_id=$2 AND continuation.credential_id=$3 AND continuation.company_id=$4

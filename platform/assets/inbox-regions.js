@@ -14,6 +14,12 @@
             "'": "&#39;",
           })[c],
       ),
+    recordOrNull = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : null,
+    canonicalCredentialStatuses = new Set([
+      "NOT_CONFIGURED", "CONFIGURED_UNVERIFIED", "VALID", "MFA_REQUIRED",
+      "CAPTCHA_OR_USER_ACTION_REQUIRED", "EXPIRED", "INVALID", "LOCKED",
+      "PORTAL_UNAVAILABLE", "VALIDATION_PENDING",
+    ]),
     preferenceKey = "wb-tender-management-company";
   let active = false,
     inboxRequestSequence = 0,
@@ -34,6 +40,7 @@
     REGION_UNRESOLVED: "Region nicht eindeutig ermittelbar",
     REGION_CONFIG_CONFLICT: "Widersprüchliche Regionskonfiguration",
     MULTI_REGION_REVIEW: "Mehrere Regionen – Einzelprüfung erforderlich",
+    REGION_CONFIGURATION_MISSING: "Regionskonfiguration fehlt",
     NOT_APPLICABLE: "Nicht anwendbar",
   };
   const calculationLabels = {
@@ -86,10 +93,19 @@
   };
   const sourceDisplayName = (item) => item?.linkEvidence?.source?.displayName || ({DOE:"oeffentlichevergabe.de",TED:"TED (Tenders Electronic Daily)"}[String(item?.source_code || "").toUpperCase()] || item?.source_code || "Nicht ermittelt");
   const portalManageUrl = (item, portalId) => `${location.port ? "" : "/admin/ausschreibungen"}/autopilot/portal-access?tender=${encodeURIComponent(item.tender_id)}&lot=${encodeURIComponent(item.lot_key || "")}&company=${encodeURIComponent(item.company_id)}&portal=${encodeURIComponent(portalId)}`;
-  const portalManageButton = (item, portal = {}) => {
+  const portalManageButton = (item, portalValue = null) => {
     const target = String(item?.portal_navigation_href || "");
     if (!target.startsWith("/admin/ausschreibungen/portalzugaenge")) return "";
-    return `<a class="button-link" data-portal-navigation="${esc(item.portal_navigation_mode || (portal?.portalId || portal?.portal_id ? "edit" : "search"))}" href="${esc(target)}">Portalzugang verwalten</a>`;
+    const portal = recordOrNull(portalValue),
+      status = canonicalCredentialStatuses.has(portal?.credential_status) ? portal.credential_status : null,
+      label = status === "NOT_CONFIGURED"
+        ? "Zugangsdaten hinterlegen"
+        : ["EXPIRED", "INVALID"].includes(status)
+          ? "Zugang aktualisieren"
+          : status || item?.portal_navigation_mode === "edit"
+            ? "Zugangsdaten verwalten"
+            : "Portalzuordnung prüfen";
+    return `<a class="button-link" data-portal-navigation="${esc(item.portal_navigation_mode || (portal?.portalId || portal?.portal_id ? "edit" : "search"))}" href="${esc(target)}">${esc(label)}</a>`;
   };
   const renderTenderLinkEvidence = (item, detail = false) => {
     const evidence = item?.linkEvidence,
@@ -99,8 +115,6 @@
       evidence.originalNotice,
       evidence.procurementPortal,
       evidence.documents?.[0],
-      evidence.account?.login,
-      evidence.account?.registration,
       evidence.login,
       evidence.registration,
       evidence.electronicSubmission,
@@ -115,8 +129,7 @@
       missing.electronicSubmission,
     ].filter(Boolean).map((reason) => `<li>${esc(reason)}</li>`).join("");
     const manage = portalManageButton(item,evidence.procurementPortal);
-    const tedSeparation=evidence.source?.code==="TED"?`<dl><dt>Veröffentlichungsquelle</dt><dd>TED (Tenders Electronic Daily)</dd><dt>TED-Konto</dt><dd>${evidence.account?"Login und Registrierung verfügbar; Kontofunktionen, kein Abgabeportal.":"Nicht belegt"}</dd><dt>Dokumentquelle</dt><dd>${evidence.documents?.length?`${evidence.documents.length} offizielle Bekanntmachungs- bzw. Dokumentlinks belegt.`:"Keine belegten Direktlinks"}</dd><dt>Teilnahme-/Abgabeportal</dt><dd>${evidence.procurementPortal?esc(evidence.procurementPortal.portalName||evidence.procurementPortal.canonicalHost||"Offizieller externer Host erkannt"):"Nicht eindeutig angegeben"}</dd></dl>${!evidence.procurementPortal?'<p class="muted">TED veröffentlicht die Bekanntmachung und stellt die belegten Bekanntmachungs- beziehungsweise Dokumentlinks bereit. Das für Teilnahme oder elektronische Abgabe verwendete Portal ist in den Quelldaten nicht eindeutig angegeben.</p>':""}`:"";
-    return `<section class="tender-link-evidence" aria-label="Offizielle externe Ziele"><h${detail ? "2" : "3"}>Offizielle externe Ziele</h${detail ? "2" : "3"}>${tedSeparation}<div class="card-actions">${links}${manage}</div>${reasons ? `<ul class="muted">${reasons}</ul>` : ""}</section>`;
+    return `<section class="tender-link-evidence" aria-label="Offizielle externe Ziele"><h${detail ? "2" : "3"}>Offizielle externe Ziele</h${detail ? "2" : "3"}><div class="card-actions">${links}${manage}</div>${reasons ? `<ul class="muted">${reasons}</ul>` : ""}</section>`;
   };
   const documentEvidenceSummary = (item) => {
     const evidence = item?.documentEvidence || item?.linkEvidence?.documentEvidence;
@@ -161,14 +174,16 @@
     }).join("");
     return `<ul class="affected-document-list">${items || "<li>Keine Dokumentreferenz vorhanden</li>"}</ul>`;
   };
-  const portalTruthMessage = (portal, long = false) => {
-    if (portal.access_status === "NO_BOUND_DOCUMENT_CONTEXT") return "Die Portalsitzung ist gültig. Für diese Ausschreibung und Gesellschaft ist keine verifizierte Dokumentreferenz gebunden; deshalb wurde kein Dokumentabruf gestartet.";
+  const portalTruthMessage = (portalValue, long = false) => {
+    const portal = recordOrNull(portalValue);
+    if (!portal) return "Portalzugangsstatus ist technisch nicht verfügbar; der Ausschreibungskontext muss geprüft werden.";
+    if (portal.credential_status_message) return portal.credential_status_message;
     const type = portal.login_action?.type;
-    if (type === "OPEN_PORTAL_READ_ONLY") return portal.documents_complete ? "Alle erforderlichen Vergabeunterlagen sind vollständig geladen und analysiert. Die separate externe Portalansicht übernimmt die sichere Connector-Sitzung nicht." : "Die sichere Connector-Sitzung ist aktiv. Die separate externe Portalansicht übernimmt diese Sitzung aus Sicherheitsgründen nicht; ein Dokumentabruf ist eine separate Aktion.";
+    if (type === "OPEN_PORTAL_READ_ONLY") return portal.documents_complete ? "Alle erforderlichen Vergabeunterlagen sind vollständig geladen und analysiert. Das Portal kann schreibgeschützt geöffnet werden." : "Das Portal kann schreibgeschützt geöffnet werden; ein Dokumentabruf ist eine separate Aktion.";
     if (type === "AUTHENTICATION_TARGET_UNAVAILABLE") return "Für dieses Portal ist kein autoritatives, freigegebenes Login- oder Bieterbereichsziel konfiguriert. Bitte Portalprofil administrativ ergänzen.";
     if (type === "START_LOGIN") return "Die gespeicherte Portalsitzung konnte nicht sicher wiederhergestellt werden. Erneut anmelden; erst danach wird automatisch fortgesetzt.";
     if (type === "CONFIRM_MFA") return "MFA-Bestätigung erforderlich. Erst nach erfolgreicher Bestätigung wird automatisch fortgesetzt.";
-    if (type === "MANAGE_CREDENTIALS") return "Für dieses Portal ist ein gültiger Zugang einzurichten.";
+    if (type === "MANAGE_CREDENTIALS") return portal.credential?.configured ? "Der vorhandene Portalzugang muss aktualisiert werden." : "Für dieses Portal ist ein Zugang einzurichten.";
     if (type === "NONE" && portal.session_verification_status === "VERIFIED_RESTORED_READ_ONLY_PAGE") return long ? "Die Portalsitzung wurde in einem unabhängigen Browser auf einer authentifizierten, schreibgeschützten Seite bestätigt. Die Verarbeitung darf automatisch fortgesetzt werden." : "Portalsitzung unabhängig und schreibgeschützt bestätigt; Verarbeitung wird automatisch fortgesetzt.";
     return "Keine unabhängig bestätigte Portalsitzung vorhanden.";
   };
@@ -225,7 +240,6 @@
     if (!response.ok)
       throw Object.assign(Error(body.message || (response.status === 401 ? "Anmeldung oder MFA-Sitzung erforderlich." : response.status === 403 ? "Keine Berechtigung für diese Aktion." : response.status === 409 ? "Der Stand hat sich geändert. Bitte laden Sie die Ansicht neu." : response.status === 423 ? "Diese rechtlich bindende Portalaktion ist gesperrt. Es wurde nichts übermittelt." : response.status >= 500 ? "Die Aktion konnte wegen eines technischen Fehlers nicht abgeschlossen werden." : `Die Aktion konnte nicht abgeschlossen werden (${response.status}).`)), {
         status: response.status,
-        requestId: body.errorId || body.requestId || response.headers.get("x-request-id") || null,
         retryAfter: Number(response.headers.get("retry-after")) || null,
       });
     return body;
@@ -233,7 +247,7 @@
   const activeJobKey = (tenderId, companyId) =>
     `wb-tender-action-job:${tenderId}:${companyId}`;
   const renderJob = (job) =>
-    `<strong>${esc(job.action_type || "")}</strong> · Job-ID ${esc(job.job_id || "")} · Dokumentstatus ${esc(job.document_workflow_status || "NOT_REQUESTED")} · Queue ${esc(job.status || "")} · Schritt ${esc(job.current_step || "–")} · Fortschritt ${esc(job.progress_percent || 0)} % · Erfolgreich ${esc(job.successful_items || 0)}, übersprungen ${esc(job.skipped_items || 0)}, fehlgeschlagen ${esc(job.failed_items || 0)}${job.error_code ? ` · Fehlerklasse ${esc(job.error_code)}` : ""}${job.finished_at ? ` · Abschluss ${esc(job.finished_at)}` : ""}`;
+    `<strong>${esc(job.action_type || "")}</strong> · Job-ID ${esc(job.job_id || "")} · Status ${esc(job.status || "")} · Schritt ${esc(job.current_step || "–")} · Fortschritt ${esc(job.progress_percent || 0)} % · Erfolgreich ${esc(job.successful_items || 0)}, übersprungen ${esc(job.skipped_items || 0)}, fehlgeschlagen ${esc(job.failed_items || 0)}${job.error_code ? ` · Fehlerklasse ${esc(job.error_code)}` : ""}${job.finished_at ? ` · Abschluss ${esc(job.finished_at)}` : ""}`;
   const jobPollers = new Map(),
     pollOwner =
       sessionStorage.getItem("wb-inbox-job-poll-owner") || crypto.randomUUID();
@@ -327,7 +341,7 @@ document.addEventListener("click", async (event) => {
         return;
       }
       if (reconnectFailureStatuses.has(state.status)) return fail(state);
-      if(state.status==="LOGIN_RETRY_SCHEDULED"&&status)status.textContent=`${state.message} Fehler-ID: ${state.errorId||"nicht verfügbar"}. Verbindung wird weiter geprüft …`;
+      if(state.status==="LOGIN_RETRY_SCHEDULED"&&status)status.textContent=`${state.message || "Die Verbindung wird erneut geprüft."} Fehler-ID: ${state.errorId||"nicht verfügbar"}. Verbindung wird weiter geprüft …`;
       if(Date.now()-startedAt>=60000){entry.polling=false;button.disabled=false;button.removeAttribute("aria-busy");button.textContent="Anmeldung abgeschlossen – Verbindung prüfen";if(status)status.textContent=`Die Prüfung dauert länger als erwartet. Fehler-ID: ${state.errorId||"nicht verfügbar"}. Sie können die Statusprüfung erneut ausführen.`;return;}
       window.setTimeout(()=>poll().catch(error=>fail(null,error)),2000);
     };
@@ -352,7 +366,7 @@ document.addEventListener("click", async (event) => {
   try {
     const job = await request(`/management-inbox/autopilot/${encodeURIComponent(button.dataset.tender)}/jobs`, {
       method: "POST",
-      body: JSON.stringify({ action_type: "RUN_FULL_PIPELINE", company_id: button.dataset.company, lot_key: button.dataset.lot || null }),
+      body: JSON.stringify({ action_type: "FETCH_DOCUMENTS", company_id: button.dataset.company, lot_key: button.dataset.lot || null }),
     });
     if (status) status.textContent = `Dokumentenaktualisierung gestartet · Job ${job.job_id}.`;
   } catch (error) {
@@ -495,26 +509,32 @@ document.addEventListener("click", async (event) => {
     const companies = data.companies || [];
     const page=Number(data.page||1),pageSize=Number(data.pageSize||50),first=data.total?((page-1)*pageSize)+1:0,last=Math.min(page*pageSize,Number(data.total||0));
     const recalculation=(data.recalculations||[]).find(item=>["QUEUED","RUNNING","FAILED"].includes(item.status)),recalculationNotice=recalculation?`<section class="panel" role="status"><strong>${recalculation.status==="FAILED"?"Regionsprüfung benötigt technische Prüfung":"Regionsprüfung wird im Hintergrund aktualisiert"}</strong><p>${esc(recalculation.processed_count||0)} von ${esc(recalculation.total_count||0)} verarbeitet. Bis zum konsistenten Abschluss wird die letzte vollständig berechnete Inbox-Version angezeigt.</p></section>`:"";
-    return `${recalculationNotice}<section class="toolbar region-toolbar"><label>Gesellschaft<select id="inbox-company"><option value="all">Alle relevanten Gesellschaften</option>${companies.map((x) => `<option value="${esc(x.company_id)}">${esc(x.legal_name)}</option>`).join("")}</select></label><label>Leistungsbereich<select id="inbox-service"><option value="">Alle Leistungsbereiche</option><option value="cleaning">Cleaning</option><option value="security">Security</option><option value="facility-management">Facility Management</option><option value="sicherheitstechnik">Sicherheitstechnik</option><option value="emergency-services">Emergency Services</option></select></label><label>Relevanzstatus<select id="inbox-relevance"><option value="relevant">Relevant</option><option value="review">Prüfung erforderlich</option><option value="excluded">Ausgeschlossen</option><option value="all">Alle</option></select></label><label>Regionsfilter<select id="inbox-region-filter"><option value="default">Kernregionen und strategische Regionen</option><option value="CORE_REGION">Kernregionen</option><option value="STRATEGIC_REGION">Strategische/bedingte Regionen</option><option value="OUTSIDE_CORE_REGION">Außerhalb der Kernregionen</option><option value="EXCLUDED_REGION">Ausgeschlossene Regionen</option><option value="REGION_UNRESOLVED,REGION_CONFIG_CONFLICT,MULTI_REGION_REVIEW">Region ungeklärt</option><option value="all">Alle Regionen</option></select></label></section><section class="region-counts"><span>Kernregionen: <strong>${count(data, "CORE_REGION")}</strong></span><span>Strategisch: <strong>${count(data, "STRATEGIC_REGION")}</strong></span><span>Außerhalb: <strong>${count(data, "OUTSIDE_CORE_REGION")}</strong></span><span>Ausgeschlossen: <strong>${count(data, "EXCLUDED_REGION")}</strong></span><span>Ungeklärt: <strong>${count(data, "REGION_UNRESOLVED") + count(data, "REGION_CONFIG_CONFLICT") + count(data, "MULTI_REGION_REVIEW")}</strong></span></section><nav class="toolbar inbox-pagination" aria-label="Seitennavigation"><button type="button" id="inbox-prev" ${page<=1?'disabled aria-disabled="true"':''}>Zurück</button><span>${first}–${last} von ${esc(data.total||0)}</span><button type="button" id="inbox-next" ${!data.hasMore?'disabled aria-disabled="true"':''}>Weiter</button></nav>`;
+    const configurationNotice=data.regionConfigurationStatus==="REGION_CONFIGURATION_MISSING"||count(data,"REGION_CONFIGURATION_MISSING")?`<section class="panel error" role="alert"><strong>REGION_CONFIGURATION_MISSING</strong><p>Für die ausgewählte Gesellschaft fehlt eine aktive autoritative Regionskonfiguration. Die Treffer bleiben gesperrt, bis die fachliche Konfiguration freigegeben wurde.</p></section>`:"";
+    return `${configurationNotice}${recalculationNotice}<section class="toolbar region-toolbar"><label>Gesellschaft<select id="inbox-company"><option value="all">Alle relevanten Gesellschaften</option>${companies.map((x) => `<option value="${esc(x.company_id)}">${esc(x.legal_name)}</option>`).join("")}</select></label><label>Leistungsbereich<select id="inbox-service"><option value="">Alle Leistungsbereiche</option><option value="cleaning">Cleaning</option><option value="security">Security</option><option value="facility-management">Facility Management</option><option value="sicherheitstechnik">Sicherheitstechnik</option><option value="emergency-services">Emergency Services</option></select></label><label>Relevanzstatus<select id="inbox-relevance"><option value="relevant">Relevant</option><option value="review">Prüfung erforderlich</option><option value="excluded">Ausgeschlossen</option><option value="all">Alle</option></select></label><label>Regionsfilter<select id="inbox-region-filter"><option value="default">Kernregionen und strategische Regionen</option><option value="CORE_REGION">Kernregionen</option><option value="STRATEGIC_REGION">Strategische/bedingte Regionen</option><option value="OUTSIDE_CORE_REGION">Außerhalb der Kernregionen</option><option value="EXCLUDED_REGION">Ausgeschlossene Regionen</option><option value="REGION_UNRESOLVED">Region ungeklärt</option><option value="REGION_CONFIG_CONFLICT">Regionskonflikt</option><option value="MULTI_REGION_REVIEW">Mehrere Regionen – Einzelprüfung</option><option value="REGION_CONFIGURATION_MISSING">Regionskonfiguration fehlt</option><option value="all">Alle Regionen</option></select></label></section><section class="region-counts"><span>Kernregionen: <strong>${count(data, "CORE_REGION")}</strong></span><span>Strategisch: <strong>${count(data, "STRATEGIC_REGION")}</strong></span><span>Außerhalb: <strong>${count(data, "OUTSIDE_CORE_REGION")}</strong></span><span>Ausgeschlossen: <strong>${count(data, "EXCLUDED_REGION")}</strong></span><span>Ungeklärt: <strong>${count(data, "REGION_UNRESOLVED")}</strong></span><span>Regionskonflikt: <strong>${count(data, "REGION_CONFIG_CONFLICT")}</strong></span><span>Mehrregionenprüfung: <strong>${count(data, "MULTI_REGION_REVIEW")}</strong></span><span>Konfiguration fehlt: <strong>${count(data, "REGION_CONFIGURATION_MISSING")}</strong></span></section><nav class="toolbar inbox-pagination" aria-label="Seitennavigation"><button type="button" id="inbox-prev" ${page<=1?'disabled aria-disabled="true"':''}>Zurück</button><span>${first}–${last} von ${esc(data.total||0)}</span><button type="button" id="inbox-next" ${!data.hasMore?'disabled aria-disabled="true"':''}>Weiter</button></nav>`;
   }
   function portalCardAccess(item, portalAccess) {
     if (portalAccess?.loadError) return `<section class="card-portal-access" aria-label="Portalzugang"><p class="error">Portalzugangsstatus konnte nicht geladen werden. Die Ausschreibung und die belegten externen Ziele bleiben verfügbar.</p><a class="button-link" href="${esc(`${location.port ? "" : "/admin/ausschreibungen"}/autopilot/portal-access?company=${encodeURIComponent(item.company_id)}`)}">Portalzugangsverwaltung öffnen</a></section>`;
-    const seen = new Set(),
-      portals = (portalAccess?.items || []).filter((portal) => {
+    const sourceItems = Array.isArray(portalAccess?.items) ? portalAccess.items : [],
+      invalidItemCount = sourceItems.filter((portal) => !recordOrNull(portal)).length,
+      seen = new Set(),
+      portals = sourceItems.filter((portal) => {
+        if (!recordOrNull(portal)) return false;
         const key = `${item.tender_id}|${item.lot_key || ""}|${portal.portal_id}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
       });
-    if (!portals.length) return "";
-    return `<section class="card-portal-access" aria-label="Portalzugang">${portals.map((p) => {
+    if (!portals.length) return invalidItemCount
+      ? `<section class="card-portal-access" aria-label="Portalzugang"><p class="error">Portalzugangsstatus enthält ${esc(invalidItemCount)} ungültige Datensätze. Die Portalzuordnung muss technisch geprüft werden.</p></section>`
+      : "";
+    return `<section class="card-portal-access" aria-label="Portalzugang">${invalidItemCount ? `<p class="error">${esc(invalidItemCount)} ungültige Portalzugangsdatensätze wurden nicht als fehlender Zugang interpretiert.</p>` : ""}${portals.map((p) => {
       const approvalState = p.access_status === "EXTERNAL_DOCUMENT_REQUEST_REQUIRED" && p.request_effect === "BIDDER_LIST_REGISTRATION_POSSIBLE" && !p.global_document_request_approval,
         manageUrl = `${location.port ? "" : "/admin/ausschreibungen"}/autopilot/portal-access?tender=${encodeURIComponent(item.tender_id)}&lot=${encodeURIComponent(item.lot_key || "")}&company=${encodeURIComponent(item.company_id)}&portal=${encodeURIComponent(p.portal_id)}`,
         missing = (p.missing_calculation_inputs || []).map(missingLabel);
       const documentCounts = p.documents_found == null && !p.last_attempt
         ? "Noch nicht abgerufen"
         : `${Number(p.documents_downloaded || 0)} / ${Number(p.documents_analyzed || 0)} von ${Number(p.documents_found || 0)}`;
-      return `<article class="portal-access-card" data-portal-access="${esc(p.portal_id)}"><h3>${esc(p.portal_name || p.domain || "Vergabeportal")}</h3><dl><dt>Status</dt><dd><strong>${esc(portalStatusLabel(p.access_status))}</strong></dd><dt>Gesellschaftsbezogener Zugang</dt><dd>${esc(p.credential?.configured ? `Vorhanden · ${p.credential.usernameMasked || "sicher maskiert"}` : "Noch nicht hinterlegt")}</dd><dt>Ursache</dt><dd>${esc(p.processing_blocker || p.login_required_reason || p.last_error || "Noch nicht ermittelt")}</dd><dt>Betroffene Dokumente</dt><dd>${documentList(p.affected_document_items)}</dd><dt>Geladen / analysiert</dt><dd>${esc(documentCounts)}</dd><dt>Verarbeitung</dt><dd>${esc(statusLabel(p.current_processing_step || p.processing_status || "Noch nicht gestartet"))}</dd><dt>Fehlende Kalkulationswerte</dt><dd>${esc(displayValue(missing, "Keine"))}</dd><dt>Letzter Abruf</dt><dd>${esc(formatDate(p.last_attempt))}</dd><dt>Nächster Retry</dt><dd>${esc(formatDate(p.next_retry, ["NONE","OPEN_PORTAL_READ_ONLY"].includes(p.login_action?.type) ? "Nicht eingeplant" : "Erst nach erfolgreicher Anmeldung"))}</dd></dl><div class="card-actions">${approvalState?`<button type="button" disabled aria-disabled="true">Freigabe für Dokumentenanforderung erforderlich</button>`:portalLoginPrimaryAction(p,manageUrl,{tender:item.tender_id,company:item.company_id,lot:item.lot_key})}${portalDocumentRefreshAction(p)}${evidenceLink(p.login_url ? {url:p.login_url,label:"Beim Vergabeportal anmelden",targetType:"LOGIN",provenanceLabel:"verifiziertes Portalregister"}:null)}${evidenceLink(p.registration_url ? {url:p.registration_url,label:"Beim Vergabeportal registrieren",targetType:"REGISTRATION",provenanceLabel:"verifiziertes Portalregister"}:null)}${portalManageButton(item,p)}</div><p class="muted portal-progress" data-portal-login-status="${esc(p.portal_id)}" aria-live="polite">${approvalState?'Keine externe Aktion ohne ausdrückliche tenderbezogene Freigabe.':esc(portalTruthMessage(p))}</p></article>`;
+      return `<article class="portal-access-card" data-portal-access="${esc(p.portal_id)}"><h3>${esc(p.portal_name || p.domain || "Vergabeportal")}</h3><dl><dt>Zugangsstatus</dt><dd><strong>${esc(credentialStatusLabel(p))}</strong></dd><dt>Dokumentstatus</dt><dd><strong>${esc(portalStatusLabel(p.document_status || p.access_status))}</strong></dd><dt>Gesellschaftsbezogener Zugang</dt><dd>${esc(p.credential?.configured ? `Vorhanden · ${p.credential.usernameMasked || "sicher maskiert"}` : "Noch nicht hinterlegt")}</dd><dt>Ursache</dt><dd>${esc(p.processing_blocker || p.login_required_reason || p.last_error || "Noch nicht ermittelt")}</dd><dt>Betroffene Dokumente</dt><dd>${documentList(p.affected_document_items)}</dd><dt>Geladen / analysiert</dt><dd>${esc(documentCounts)}</dd><dt>Verarbeitung</dt><dd>${esc(statusLabel(p.current_processing_step || p.processing_status || "Noch nicht gestartet"))}</dd><dt>Fehlende Kalkulationswerte</dt><dd>${esc(displayValue(missing, "Keine"))}</dd><dt>Letzter Abruf</dt><dd>${esc(formatDate(p.last_attempt))}</dd><dt>Nächster Retry</dt><dd>${esc(documentRetryLabel(p))}</dd></dl><div class="card-actions">${approvalState?`<button type="button" disabled aria-disabled="true">Freigabe für Dokumentenanforderung erforderlich</button>`:portalLoginPrimaryAction(p,manageUrl,{tender:item.tender_id,company:item.company_id,lot:item.lot_key})}${portalDocumentRefreshAction(p)}${evidenceLink(p.login_url ? {url:p.login_url,label:"Beim Vergabeportal anmelden",targetType:"LOGIN",provenanceLabel:"verifiziertes Portalregister"}:null)}${evidenceLink(p.registration_url ? {url:p.registration_url,label:"Beim Vergabeportal registrieren",targetType:"REGISTRATION",provenanceLabel:"verifiziertes Portalregister"}:null)}${portalManageButton(item,p)}</div><p class="muted portal-progress" data-portal-login-status="${esc(p.portal_id)}" aria-live="polite">${approvalState?'Keine externe Aktion ohne ausdrückliche tenderbezogene Freigabe.':esc(portalTruthMessage(p))}</p></article>`;
     }).join("")}</section>`;
   }
   function selectedCard(item, portalAccess = null) {
@@ -524,6 +544,7 @@ document.addEventListener("click", async (event) => {
       calculated=["CALCULATED","CALCULATED_REAL","CALCULATION_COMPLETED"].includes(item.calculationStatus),
       managementReady=item.managementOutputStatus&&item.managementOutputStatus!=="NOT_CREATED",
       approvalRequested=item.approval_status==="REQUESTED",totals=item.calculation_totals||{},recommendation=item.management_recommendation?.decision||item.management_recommendation?.reason||"–",documentTruth=documentEvidenceSummary(item),portalTruth=item.linkEvidence?.procurementPortal?.portalName||item.linkEvidence?.missingReasons?.procurementPortal||"Vergabeportal-Nachweis nicht geladen";
+    if(item.classification==="REGION_CONFIGURATION_MISSING")return `<article class="card region-card region-configuration-missing"><p><strong>REGION_CONFIGURATION_MISSING</strong></p><h2>${esc(item.title)}</h2><p>${esc(item.buyer||"–")}</p><dl><dt>Gesellschaft</dt><dd>${esc(item.company_name||"–")}</dd><dt>Leistungsbereich</dt><dd>${esc(item.service_line||"–")}</dd><dt>Handlungsstatus</dt><dd>Fachliche Regionskonfiguration erforderlich</dd><dt>Teilnahme / Submission</dt><dd>Gesperrt</dd></dl><p>Für diese Gesellschaft ist keine aktive autoritative Regionskonfiguration vorhanden. Es werden keine Regionen aus anderen Gesellschaften übernommen.</p><div class="card-actions"><button type="button" data-region-detail="${esc(item.tender_id)}" data-company="${esc(item.company_id)}" data-lot="${esc(item.lot_key||"")}">Details</button></div></article>`;
     if(!item.lot_key&&!item.noticeLifecycle)return `<article class="card region-card"><h2>${esc(item.title)}</h2><p>${esc(item.buyer||"–")}</p><dl><dt>Los</dt><dd>Auswahl erforderlich</dd><dt>Primärgesellschaft</dt><dd>${esc(item.company_name||"Keine")}</dd><dt>Leistungsbereich</dt><dd>${esc(item.service_line||"Konfiguration erforderlich")}</dd><dt>Region</dt><dd>${esc(labels[item.classification]||item.classification||"Ungeklärt")}</dd><dt>Frist</dt><dd>${esc(formatDate(item.offer_deadline))}</dd><dt>Teilnahmestatus</dt><dd>Loswahl erforderlich</dd></dl>${renderTenderLinkEvidence(item)}<p class="muted">Vor Teilnahme, Portal-, Dokument-, Kalkulations- oder Abgabeaktionen muss ein eindeutig teilnahmefähiges Los ausgewählt werden.</p><div class="card-actions"><button type="button" data-region-detail="${esc(item.tender_id)}" data-company="${esc(item.company_id)}">Teilnahmefähiges Los auswählen</button></div></article>`;
     if(item.noticeLifecycle){const life=item.noticeLifecycle,original=life.original,originalUrl=original?`${location.port?"":"/admin/ausschreibungen"}/autopilot/detail?tender=${encodeURIComponent(original.tenderId)}&company=${encodeURIComponent(item.company_id)}`:null;return `<article class="card region-card award-notice-card"><p><strong>${esc(life.statusLabel)}</strong></p><h2>${esc(item.title)}</h2><p>${esc(item.buyer||"–")}</p><dl><dt>Typ</dt><dd>${esc(life.noticeTypeLabel)}</dd><dt>Ergebnis</dt><dd>${esc(life.resultLabel)}</dd><dt>Los</dt><dd>${esc(item.lot_key||"Gesamt")}</dd><dt>Angebot</dt><dd>${esc(life.offerLabel)}</dd><dt>Portalzugriff</dt><dd>${esc(life.portalAccessLabel)}</dd><dt>Dokumentenstatus</dt><dd>${esc(life.documentStatusLabel)}</dd><dt>Kalkulation</dt><dd>${esc(life.calculationLabel)}</dd><dt>Managementfreigabe</dt><dd>Nicht erforderlich</dd><dt>Teilnahme / Submission</dt><dd>Nicht erforderlich</dd><dt>Monitoring</dt><dd>${esc(life.monitoringLabel)}</dd><dt>Zuschlagsdatum</dt><dd>${esc(formatDate(life.awardDate,"Nicht verfügbar"))}</dd></dl><div class="card-actions"><a class="button-link" href="${esc(route("detail"))}">Zuschlagsbekanntmachung öffnen</a>${originalUrl?`<a class="button-link primary-action" href="${esc(originalUrl)}">Zugehörige ursprüngliche Ausschreibung öffnen</a>`:""}</div>${original?"":'<p class="muted">Im Autopiloten ist keine über eine identische Procedure-ID autoritativ verknüpfbare ursprüngliche Ausschreibung vorhanden.</p>'}</article>`}
     return `<article class="card region-card"><h2>${esc(item.title)}</h2><p>${esc(item.buyer || "–")}</p>${approvalRequested?'<p><strong>MANAGEMENTENTSCHEIDUNG ERFORDERLICH</strong></p>':""}<dl><dt>Los</dt><dd>${esc(item.lot_key || "Gesamt")}</dd><dt>Primärgesellschaft</dt><dd>${esc(item.company_name || "Keine")}</dd><dt>Leistungsbereich</dt><dd>${esc(item.service_line || "Konfiguration erforderlich")}</dd><dt>Veröffentlichungsplattform</dt><dd>${esc(item.source_code || "Nicht ermittelt")}</dd><dt>Teilnahme-/Abgabeportal</dt><dd>${esc(portalTruth)}</dd><dt>Portalzugangstatus</dt><dd>${esc(item.portal_access_status ? statusLabel(item.portal_access_status) : "Noch nicht geprüft")}</dd><dt>Dokumentstatus</dt><dd><strong>${esc(documentTruth.label)}</strong> · ${esc(documentTruth.reason)}</dd><dt>Dokumentnachweis</dt><dd>${esc(documentTruth.counts)}</dd><dt>Extraktionsstatus</dt><dd>${esc(statusLabel(item.lastProcessedStep || "NO_PIPELINE_ATTEMPT"))}</dd><dt>Kalkulationsstatus</dt><dd><strong>${esc(calculationLabel(item.calculationStatus))}</strong></dd><dt>Angebotswert</dt><dd>${esc(totals.totalPrice??"–")}</dd><dt>DB1</dt><dd>${esc(totals.db1??"–")}</dd><dt>DB2</dt><dd>${esc(totals.db2??"–")}</dd><dt>DB3</dt><dd>${esc(totals.db3??"–")}</dd><dt>Gewinn</dt><dd>${esc(totals.profit??"–")}</dd><dt>Empfehlung</dt><dd>${esc(recommendation)}</dd><dt>Managementausgabe</dt><dd>${esc(statusLabel(item.managementOutputStatus || "NOT_CREATED"))}</dd><dt>Approval-Status</dt><dd><strong>${esc(item.approval_status||"–")}</strong></dd><dt>Entscheidungsstatus</dt><dd>${esc(approvalRequested?"MANAGEMENTENTSCHEIDUNG ERFORDERLICH":calculated&&managementReady?"Entscheidung erforderlich":"Noch nicht entscheidungsreif")}</dd><dt>Teilnahmestatus</dt><dd>Vorbereitung möglich</dd><dt>Angebotsstatus</dt><dd>Nicht freigegeben</dd><dt>Monitoringstatus</dt><dd>${esc(statusLabel(item.monitoringStatus || "INACTIVE"))}${item.monitoringLastCheckedAt ? ` · zuletzt ${esc(formatDate(item.monitoringLastCheckedAt))}` : ""}${item.monitoringNextCheckAt ? ` · nächste Prüfung ${esc(formatDate(item.monitoringNextCheckAt))}` : ""}</dd><dt>Frist</dt><dd>${esc(formatDate(item.offer_deadline))}</dd><dt>Letzter Verarbeitungsschritt</dt><dd>${esc(statusLabel(item.lastProcessedStep || "NO_PIPELINE_ATTEMPT"))}</dd><dt>Letzte Verarbeitung</dt><dd>${esc(formatDate(item.lastProcessedAt))}</dd><dt>Nächster Schritt</dt><dd>${esc(nextActionLabels[item.nextAction] || statusLabel(item.nextAction))}</dd>${missing.length ? `<dt>Fehlend (${esc(missing.length)})</dt><dd>${esc(missing.slice(0, 5).map(missingLabel).join(", "))}</dd>` : ""}<dt>Zuständige Ansprechperson</dt><dd>${esc(item.responsible_contact || "Noch nicht zugewiesen")}</dd></dl>${renderTenderLinkEvidence(item)}${portalCardAccess(item, portalAccess) || `<section data-portal-slot="${esc(item.tender_id)}" data-company="${esc(item.company_id)}" data-lot="${esc(item.lot_key || "")}" aria-live="polite"></section>`}<div class="card-actions"><a class="button-link primary-action" href="${esc(route("participation"))}">Teilnahme vorbereiten</a><button type="button" data-region-detail="${esc(item.tender_id)}" data-company="${esc(item.company_id)}">Details</button><a class="button-link" href="${esc(route("documents"))}">Interne Unterlagenansicht öffnen</a><a class="button-link" href="${esc(route("calculation"))}">Kalkulation öffnen</a>${managementReady?`<a class="button-link" href="${esc(route("management-output"))}">Managementausgabe öffnen</a>`:""}${approvalRequested||calculated&&managementReady?`<a class="button-link primary-action" href="${esc(route("detail"))}#entscheidung">Kalkulation und Angebot freigeben</a><a class="button-link" href="${esc(route("detail"))}#entscheidung">Änderung anfordern</a><a class="button-link" href="${esc(route("detail"))}#entscheidung">Ausschreibung ablehnen</a>`:""}<a class="button-link" href="${esc(route("offer-documents"))}">Angebotspaket öffnen</a><a class="button-link" href="${esc(route("approvals"))}">Abgabestatus öffnen</a><a class="button-link" href="${esc(route("audit"))}">Monitoring öffnen</a></div></article>`;
@@ -647,7 +668,6 @@ document.addEventListener("click", async (event) => {
     CREDENTIALS_NOT_CONFIGURED: "Portalzugang nicht konfiguriert",
     PORTAL_UNREACHABLE: "Portal technisch nicht erreichbar",
     DOWNLOAD_LINK_UNRESOLVED: "Downloadlink wird erneut aufgelöst",
-    NO_BOUND_DOCUMENT_CONTEXT: "Keine gebundene Dokumentreferenz",
     EXTERNAL_DOCUMENT_REQUEST_REQUIRED: "Dokumentenfreischaltung erforderlich",
     DOCUMENT_NOT_FOUND: "Dokument nicht gefunden",
     ACCESS_DENIED: "Dokumentzugriff verweigert",
@@ -655,17 +675,41 @@ document.addEventListener("click", async (event) => {
     DOCUMENTS_AVAILABLE: "Dokumente vollständig verfügbar",
     DOCUMENTS_PARTIALLY_AVAILABLE: "Dokumente teilweise verfügbar",
   })[status] || status || "Noch nicht geprüft";
+  const credentialStatusLabel = (portalValue) => {
+    const portal = recordOrNull(portalValue);
+    if (!portal) return "Zugangsstatus technisch nicht verfügbar";
+    return portal.credential_status_label || ({
+    NOT_CONFIGURED: "Kein Portalzugang hinterlegt",
+    CONFIGURED_UNVERIFIED: "Zugang gespeichert, noch nicht verifiziert",
+    VALID: "Gültiger Portalzugang vorhanden",
+    MFA_REQUIRED: "MFA-Bestätigung erforderlich",
+    CAPTCHA_OR_USER_ACTION_REQUIRED: "Fortsetzung im Portal erforderlich",
+    EXPIRED: "Portalzugang oder Sitzung abgelaufen",
+    INVALID: "Portalzugang ungültig",
+    LOCKED: "Portalzugang gesperrt",
+    PORTAL_UNAVAILABLE: "Portal vorübergehend nicht erreichbar",
+    VALIDATION_PENDING: "Zugangsprüfung läuft",
+    })[portal.credential_status] || "Zugangsstatus technisch nicht verfügbar";
+  };
+  const documentRetryLabel = (portalValue) => {
+    const portal = recordOrNull(portalValue);
+    if (!portal) return "Kontextprüfung erforderlich";
+    if (portal.documents_complete) return "Kein erneuter Abruf erforderlich";
+    if (portal.next_retry) return formatDate(portal.next_retry);
+    if (["NOT_CONFIGURED", "CONFIGURED_UNVERIFIED", "MFA_REQUIRED", "CAPTCHA_OR_USER_ACTION_REQUIRED", "EXPIRED", "INVALID", "LOCKED"].includes(portal.credential_status))
+      return "Aktualisierung nach erfolgreicher Portalzugangsprüfung";
+    return "Nicht eingeplant";
+  };
   function portalLoginPrimaryAction(p, manageUrl) {
     const action = p.login_action;
     if (!action || !action.binding) return "";
     const { type: actionType, label, binding } = action;
-    if (actionType === "MANAGE_CREDENTIALS")
-      return `<a class="button-link primary-action" data-portal-login-manage="${esc(p.portal_id)}" href="${esc(manageUrl)}">${esc(label)}</a>`;
+    if (actionType === "MANAGE_CREDENTIALS") return "";
     if (actionType === "OPEN_PORTAL_READ_ONLY" && p.portal_open_url)
       return `<a class="button-link primary-action" data-portal-open="${esc(binding.portal_id)}" href="${esc(p.portal_open_url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
     if (actionType === "AUTHENTICATION_TARGET_UNAVAILABLE")
       return `<button type="button" disabled aria-disabled="true" data-portal-login-unavailable="${esc(binding.portal_id)}">Portal-Login nicht konfiguriert</button>`;
-    if (!["START_LOGIN", "CONFIRM_MFA"].includes(actionType)) return "";
+    if (!["START_LOGIN", "CONFIRM_MFA", "CONFIRM_CAPTCHA"].includes(actionType)) return "";
     return `<button type="button" class="primary-action" data-portal-login="${esc(binding.portal_id)}" data-portal-url="${esc(p.portal_url || "")}" data-tender="${esc(binding.tender_id)}" data-company="${esc(binding.company_id)}" data-lot="${esc(binding.lot_key)}">${esc(label)}</button>`;
   }
   function portalDocumentRefreshAction(p) {
@@ -686,14 +730,17 @@ document.addEventListener("click", async (event) => {
     // detail buttons. No fetch job is created before LOGIN_SUCCESSFUL.
   }
   function renderPortalAccess(data, x) {
-    const items = data?.items || [];
+    const sourceItems = Array.isArray(data?.items) ? data.items : [],
+      invalidItemCount = sourceItems.filter((item) => !recordOrNull(item)).length,
+      items = sourceItems.filter(recordOrNull);
+    if (!items.length && invalidItemCount) return section("Detailunterlagen und Portalzugang", `<p class="error">Portalzugangsstatus enthält ${esc(invalidItemCount)} ungültige Datensätze. Dies wird nicht als fehlender Zugang oder leere Liste behandelt.</p>`);
     if (!items.length) return data?.loadError ? `<section class="review-section"><h2>Detailunterlagen und Portalzugang</h2><p class="error">Portalzugangsstatus konnte nicht geladen werden: ${esc(data.loadError)}. Die belegten Quelllinks oben bleiben davon unabhängig nutzbar.</p></section>` : "";
-    return section("Detailunterlagen und Portalzugang", items.map((p) => {
+    return section("Detailunterlagen und Portalzugang", `${invalidItemCount ? `<p class="error">${esc(invalidItemCount)} ungültige Portalzugangsdatensätze wurden nicht als fehlender Zugang interpretiert.</p>` : ""}${items.map((p) => {
       const approvalState = p.access_status === "EXTERNAL_DOCUMENT_REQUEST_REQUIRED" && p.request_effect === "BIDDER_LIST_REGISTRATION_POSSIBLE" && !p.global_document_request_approval,
         manageUrl = `${contextUrl(x, "portal-access")}&portal=${encodeURIComponent(p.portal_id)}&tender=${encodeURIComponent(x.actionContext?.tender_id || "")}`,
         documents = documentList(p.affected_document_items, true);
-      return `<article class="portal-access-detail" data-portal-access="${esc(p.portal_id)}"><dl><dt>Bekanntmachungsquelle</dt><dd>${esc(p.notice_source || "Nicht ermittelt")}</dd><dt>Zielportal für Detailunterlagen</dt><dd><strong>${esc(p.portal_name)}</strong> · ${esc(p.domain)}</dd><dt>Sichere Portalreferenz</dt><dd>${esc(p.portal_open_url || p.portal_url || p.domain)}</dd><dt>Status</dt><dd><strong>${esc(portalStatusLabel(p.access_status))}</strong></dd><dt>Konkrete Ursache</dt><dd>${esc(p.login_required_reason)}</dd><dt>Letzter Abrufversuch</dt><dd>${esc(formatDate(p.last_attempt))}</dd><dt>Letzter Fehler</dt><dd>${esc(p.last_error || "Kein technischer Portalausfall festgestellt")}</dd><dt>Nächster Retry</dt><dd>${esc(formatDate(p.next_retry, ["NONE","OPEN_PORTAL_READ_ONLY"].includes(p.login_action?.type) ? "Nicht eingeplant" : "Erst nach erfolgreicher Anmeldung/Freischaltung"))}</dd><dt>Dadurch fehlende Kalkulationswerte</dt><dd>${esc((p.missing_calculation_inputs || []).map(missingLabel).join(", ") || "Keine")}</dd></dl><h3>Betroffene Dokumente</h3>${documents}<div class="review-actions">${approvalState?`<button type="button" disabled aria-disabled="true">Freigabe für Dokumentenanforderung erforderlich</button>`:portalLoginPrimaryAction(p,manageUrl,{tender:x.actionContext?.tender_id,company:x.actionContext?.company_id,lot:x.actionContext?.lot_key})}${portalDocumentRefreshAction(p)}<a class="button-link" href="${esc(manageUrl)}">Portalzugang verwalten</a>${p.notice_url ? `<a href="${esc(p.notice_url)}" target="_blank" rel="noopener noreferrer">Öffentliche Bekanntmachung öffnen</a>` : ""}</div><p class="muted" data-portal-login-status="${esc(p.portal_id)}" aria-live="polite">${approvalState?'Keine externe Aktion ohne ausdrückliche tenderbezogene Freigabe.':esc(portalTruthMessage(p,true))}</p></article>`;
-    }).join(""));
+      return `<article class="portal-access-detail" data-portal-access="${esc(p.portal_id)}"><dl><dt>Bekanntmachungsquelle</dt><dd>${esc(p.notice_source || "Nicht ermittelt")}</dd><dt>Zielportal für Detailunterlagen</dt><dd><strong>${esc(p.portal_name)}</strong> · ${esc(p.domain)}</dd><dt>Sichere Portalreferenz</dt><dd>${esc(p.portal_open_url || p.portal_url || p.domain)}</dd><dt>Zugangsstatus</dt><dd><strong>${esc(credentialStatusLabel(p))}</strong></dd><dt>Dokumentstatus</dt><dd><strong>${esc(portalStatusLabel(p.document_status || p.access_status))}</strong></dd><dt>Konkrete Ursache</dt><dd>${esc(p.login_required_reason)}</dd><dt>Letzter Abrufversuch</dt><dd>${esc(formatDate(p.last_attempt))}</dd><dt>Letzter Fehler</dt><dd>${esc(p.last_error || "Kein technischer Portalausfall festgestellt")}</dd><dt>Nächster Retry</dt><dd>${esc(documentRetryLabel(p))}</dd><dt>Dadurch fehlende Kalkulationswerte</dt><dd>${esc((p.missing_calculation_inputs || []).map(missingLabel).join(", ") || "Keine")}</dd></dl><h3>Betroffene Dokumente</h3>${documents}<div class="review-actions">${approvalState?`<button type="button" disabled aria-disabled="true">Freigabe für Dokumentenanforderung erforderlich</button>`:portalLoginPrimaryAction(p,manageUrl,{tender:x.actionContext?.tender_id,company:x.actionContext?.company_id,lot:x.actionContext?.lot_key})}${portalDocumentRefreshAction(p)}<a class="button-link" href="${esc(manageUrl)}">${esc(p.credential_status === "NOT_CONFIGURED" ? "Zugangsdaten hinterlegen" : ["EXPIRED","INVALID"].includes(p.credential_status) ? "Zugang aktualisieren" : "Zugangsdaten verwalten")}</a>${p.notice_url ? `<a href="${esc(p.notice_url)}" target="_blank" rel="noopener noreferrer">Öffentliche Bekanntmachung öffnen</a>` : ""}</div><p class="muted" data-portal-login-status="${esc(p.portal_id)}" aria-live="polite">${approvalState?'Keine externe Aktion ohne ausdrückliche tenderbezogene Freigabe.':esc(portalTruthMessage(p,true))}</p></article>`;
+    }).join("")}`);
   }
   const actionButton = (label, attributes, allowed, reason) =>
     `<span class="action-control"><button type="button" ${attributes} ${allowed ? "" : `disabled aria-disabled="true" aria-describedby="reason-${attributes.match(/data-(?:action|job-action)=\"([^\"]+)/)?.[1] || "action"}"`}>${esc(label)}</button>${allowed ? "" : `<small class="action-unavailable" id="reason-${attributes.match(/data-(?:action|job-action)=\"([^\"]+)/)?.[1] || "action"}">${esc(reason)}</small>`}</span>`;
@@ -810,35 +857,43 @@ document.addEventListener("click", async (event) => {
   async function showDetail(tenderId, companyId, lotKey = "") {
     content.innerHTML = "<p>Detail wird geladen …</p>";
     try {
+      if(!lotKey){
+        const saved=await request(`/lot-selections/${encodeURIComponent(tenderId)}?company=${encodeURIComponent(companyId)}`).catch(()=>({item:null}));
+        lotKey=saved.item?.lotKey||"";
+      }
       const x = await request(
           `/management-inbox/region-detail/${encodeURIComponent(tenderId)}?company=${encodeURIComponent(companyId)}&lot=${encodeURIComponent(lotKey)}`,
         ),
         c = x.actionContext || {},
         portalAccess = c.lot_key?await request(`/portal-access/for-tender/${encodeURIComponent(tenderId)}?company=${encodeURIComponent(companyId)}&lot=${encodeURIComponent(c.lot_key)}`).catch(error=>({items:[],loadError:error.message||"Unbekannter Fehler"})):{items:[]},
         missing = x.missingContext || [],
-        pipelineMissing = missing.filter((field) => field !== "enrichment_version_id"),
         contextReady = missing.length === 0,
-        pipelineReady = pipelineMissing.length === 0,
+        pipelineMissing = missing.filter((field) => field !== "enrichment_version_id"),
+        initializableMissing = missing.filter((key) => key !== "enrichment_version_id"),
+        initializableReady = pipelineMissing.length === 0,
         contextReason = contextReady
           ? ""
           : `Erforderlicher Kontext fehlt: ${missing.join(", ")}. Detailseite neu laden oder Tenderdaten vervollständigen.`,
-        permission = (name, label) =>
+        initializableContextReason = initializableReady
+          ? ""
+          : `Erforderlicher Kontext fehlt: ${initializableMissing.join(", ")}. Detailseite neu laden oder Tenderdaten vervollständigen.`,
+        permission = (name, label, canInitialize = false) =>
           x.permissions?.[name]
-            ? contextReason
+            ? canInitialize ? initializableContextReason : contextReason
             : `Berechtigung ${label} fehlt.`,
-        allowed = (name) => Boolean(x.permissions?.[name] && contextReady),
+        allowed = (name, canInitialize = false) => Boolean(x.permissions?.[name] && (canInitialize ? initializableReady : contextReady)),
         jobButtons = [
-          ["Unterlagen abrufen und analysieren", "RUN_FULL_PIPELINE", pipelineReady, pipelineReady ? "" : `Fehlender Kontext: ${pipelineMissing.join(", ")}.`],
+          ["Unterlagen abrufen und analysieren", "RUN_FULL_PIPELINE"],
           ["Anreicherung aktualisieren", "REFRESH_ENRICHMENT"],
           ["Dokumente erneut abrufen", "FETCH_DOCUMENTS"],
           ["Dokumente erneut analysieren", "ANALYZE_DOCUMENTS"],
         ]
-          .map(([label, action, ready = contextReady, reason = permission("evaluate", "tender.evaluate")]) =>
+          .map(([label, action]) =>
             actionButton(
               label,
               `data-job-action="${action}"`,
-              Boolean(x.permissions?.evaluate && ready),
-              x.permissions?.evaluate ? reason : "Berechtigung tender.evaluate fehlt.",
+              allowed("evaluate", true),
+              permission("evaluate", "tender.evaluate", true),
             ),
           )
           .join(""),
@@ -846,11 +901,18 @@ document.addEventListener("click", async (event) => {
       const savedLabels={favorite:"Favorit gespeichert",task_created:"Aufgabe gespeichert",internal_deadline_adopted:"Frist übernommen",reminder_created:"Wiedervorlage gespeichert"},saved=(x.savedInternalActions||[]).map(item=>`<li>${esc(savedLabels[item.action]||"Interne Aktion gespeichert")} · ${esc(formatDate(item.created_at))}</li>`).join("");
       x.source_code = sourceDisplayName(x);
       const eligibleLots=(x.lots||[]).filter(lot=>lot.lifecycle_status==="ACTIVE"&&lot.participation_status==="ELIGIBLE"&&lot.deadline_quality==="EXACT"&&lot.deadline&&new Date(lot.deadline)>new Date()),lotSelection=c.lot_key?"":`<section class="review-section"><h2>Teilnahmefähiges Los auswählen</h2>${eligibleLots.length?eligibleLots.map(lot=>`<button type="button" data-select-participation-lot="${esc(lot.external_id)}">${esc(lot.external_id)}${lot.title?` · ${esc(lot.title)}`:""} · Frist ${esc(formatDate(lot.deadline))}</button>`).join(""):"<p>Kein eindeutig teilnahmefähiges Los verfügbar.</p>"}</section>`,participationAction=contextReady?`<a class="button-link primary-action" href="${esc(contextUrl(x,"participation"))}">Teilnahme vorbereiten</a>`:"";
-      content.innerHTML = `<article class="panel region-detail"><button type="button" id="region-back">← Zur Management-Inbox</button><h1>${esc(x.title)}</h1><dl><dt>Bewertete Gesellschaft</dt><dd>${esc(x.company_name)}</dd><dt>Los</dt><dd>${esc(c.lot_key || "Gesamt")}</dd><dt>Veröffentlichungsquelle</dt><dd>${esc(x.source_code || "Nicht ermittelt")}</dd><dt>Dokumentstatus</dt><dd>${esc(documentEvidenceSummary(x).label)} · ${esc(documentEvidenceSummary(x).reason)}</dd><dt>Leistungsort/Bundesland</dt><dd>${esc((x.detected_states || []).join(", ") || "Nicht eindeutig ermittelt")}</dd><dt>NUTS-Region</dt><dd>${esc((x.detected_nuts || []).join(", ") || "Fehlt")}</dd><dt>Angewendete Regionsregel</dt><dd>${esc(x.parameter_key || "Keine aktive Regionsregel")}</dd><dt>Aktive Konfigurationsversion</dt><dd>${esc(x.configuration_version_no || "Keine")}</dd><dt>Ergebnis</dt><dd>${esc(labels[x.classification] || x.classification)} · ${esc(x.regional_decision)}</dd><dt>Begründung</dt><dd>${esc(x.explanation)}</dd></dl>${renderTenderLinkEvidence(x,true)}${saved?`<section class="review-section"><h2>Gespeicherte interne Aktionen</h2><ul>${saved}</ul></section>`:""}<div class="review-actions">${actionButton("Prüfung aktualisieren", 'class="primary-action" id="run-full-review" data-job-action="REFRESH_REVIEW"', allowed("evaluate"), permission("evaluate", "tender.evaluate"))}${jobButtons}${actionButton("Prüfbericht exportieren", 'data-action="review-export"', Boolean(x.fullReview && x.permissions?.evaluate), x.fullReview ? "Berechtigung tender.evaluate fehlt." : "Noch kein Prüfbericht vorhanden. Zuerst Prüfung aktualisieren.")}${actionButton("Vorstandsvorlage exportieren", 'data-action="board-export"', Boolean(x.autopilot?.board_brief && x.permissions?.board), x.autopilot?.board_brief ? "Berechtigung tender.board.view fehlt." : "Noch keine Vorstandsvorlage vorhanden. Zuerst vollständige Prüfung ausführen.")}${x.favoriteSaved?actionButton("Favorit gespeichert", 'data-action="favorite-saved"', false, "Dieser Favorit ist dauerhaft gespeichert."):actionButton("Als Favorit speichern", 'data-action="favorite"', allowed("favorite"), permission("favorite", "tender.favorite"))}${actionButton("Aufgabe erstellen", 'data-action="task"', allowed("task"), permission("task", "tender.task.manage"))}${actionButton("Frist übernehmen", 'data-action="deadline"', Boolean(allowed("deadline") && x.deadline?.value), x.deadline?.value ? permission("deadline", "tender.deadline.manage") : "Keine Frist im Tender oder Los vorhanden.")}${actionButton("Wiedervorlage erstellen", 'data-action="reminder"', allowed("deadline"), permission("deadline", "tender.deadline.manage"))}${actionButton("Kalkulation öffnen", 'data-action="calculation"', allowed("calculation"), permission("calculation", "tender.view_assigned"))}<a class="button-link primary-action" data-tender-autopilot-detail href="${esc(contextUrl(x, "detail"))}">Im Tender-Autopiloten öffnen</a></div>${renderPortalAccess(portalAccess, x)}<section id="action-form" class="review-section" hidden></section><div id="review-output">${renderReview(x.fullReview)}</div><p id="job-status" aria-live="polite"></p><p id="action-status" aria-live="polite">${x.favoriteSaved?"Favorit ist gespeichert.":""}</p></article>`;
+      content.innerHTML = `<article class="panel region-detail"><button type="button" id="region-back">← Zur Management-Inbox</button><h1>${esc(x.title)}</h1><dl><dt>Bewertete Gesellschaft</dt><dd>${esc(x.company_name)}</dd><dt>Los</dt><dd>${esc(c.lot_key || "Gesamt")}</dd><dt>Veröffentlichungsquelle</dt><dd>${esc(x.source_code || "Nicht ermittelt")}</dd><dt>Dokumentstatus</dt><dd>${esc(documentEvidenceSummary(x).label)} · ${esc(documentEvidenceSummary(x).reason)}</dd><dt>Leistungsort/Bundesland</dt><dd>${esc((x.detected_states || []).join(", ") || "Nicht eindeutig ermittelt")}</dd><dt>NUTS-Region</dt><dd>${esc((x.detected_nuts || []).join(", ") || "Fehlt")}</dd><dt>Angewendete Regionsregel</dt><dd>${esc(x.parameter_key || "Keine aktive Regionsregel")}</dd><dt>Aktive Konfigurationsversion</dt><dd>${esc(x.configuration_version_no || "Keine")}</dd><dt>Ergebnis</dt><dd>${esc(labels[x.classification] || x.classification)} · ${esc(x.regional_decision)}</dd><dt>Begründung</dt><dd>${esc(x.explanation)}</dd></dl>${renderTenderLinkEvidence(x,true)}${saved?`<section class="review-section"><h2>Gespeicherte interne Aktionen</h2><ul>${saved}</ul></section>`:""}<div class="review-actions">${actionButton("Prüfung aktualisieren", 'class="primary-action" id="run-full-review" data-job-action="REFRESH_REVIEW"', allowed("evaluate", true), permission("evaluate", "tender.evaluate", true))}${jobButtons}${actionButton("Prüfbericht exportieren", 'data-action="review-export"', Boolean(x.fullReview && x.permissions?.evaluate), x.fullReview ? "Berechtigung tender.evaluate fehlt." : "Noch kein Prüfbericht vorhanden. Zuerst Prüfung aktualisieren.")}${actionButton("Vorstandsvorlage exportieren", 'data-action="board-export"', Boolean(x.autopilot?.board_brief && x.permissions?.board), x.autopilot?.board_brief ? "Berechtigung tender.board.view fehlt." : "Noch keine Vorstandsvorlage vorhanden. Zuerst vollständige Prüfung ausführen.")}${x.favoriteSaved?actionButton("Favorit gespeichert", 'data-action="favorite-saved"', false, "Dieser Favorit ist dauerhaft gespeichert."):actionButton("Als Favorit speichern", 'data-action="favorite"', allowed("favorite"), permission("favorite", "tender.favorite"))}${actionButton("Aufgabe erstellen", 'data-action="task"', allowed("task"), permission("task", "tender.task.manage"))}${actionButton("Frist übernehmen", 'data-action="deadline"', Boolean(allowed("deadline") && x.deadline?.value), x.deadline?.value ? permission("deadline", "tender.deadline.manage") : "Keine Frist im Tender oder Los vorhanden.")}${actionButton("Wiedervorlage erstellen", 'data-action="reminder"', allowed("deadline"), permission("deadline", "tender.deadline.manage"))}${actionButton("Kalkulation öffnen", 'data-action="calculation"', allowed("calculation"), permission("calculation", "tender.view_assigned"))}<a class="button-link primary-action" data-tender-autopilot-detail href="${esc(contextUrl(x, "detail"))}">Im Tender-Autopiloten öffnen</a></div>${renderPortalAccess(portalAccess, x)}<section id="action-form" class="review-section" hidden></section><div id="review-output">${renderReview(x.fullReview)}</div><p id="job-status" aria-live="polite"></p><p id="action-status" aria-live="polite">${x.favoriteSaved?"Favorit ist gespeichert.":""}</p></article>`;
       const detailPanel=document.querySelector("article.region-detail");
       if(lotSelection)detailPanel?.querySelector("h1")?.insertAdjacentHTML("afterend",lotSelection);
       if(participationAction)detailPanel?.querySelector(".review-actions")?.insertAdjacentHTML("afterbegin",participationAction);
-      detailPanel?.querySelectorAll("[data-select-participation-lot]").forEach(button=>button.addEventListener("click",async()=>{button.disabled=true;const sourceLotId=button.dataset.selectParticipationLot||"";try{await request(`/management-inbox/region-detail/${encodeURIComponent(tenderId)}/lot-selection`,{method:"POST",body:JSON.stringify({company_id:companyId,source_lot_id:sourceLotId})});await showDetail(tenderId,companyId,sourceLotId)}catch(error){const status=document.querySelector("#action-status");if(status)status.textContent=`Los konnte nicht gespeichert werden: ${error.message}`;button.disabled=false}}));
+      detailPanel?.querySelectorAll("[data-select-participation-lot]").forEach(button=>button.addEventListener("click",async()=>{
+        const selectedLot=button.dataset.selectParticipationLot||"";
+        button.disabled=true;
+        button.setAttribute("aria-pressed","true");
+        const selectionStatus=document.createElement("p");selectionStatus.setAttribute("role","status");selectionStatus.textContent="Los wird gespeichert …";button.insertAdjacentElement("afterend",selectionStatus);
+        try{await request(`/lot-selections/${encodeURIComponent(tenderId)}`,{method:"POST",body:JSON.stringify({companyId,lotKey:selectedLot})});selectionStatus.textContent="Los gespeichert.";await showDetail(tenderId,companyId,selectedLot)}
+        catch(error){selectionStatus.textContent=`Los konnte nicht gespeichert werden: ${error.message}`;button.disabled=false;button.setAttribute("aria-pressed","false")}
+      }));
       document.querySelector("#region-back").onclick = () =>
         renderRegionInbox();
       bindPortalLoginActions({ tenderId, companyId, lotKey: c.lot_key || null });

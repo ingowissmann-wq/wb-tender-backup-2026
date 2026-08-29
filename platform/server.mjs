@@ -4,13 +4,14 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import rawBody from "fastify-raw-body";
 import pg from "pg";
+import { createFixedScopedPool, createRequestScopedPool, loadBackgroundScope } from "./scoped-pg-pool.mjs";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { hashSession, loadIdentity, mayView } from "./auth.mjs";
+import { registerOwnerAuth } from "./owner-auth.mjs";
 import { registerAutopilotRoutes } from "./autopilot-routes.mjs";
 import { registerConfigurationAdmin } from "./configuration-admin.mjs";
-import { startRegionRecalculationWorker } from "./region-recalculation-worker.mjs";
 import { registerLocalPdfJsAssets } from "./pdfjs-assets.mjs";
 import { requireRegisteredTenderPortalScope } from "./registered-portal-scope.mjs";
 import { SAAS_PERMISSION_FEATURES, loadSaasContext, registerSaasRoutes } from "./saas-platform.mjs";
@@ -19,8 +20,6 @@ import { SmtpEmailAdapter, StripeBillingAdapter, UnconfiguredBillingAdapter, Unc
 import { TenantFilesystemStorage, UnconfiguredTenantStorage } from "./tenant-storage.mjs";
 import { PostgresLoginStateStore, PostgresSaasSessionStore, SAAS_LOGIN_PATH, SaasOidcClient, registerSaasIamRoutes } from "./saas-iam.mjs";
 import { decoratePortalNavigation } from "./portal-navigation.mjs";
-import { loadTenderLinkEvidence } from "./tender-link-evidence.mjs";
-import { registerLiveSubmissionRoutes } from "./submission-live-routes.mjs";
 import {
   favoriteContext,
   favoriteMetadata,
@@ -80,10 +79,14 @@ const fileOnlySecret = (name) => {
   return path ? readFileSync(path, "utf8").replace(/\r?\n$/, "") : "";
 };
 const readOnlyCandidate = process.env.WB_TENDER_READ_ONLY_CANDIDATE === "true";
-const pool = new pg.Pool({
+const rawPool = new pg.Pool({
   connectionString: secret("DATABASE_URL"),
   ...(readOnlyCandidate ? { options: "-c default_transaction_read_only=on" } : {}),
 });
+const databaseScope = createRequestScopedPool(rawPool);
+const pool = databaseScope.pool;
+const backgroundScope = readOnlyCandidate ? null : await loadBackgroundScope(rawPool);
+const backgroundPool = readOnlyCandidate ? null : createFixedScopedPool(rawPool, backgroundScope).pool;
 const sectors = enabled ? new DatabaseSync(process.env.CAREER_DATABASE_PATH, {
   readOnly: true,
 }) : null;
@@ -91,6 +94,7 @@ const app = Fastify({
   logger: { redact: ["req.headers.cookie", "req.body"] },
   trustProxy: true,
 });
+app.addHook("onRequest", async () => databaseScope.enterRequest());
 await app.register(cookie);
 await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
 await app.register(helmet, {
@@ -122,10 +126,15 @@ app.addHook("onSend", async (_, reply, payload) => {
 async function auth(req, reply) {
   if (!enabled) return reply.code(404).send({ error: "pilot_disabled" });
   const identity = await loadIdentity(
-    pool,
+    rawPool,
     req.cookies.wb_session,
     secret("SESSION_PEPPER"),
   );
+  if (!identity && req.routeOptions?.config?.browserAuth === true) {
+    const backendPath = req.raw.url === "/" ? "/" : req.raw.url;
+    const returnTo = uiBase + backendPath;
+    return reply.redirect(uiBase + "/login?returnTo=" + encodeURIComponent(returnTo));
+  }
   if (!identity)
     return reply.code(401).send({ error: "authentication_required" });
   if (saasEnabled) {
@@ -146,6 +155,30 @@ async function auth(req, reply) {
       .all(identity.userId)
       .map((row) => row.sector_id);
     identity.sectorIds = [...new Set([...identity.sectorIds, ...careerSectorIds])];
+    // Internal administrators are globally privileged only inside the unique
+    // Green tenant. Materialize its real company bindings before installing
+    // the database scope; an empty company list must never become an RLS
+    // bypass or an accidentally empty administrator view.
+    if (!identity.companyIds?.length && identity.permissions.includes("tender.admin")) {
+      const background = (await rawPool.query(
+        "SELECT tenant_id,company_id FROM tender.resolve_background_scope() ORDER BY tenant_id,company_id",
+      )).rows;
+      const adminTenantIds = [...new Set(background.map((row) => String(row.tenant_id)))];
+      if (adminTenantIds.length !== 1) return reply.code(403).send({ error: "internal_tenant_scope_ambiguous" });
+      identity.companyIds = [...new Set(background.map((row) => String(row.company_id)))];
+    }
+  }
+  const tenantIds = identity.saas?.tenant_id
+    ? [String(identity.saas.tenant_id)]
+    : identity.companyIds?.length
+      ? (await rawPool.query("SELECT tenant_id FROM tender.resolve_runtime_tenants($1::uuid[])", [identity.companyIds])).rows.map((row) => String(row.tenant_id))
+      : [];
+  databaseScope.setRequestScope({ tenantIds, companyIds: identity.companyIds || [], actorUserId: identity.userId, permissions: identity.permissions || [] });
+  if (identity.companyIds?.length) {
+    identity.sectorSlugs = (await pool.query(
+      "SELECT DISTINCT sector_slug FROM tender.enterprise_company_links WHERE company_id=ANY($1::uuid[]) AND sector_slug IS NOT NULL",
+      [identity.companyIds],
+    )).rows.map((row) => row.sector_slug);
   }
   req.identity = identity;
 }
@@ -257,32 +290,7 @@ app.get(
     if (!result.rowCount) return reply.code(404).send({ error: "not_found" });
     if (!mayView(req.identity, result.rows[0]))
       return reply.code(403).send({ error: "forbidden" });
-    const tender = result.rows[0];
-    const [lots, version, evidence] = await Promise.all([
-      pool.query(`SELECT life.lot_key source_lot_id,coalesce(l.id,enriched.id,life.id) lot_id,
-                         coalesce(l.title,enriched.title,life.lot_key) title,
-                         life.offer_deadline,life.lifecycle_status,life.participation_status,
-                         life.deadline_quality,life.participation_block_reason
-                    FROM tender.tender_lot_lifecycles life
-                    LEFT JOIN tender.lots l ON l.tender_id=life.tender_id AND l.external_id=life.lot_key
-                    LEFT JOIN LATERAL(
-                      SELECT el.id,el.title FROM tender.enrichment_lots el
-                      JOIN tender.enrichment_versions ev ON ev.id=el.enrichment_version_id
-                      WHERE ev.tender_id=life.tender_id AND el.lot_key=life.lot_key
-                      ORDER BY ev.version DESC LIMIT 1
-                    ) enriched ON true
-                   WHERE life.tender_id=$1 AND life.is_current
-                   ORDER BY life.lot_key`, [tender.id]),
-      pool.query("SELECT id,version FROM tender.tender_versions WHERE tender_id=$1 ORDER BY version DESC LIMIT 1", [tender.id]),
-      loadTenderLinkEvidence(pool, [tender.id]),
-    ]);
-    return {
-      ...tender,
-      tender_version_id: version.rows[0]?.id || null,
-      tender_version: version.rows[0]?.version || null,
-      lots: lots.rows,
-      sourceEvidence: evidence.get(String(tender.id)) || null,
-    };
+    return result.rows[0];
   },
 );
 async function visibleTender(req, reply, id) {
@@ -610,12 +618,7 @@ app.get(
   async () => ({
     items: (
       await pool.query(
-        `SELECT source.code,source.name,
-          coalesce(scheduler.last_success_at,source.last_success_at) last_success_at,
-          coalesce(scheduler.last_run_status,source.last_status) last_status
-        FROM tender.sources source
-        LEFT JOIN tender.scheduler_worker_status scheduler ON scheduler.source_code=source.code
-        ORDER BY source.code`,
+        "SELECT code,name,last_success_at,last_status FROM tender.sources ORDER BY code",
       )
     ).rows,
   }),
@@ -642,29 +645,40 @@ app.get(
     ).rows,
   }),
 );
+app.get(
+  "/api/deadline-review",
+  { preHandler: requirePermission("tender.inbox.view") },
+  async (req) => {
+    const rows = (await pool.query(
+      `SELECT DISTINCT ON(c.tender_id,r.company_id,r.lot_key)
+              c.id,c.tender_id,c.review_status,c.reason_code,c.structured_evidence_found,
+              c.document_evidence_found,c.authoritative_deadline,c.confidence,c.provenance,c.updated_at,
+              t.title,t.buyer,t.source_code,t.publication_date,t.source_url,
+              r.company_id,r.lot_key,r.service_line,r.relevance_status,l.legal_name company_name
+         FROM tender.deadline_review_cases c
+         JOIN tender.tenders t ON t.id=c.tender_id AND t.data_class='PUBLIC_REAL'
+         JOIN tender.service_relevance_evaluations r ON r.tender_id=t.id
+         JOIN tender.enterprise_company_links l ON l.company_id=r.company_id
+        WHERE c.review_status='OPEN' AND c.authoritative_deadline IS NULL
+          AND r.company_id=ANY($1::uuid[])
+          AND r.relevance_status IN('RELEVANT','POTENTIALLY_RELEVANT','MANUAL_CLASSIFICATION_REQUIRED')
+          AND NOT EXISTS(SELECT 1 FROM tender.service_relevance_evaluations newer
+            WHERE newer.tender_id=r.tender_id AND newer.company_id=r.company_id
+              AND newer.lot_key IS NOT DISTINCT FROM r.lot_key AND newer.evaluation_version>r.evaluation_version)
+        ORDER BY c.tender_id,r.company_id,r.lot_key,c.updated_at DESC
+        LIMIT 500`, [req.identity.companyIds || []])).rows;
+    return { items: rows, total: rows.length, evidencePolicy: "NO_INVENTED_DEADLINES", externalSubmission: false };
+  },
+);
 registerAutopilotRoutes(app, {
   pool,
+  maintenancePool: backgroundPool,
   requirePermission,
   csrf,
   invitationPepper: optionalSecret("SAAS_INVITATION_PEPPER"),
   visibleTender,
 });
-const submissionContinuationSecret = optionalSecret("SUBMISSION_CONTINUATION_SECRET") || secret("SESSION_PEPPER");
-registerLiveSubmissionRoutes(app, {
-  pool, requirePermission, csrf,
-  continuationSecret: submissionContinuationSecret,
-  envExternalEnabled: process.env.EXTERNAL_SUBMISSION_ENABLED === "true",
-  envAllowExternal: process.env.WB_TENDER_ALLOW_EXTERNAL_SUBMISSION === "true",
-  isFreshWbMfa: async (req) => {
-    const token = req.cookies.wb_session;
-    if (!token) return false;
-    const row = (await pool.query("SELECT mfa_verified_at FROM iam.sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()", [hashSession(token, secret("SESSION_PEPPER"))])).rows[0];
-    return Boolean(row?.mfa_verified_at && new Date(row.mfa_verified_at).getTime() >= Date.now() - 5 * 60_000);
-  },
-});
 registerConfigurationAdmin(app, { pool, requirePermission, csrf });
-const regionRecalculationWorker=readOnlyCandidate?null:startRegionRecalculationWorker(pool,{logger:app.log,batchSize:Number(process.env.REGION_RECALCULATION_BATCH_SIZE||100)});
-app.addHook("onClose",async()=>{regionRecalculationWorker?.stop()});
 const emailAdapter = saasEnabled && process.env.SAAS_EMAIL_ADAPTER === "smtp"
   ? new SmtpEmailAdapter({ host: fileOnlySecret("SAAS_SMTP_HOST"), port: fileOnlySecret("SAAS_SMTP_PORT") || 587, secure: fileOnlySecret("SAAS_SMTP_SECURE") === "true", user: fileOnlySecret("SAAS_SMTP_USER"), password: fileOnlySecret("SAAS_SMTP_PASSWORD"), from: fileOnlySecret("SAAS_SMTP_FROM"), verificationBaseUrl: process.env.SAAS_PUBLIC_BASE_URL || process.env.WB_TENDER_PUBLIC_BASE_URL })
   : new UnconfiguredEmailAdapter();
@@ -704,6 +718,32 @@ const unavailableSaasCsrf = async (_,reply) => reply.code(403).send({error:"csrf
 const saasIamRoutes = saasIamClient ? registerSaasIamRoutes(app,{client:saasIamClient,enabled:saasEnabled}) : null;
 const saasAuthenticate = saasIamRoutes?.authenticate || unavailableSaasAuth;
 const saasCsrf = saasIamRoutes?.csrf || unavailableSaasCsrf;
+const internalTenantAuthenticate = async (req, reply) => {
+  await auth(req, reply);
+  if (reply.sent) return;
+  let companyIds = req.identity.companyIds || [];
+  let tenantIds;
+  if (!companyIds.length && req.identity.permissions.includes("tender.admin")) {
+    const background = (await rawPool.query("SELECT tenant_id,company_id FROM tender.resolve_background_scope()")).rows;
+    tenantIds = [...new Set(background.map((row) => String(row.tenant_id)))];
+    companyIds = [...new Set(background.map((row) => String(row.company_id)))];
+  } else {
+    tenantIds = (await rawPool.query(
+      "SELECT tenant_id FROM tender.resolve_runtime_tenants($1::uuid[]) LIMIT 2",
+      [companyIds],
+    )).rows.map((row) => String(row.tenant_id));
+  }
+  if (tenantIds.length !== 1) return reply.code(403).send({ error: "internal_tenant_scope_ambiguous" });
+  req.identity.companyIds = companyIds;
+  req.identity.saas = {
+    tenant_id: tenantIds[0], tenant_kind: "INTERNAL",
+    role: req.identity.permissions.includes("tender.admin") ? "OWNER" : "MEMBER",
+    access: { allowed: true, reason: "internal_wb_sso" }, modules: ["csm"],
+    companyIds,
+  };
+  req.tenant = Object.freeze({ id: tenantIds[0], actorUserId: String(req.identity.userId) });
+  databaseScope.setRequestScope({ tenantIds, companyIds, actorUserId: req.identity.userId, permissions: req.identity.permissions || [] });
+};
 registerSaasRoutes(app, {
   pool,
   enabled: saasEnabled,
@@ -718,8 +758,10 @@ registerSaasRoutes(app, {
   loginUrl: saasIamConfigured ? SAAS_LOGIN_PATH : "",
   upgradeUrl: /^https:\/\//.test(String(process.env.SAAS_UPGRADE_URL || "")) ? process.env.SAAS_UPGRADE_URL : "",
 });
-registerTenantPortalRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf, storage: tenantStorage, invitationPepper: optionalSecret("SAAS_INVITATION_PEPPER"), emailAdapter });
-const uiAuth = { preHandler: requirePermission("tender.view_assigned") };
+if(saasEnabled) registerTenantPortalRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf, storage: tenantStorage, invitationPepper: optionalSecret("SAAS_INVITATION_PEPPER"), emailAdapter });
+else registerTenantPortalRoutes(app, { pool, authenticate: internalTenantAuthenticate, csrf, storage: tenantStorage, invitationPepper: optionalSecret("SAAS_INVITATION_PEPPER"), emailAdapter });
+registerOwnerAuth(app, { pool: rawPool, authenticate: auth, csrf, uiBase, apiBase, sessionPepper: secret("SESSION_PEPPER") });
+const uiAuth = { config: { browserAuth: true }, preHandler: requirePermission("tender.view_assigned") };
 app.get("/wb-holding-logo.png", uiAuth, async (_, r) =>
   r
     .type("image/png")
@@ -783,7 +825,7 @@ app.get("/ui.js", uiAuth, async (_, r) =>
   r
     .type("text/javascript")
     .send(
-      `const API=${JSON.stringify(apiBase)},tabs=[["overview","Übersicht"],["tenders","Ausschreibungen"],["management-inbox","Management-Inbox"],["scheduler","Schedulerstatus"],["favorites","Favoriten"],["deadlines","Fristen"],["tasks","Aufgaben"],["reminders","Wiedervorlagen"],["sources","Quellen"],["imports","Importprotokolle"],["deadletters","Dead Letters"]],nav=document.querySelector("#tabs"),out=document.querySelector("#content"),q=document.querySelector("#q"),source=document.querySelector("#source");let current="overview";const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));async function get(path){const r=await fetch(API+path,{credentials:"same-origin"});if(!r.ok)throw new Error(r.status===403?"Keine Berechtigung":r.status===401?"Anmeldung erforderlich":"Abruf fehlgeschlagen ("+r.status+")");return r.json()}function cards(rows){return '<div class="grid">'+rows.map(x=>'<article class="card"><h2>'+esc(x.title||x.tender_title||x.name||x.code||"Eintrag")+'</h2><p>'+esc(x.buyer||x.interface||x.company_name||"")+'</p><p class="muted">Quelle: '+esc(x.source_code||x.code||"–")+' · Veröffentlicht: '+esc(x.publication_date||"–")+' · Frist: '+esc(x.offer_deadline||x.due_at||x.remind_at||"–")+'</p><p>Gewerk: '+esc(x.service_line||"Prüfgruppe")+'</p><p>'+esc(x.decision||x.workflow_status||x.relevance_status||"")+'</p>'+(x.tender_id||x.id&&x.source_code?'<button data-detail="'+esc(x.tender_id||x.id)+'">Details</button>':"")+'</article>').join("")+'</div>'}async function load(){out.innerHTML='<p>Wird geladen …</p>';try{let d;if(["overview","tenders","deadlines"].includes(current)){d=await get("/tenders?q="+encodeURIComponent(q.value)+"&source="+encodeURIComponent(source.value));out.innerHTML=cards(current==="deadlines"?d.items.filter(x=>x.offer_deadline):d.items)}else if(current==="management-inbox"){d=await get("/management-inbox?source="+encodeURIComponent(source.value)+"&sort=relevance");out.innerHTML=cards(d.items)}else if(current==="scheduler"){d=await get("/scheduler/status");out.innerHTML='<div class="panel"><table><tbody>'+d.sources.map(x=>'<tr><td>'+esc(x.source_code)+'</td><td>'+esc(x.kill_switch?"GESPERRT":x.enabled?"AKTIV":"INAKTIV")+'</td><td>'+esc(x.next_run_at||"Nicht geplant")+'</td></tr>').join("")+'</tbody></table></div>'}else if(current==="favorites")d=await get("/favorites"),out.innerHTML=cards(d.items);else if(current==="tasks")d=await get("/tasks"),out.innerHTML=cards(d.items);else if(current==="reminders")d=await get("/reminders"),out.innerHTML=cards(d.items);else{d=await get("/"+current);out.innerHTML='<div class="panel"><table><tbody>'+d.items.map(x=>'<tr><td>'+esc(x.code||x.source_code||x.external_id||x.id)+'</td><td>'+esc(x.name||x.status||x.error_code||"")+'</td><td>'+esc(x.last_success_at||x.started_at||x.created_at||"")+'</td></tr>').join("")+'</tbody></table></div>'}}catch(e){out.innerHTML='<p class="error" role="alert">'+esc(e.message)+'</p>'}}async function detail(id){try{const x=await get("/tenders/"+encodeURIComponent(id));out.innerHTML='<article class="panel"><button id="back">← Zurück</button><h1>'+esc(x.title)+'</h1><p>'+esc(x.buyer)+'</p><p>'+esc(x.description||"Keine Beschreibung vorhanden.")+'</p><dl><dt>Quelle</dt><dd><a rel="noopener noreferrer" target="_blank" href="'+esc(x.source_url)+'">'+esc(x.source_code)+'</a></dd><dt>Frist</dt><dd>'+esc(x.offer_deadline||"Nicht angegeben")+'</dd><dt>CPV</dt><dd>'+esc((x.cpv_codes||[]).join(", ")||"Nicht angegeben")+'</dd></dl></article>';document.querySelector("#back").onclick=load}catch(e){out.innerHTML='<p class="error">'+esc(e.message)+'</p>'}}tabs.forEach(([id,label])=>{const b=document.createElement("button");b.textContent=label;b.onclick=()=>{current=id;[...nav.children].forEach(x=>x.classList.remove("active"));b.classList.add("active");load()};nav.append(b)});nav.firstChild.classList.add("active");out.addEventListener("click",e=>{const id=e.target.dataset.detail;if(id)detail(id)});q.oninput=load;source.onchange=load;load();`,
+      `const API=${JSON.stringify(apiBase)},tabs=[["overview","Übersicht"],["tenders","Ausschreibungen"],["management-inbox","Management-Inbox"],["csm","CSM"],["scheduler","Schedulerstatus"],["favorites","Favoriten"],["deadlines","Fristen"],["tasks","Aufgaben"],["reminders","Wiedervorlagen"],["sources","Quellen"],["imports","Importprotokolle"],["deadletters","Dead Letters"]],nav=document.querySelector("#tabs"),out=document.querySelector("#content"),q=document.querySelector("#q"),source=document.querySelector("#source");let current="overview";const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));async function get(path){const r=await fetch(API+path,{credentials:"same-origin"});if(!r.ok)throw new Error(r.status===403?"Keine Berechtigung":r.status===401?"Anmeldung erforderlich":"Abruf fehlgeschlagen ("+r.status+")");return r.json()}function cards(rows){return '<div class="grid">'+rows.map(x=>'<article class="card"><h2>'+esc(x.title||x.tender_title||x.name||x.code||"Eintrag")+'</h2><p>'+esc(x.buyer||x.interface||x.company_name||"")+'</p><p class="muted">Quelle: '+esc(x.source_code||x.code||"–")+' · Veröffentlicht: '+esc(x.publication_date||"–")+' · Frist: '+esc(x.offer_deadline||x.due_at||x.remind_at||"–")+'</p><p>Gewerk: '+esc(x.service_line||"Prüfgruppe")+'</p><p>'+esc(x.decision||x.workflow_status||x.relevance_status||"")+'</p>'+(x.tender_id||x.id&&x.source_code?'<button data-detail="'+esc(x.tender_id||x.id)+'">Details</button>':"")+'</article>').join("")+'</div>'}async function load(){out.innerHTML='<p>Wird geladen …</p>';try{let d;if(current==="csm"){location.assign("/saas/app/csm");return}else if(["overview","tenders","deadlines"].includes(current)){d=await get("/tenders?q="+encodeURIComponent(q.value)+"&source="+encodeURIComponent(source.value));out.innerHTML=cards(current==="deadlines"?d.items.filter(x=>x.offer_deadline):d.items)}else if(current==="management-inbox"){d=await get("/management-inbox?source="+encodeURIComponent(source.value)+"&sort=relevance");out.innerHTML=cards(d.items)}else if(current==="scheduler"){d=await get("/scheduler/status");out.innerHTML='<div class="panel"><table><tbody>'+d.sources.map(x=>'<tr><td>'+esc(x.source_code)+'</td><td>'+esc(x.kill_switch?"GESPERRT":x.enabled?"AKTIV":"INAKTIV")+'</td><td>'+esc(x.next_run_at||"Nicht geplant")+'</td></tr>').join("")+'</tbody></table></div>'}else if(current==="favorites")d=await get("/favorites"),out.innerHTML=cards(d.items);else if(current==="tasks")d=await get("/tasks"),out.innerHTML=cards(d.items);else if(current==="reminders")d=await get("/reminders"),out.innerHTML=cards(d.items);else{d=await get("/"+current);out.innerHTML='<div class="panel"><table><tbody>'+d.items.map(x=>'<tr><td>'+esc(x.code||x.source_code||x.external_id||x.id)+'</td><td>'+esc(x.name||x.status||x.error_code||"")+'</td><td>'+esc(x.last_success_at||x.started_at||x.created_at||"")+'</td></tr>').join("")+'</tbody></table></div>'}}catch(e){out.innerHTML='<p class="error" role="alert">'+esc(e.message)+'</p>'}}async function detail(id){try{const x=await get("/tenders/"+encodeURIComponent(id));out.innerHTML='<article class="panel"><button id="back">← Zurück</button><h1>'+esc(x.title)+'</h1><p>'+esc(x.buyer)+'</p><p>'+esc(x.description||"Keine Beschreibung vorhanden.")+'</p><dl><dt>Quelle</dt><dd><a rel="noopener noreferrer" target="_blank" href="'+esc(x.source_url)+'">'+esc(x.source_code)+'</a></dd><dt>Frist</dt><dd>'+esc(x.offer_deadline||"Nicht angegeben")+'</dd><dt>CPV</dt><dd>'+esc((x.cpv_codes||[]).join(", ")||"Nicht angegeben")+'</dd></dl></article>';document.querySelector("#back").onclick=load}catch(e){out.innerHTML='<p class="error">'+esc(e.message)+'</p>'}}tabs.forEach(([id,label])=>{const b=document.createElement("button");b.textContent=label;b.onclick=()=>{current=id;[...nav.children].forEach(x=>x.classList.remove("active"));b.classList.add("active");load()};nav.append(b)});nav.firstChild.classList.add("active");out.addEventListener("click",e=>{const id=e.target.dataset.detail;if(id)detail(id)});q.oninput=load;source.onchange=load;load();`,
     ),
 );
 app.get("/inbox-regions.js", uiAuth, async (_, r) =>
@@ -812,7 +854,7 @@ const autopilotPage=async (_, r) =>
 app.get("/favicon.ico", async (_, reply) => reply.code(204).send());
 app.get("/autopilot", uiAuth, autopilotPage);
 app.get("/autopilot/*", uiAuth, autopilotPage);
-app.get("/configuration", { preHandler: requirePermission("tender.config.read") }, async (_, r) =>
+app.get("/configuration", { config: { browserAuth: true }, preHandler: requirePermission("tender.config.read") }, async (_, r) =>
   r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Konfiguration · Ausschreibungen</title><link rel="stylesheet" href="${uiBase}/ui.css"><script src="${uiBase}/configuration.js" defer></script><script src="${uiBase}/configuration-race-guard.js" defer></script></head><body><header><span class="brand"><img src="${uiBase}/wb-holding-logo.png" alt="WB-Holding AG"><strong>WB Plattform · Ausschreibungen</strong></span><a href="${uiBase}/">Ausschreibungen</a></header><main><h1>Konfiguration</h1><section class="toolbar"><label for="company">Gesellschaft</label><select id="company" aria-describedby="error-company"><option value="">Alle berechtigten Gesellschaften</option></select><p class="error field-error" id="error-company" role="alert" hidden></p><label for="service-line">Leistungsbereich</label><select id="service-line" aria-describedby="error-serviceLine"><option value="">Bitte wählen</option></select><p class="error field-error" id="error-serviceLine" role="alert" hidden></p><label>Priorität <select><option>Alle Prioritäten</option></select></label></section><nav id="subtabs" class="tabs" aria-label="Konfigurationsbereiche"></nav><section id="config-content" aria-live="polite"></section></main></body></html>`),
 );
 await app.listen({

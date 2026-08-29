@@ -2,7 +2,7 @@ import os from "node:os";
 import crypto from "node:crypto";
 import {runInboxPipeline} from "./inbox-pipeline.mjs";
 
-const workerId=`${os.hostname()}:${process.pid}:${crypto.randomUUID()}`;
+const workerId=`region-worker:${os.hostname()}:${process.pid}:${crypto.randomUUID()}`;
 
 async function claim(pool){
   const client=await pool.connect();

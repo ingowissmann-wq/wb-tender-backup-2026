@@ -1,16 +1,41 @@
 import crypto from "node:crypto";
-import { customerIdentityHash, hashVerificationToken, verificationToken, UnconfiguredBillingAdapter, UnconfiguredEmailAdapter } from "./saas-adapters.mjs";
+import { customerIdentityHash, hashVerificationToken, normalizedCompanyIdentity, verificationToken, UnconfiguredBillingAdapter, UnconfiguredEmailAdapter } from "./saas-adapters.mjs";
 import {
   MODULE_CATALOG, MODULE_KEYS, SUITE_PRODUCT_KEY, assessPlanChange, effectiveAccess,
   moduleAccess, navigationCatalog, normalizeModuleKey, normalizePlanCode,
   resolveModuleEntitlements, technicalCapabilities, transitionSubscription,
 } from "./saas-catalog.mjs";
 import { withTenantContext } from "./tenant-context.mjs";
+import {
+  applyCommercialBillingEvent, assessLicenseRemoval, explainCommercialEntitlements,
+  licenseAllowsAccess, loadCommercialEntitlements, selectCommercialOffer,
+} from "./commercial-licensing.mjs";
+import { PAID_TRIAL_PRODUCT_KEY, trialBillingStatus } from "./trial-lifecycle.mjs";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const digest = (value) => crypto.createHash("sha256").update(String(value || "")).digest("hex");
+
+async function loadCommercialAdminState(db, tenantId, now = new Date()) {
+  const licenses = (await db.query(`SELECT l.id,l.commercial_product_key product_key,p.display_name product_name,l.source,l.status,o.stripe_price_id,
+    l.started_at,l.trial_started_at,l.trial_ends_at,l.current_period_ends_at,l.expires_at,l.canceled_at,l.suspended_at,l.manual_reason
+    FROM saas.tenant_product_licenses l JOIN saas.products p ON p.product_key=l.commercial_product_key
+    LEFT JOIN saas.stripe_price_offers o ON o.id=l.offer_id WHERE l.tenant_id=$1 ORDER BY l.created_at,l.id`, [tenantId])).rows;
+  const productModules = (await db.query(`SELECT l.id license_id,pm.module_key,pm.exposure,NULL::text capability_key
+    FROM saas.tenant_product_licenses l JOIN saas.commercial_product_modules pm ON pm.commercial_product_key=l.commercial_product_key
+    WHERE l.tenant_id=$1
+    UNION ALL
+    SELECT l.id,'tender_autopilot','CAPABILITY_ONLY',pc.capability_key
+    FROM saas.tenant_product_licenses l JOIN saas.commercial_product_capabilities pc ON pc.commercial_product_key=l.commercial_product_key
+    WHERE l.tenant_id=$1`, [tenantId])).rows;
+  const explicitModules = (await db.query(`SELECT module_key,enabled,source,starts_at,ends_at,metadata,
+    metadata->>'action' action,coalesce(metadata->>'reason',NULL) reason
+    FROM saas.tenant_module_entitlements WHERE tenant_id=$1 ORDER BY module_key`, [tenantId])).rows;
+  const tenantActive = Boolean((await db.query("SELECT 1 FROM saas.tenants WHERE id=$1 AND status='ACTIVE'", [tenantId])).rowCount);
+  const explanations = explainCommercialEntitlements({ licenses, productModules, explicitModules, tenantActive, now });
+  return { licenses, productModules, explicitModules, tenantActive, explanations };
+}
 
 export const SAAS_PERMISSION_FEATURES = Object.freeze({
   "tender.view_assigned": MODULE_KEYS.TENDER_SCOUT, "tender.view": MODULE_KEYS.TENDER_SCOUT,
@@ -51,13 +76,21 @@ export async function loadSaasContext(pool, userId) {
     if (!result.rowCount) return null;
     const grants = (await db.query("SELECT module_key,enabled,source,starts_at,ends_at FROM saas.tenant_module_entitlements WHERE tenant_id=$1 AND starts_at<=now() AND (ends_at IS NULL OR ends_at>now())", [tenantId])).rows;
     const suiteEnabled = Boolean((await db.query("SELECT 1 FROM saas.tenant_product_entitlements WHERE tenant_id=$1 AND product_key=$2 AND enabled AND starts_at<=now() AND (ends_at IS NULL OR ends_at>now())", [tenantId, SUITE_PRODUCT_KEY])).rowCount);
-    return { row: result.rows[0], grants, suiteEnabled };
+    const licenses = (await db.query("SELECT 1 FROM saas.tenant_product_licenses WHERE tenant_id=$1 LIMIT 1", [tenantId])).rowCount;
+    const commercial = licenses ? await loadCommercialEntitlements(db, tenantId) : null;
+    const commercialAccess = licenses ? Boolean((await db.query(`SELECT 1 FROM saas.tenant_product_licenses l JOIN saas.products p ON p.product_key=l.commercial_product_key
+      WHERE l.tenant_id=$1 AND (l.status IN('ACTIVE','TRIAL_ACTIVE') OR (l.status='PAST_DUE' AND p.past_due_access))
+      AND (l.status<>'TRIAL_ACTIVE' OR l.trial_ends_at>now()) AND (l.current_period_ends_at IS NULL OR l.current_period_ends_at>now())
+      AND (l.expires_at IS NULL OR l.expires_at>now()) LIMIT 1`, [tenantId])).rowCount) : false;
+    return { row: result.rows[0], grants, suiteEnabled, commercial, commercialAccess };
   });
   if (!loaded) return null;
-  const access = effectiveAccess(loaded.row);
-  const modules = resolveModuleEntitlements({ planCode: loaded.row.plan_code, commercialScope: loaded.row.commercial_scope, suiteEnabled: loaded.suiteEnabled, grants: loaded.grants });
+  const access = loaded.commercial ? (loaded.row.tenant_status !== "ACTIVE" ? { allowed: false, reason: "tenant_suspended" }
+    : loaded.row.membership_status !== "ACTIVE" ? { allowed: false, reason: "membership_inactive" }
+    : loaded.commercialAccess ? { allowed: true, reason: "commercial_license_active" } : { allowed: false, reason: "commercial_license_inactive" }) : effectiveAccess(loaded.row);
+  const modules = loaded.commercial?.modules || resolveModuleEntitlements({ planCode: loaded.row.plan_code, commercialScope: loaded.row.commercial_scope, suiteEnabled: loaded.suiteEnabled, grants: loaded.grants });
   const context = { ...loaded.row, access, modules, suiteEnabled: loaded.suiteEnabled, companyIds: loaded.row.tenant_kind === "INTERNAL" ? (loaded.row.company_ids || []).map(String) : [] };
-  return { ...context, capabilities: technicalCapabilities(context) };
+  return { ...context, capabilities: loaded.commercial?.capabilities || technicalCapabilities(context), entitlementSources: loaded.commercial?.sources || {} };
 }
 
 export function requireSaasModule(moduleKey) {
@@ -92,6 +125,7 @@ export async function registerPendingTenant(client, input, { verificationPepper,
   if (!emailPattern.test(email) || email.length > 254) throw Object.assign(new Error("email_invalid"), { statusCode: 400 });
   if (company.length < 2) throw Object.assign(new Error("company_name_invalid"), { statusCode: 400 });
   const identityHash = customerIdentityHash(email, verificationPepper);
+  const companyIdentityHash = customerIdentityHash(normalizedCompanyIdentity(company), verificationPepper);
   const token = verificationToken(), tokenHash = hashVerificationToken(token, verificationPepper);
   const tenantId = crypto.randomUUID(), slug = `account-${tenantId.slice(0, 12)}`;
   await client.query("BEGIN");
@@ -99,7 +133,7 @@ export async function registerPendingTenant(client, input, { verificationPepper,
     const availablePlan = await client.query("SELECT 1 FROM saas.plans WHERE code=$1 AND active AND price_status='APPROVED' AND recommended_monthly_price_minor IS NOT NULL", [plan]);
     if (!availablePlan.rowCount) throw Object.assign(new Error("plan_not_available"), { statusCode: 409 });
     await client.query("SELECT set_config('app.tenant_id',$1,true)", [tenantId]);
-    await client.query("INSERT INTO saas.tenants(id,slug,display_name,customer_identity_hash) VALUES($1,$2,$3,$4)", [tenantId, slug, company, identityHash]);
+    await client.query("INSERT INTO saas.tenants(id,slug,display_name,customer_identity_hash,company_identity_hash) VALUES($1,$2,$3,$4,$5)", [tenantId, slug, company, identityHash, companyIdentityHash]);
     await client.query(`INSERT INTO saas.pending_registrations(tenant_id,email,requested_plan_code,verification_token_hash,verification_expires_at,request_ip_hash,request_user_agent_hash)
       VALUES($1,$2,$3,$4,$5,$6,$7)`, [tenantId, email, plan, tokenHash, new Date(now.getTime() + 24 * 60 * 60 * 1000), digest(requestIp), digest(userAgent)]);
     await client.query("INSERT INTO saas.subscriptions(tenant_id,plan_code,status) VALUES($1,$2,'PENDING_PAYMENT')", [tenantId, plan]);
@@ -132,6 +166,7 @@ export async function verifyPendingRegistration(pool, token, verificationPepper,
 }
 
 export async function applyBillingEvent(client, event, rawPayload, now = new Date()) {
+  if ((event.priceId && !event.legacyPlan) || event.requestedProductKey || event.checkoutMode === "payment") return applyCommercialBillingEvent(client, event, rawPayload, now);
   if (!uuid.test(String(event.tenantId || ""))) throw new Error("billing_tenant_invalid");
   await client.query("BEGIN");
   try {
@@ -141,7 +176,7 @@ export async function applyBillingEvent(client, event, rawPayload, now = new Dat
     if (!inserted.rowCount) { await client.query("COMMIT"); return { idempotent: true }; }
     const current = (await client.query("SELECT * FROM saas.subscriptions WHERE tenant_id=$1 FOR UPDATE", [event.tenantId])).rows[0];
     if (!current) throw new Error("subscription_missing");
-    const mapped = event.type === "payment.confirmed" ? "PAYMENT_CONFIRMED" : event.type === "invoice.paid" ? "INVOICE_PAID" : event.type === "subscription.active" ? "SUBSCRIPTION_ACTIVATED" : event.type === "payment.failed" ? "PAYMENT_FAILED" : event.type === "subscription.plan_changed" ? "PLAN_CHANGED" : null;
+    const mapped = event.type === "payment.confirmed" ? "PAYMENT_CONFIRMED" : event.type === "invoice.paid" ? "INVOICE_PAID" : event.type === "subscription.active" ? "SUBSCRIPTION_ACTIVATED" : event.type === "payment.failed" ? "PAYMENT_FAILED" : event.type === "subscription.canceled" ? "CANCEL" : event.type === "subscription.plan_changed" ? "PLAN_CHANGED" : null;
     if (!mapped) throw new Error("billing_event_unsupported");
     if (mapped !== "PAYMENT_CONFIRMED") {
       if (current.provider !== event.provider || !current.provider_customer_ref || !current.provider_subscription_ref
@@ -161,7 +196,7 @@ export async function applyBillingEvent(client, event, rawPayload, now = new Dat
     }
     if (mapped === "PAYMENT_CONFIRMED") {
       if (!event.checkoutRef) throw new Error("checkout_session_reference_missing");
-      const checkout = await client.query("UPDATE saas.checkout_sessions SET status='PAYMENT_CONFIRMED',confirmed_at=$4 WHERE provider=$1 AND provider_checkout_ref=$2 AND tenant_id=$3 AND status='CREATED' RETURNING plan_code", [event.provider,event.checkoutRef,event.tenantId,now]);
+      const checkout = await client.query("UPDATE saas.checkout_sessions SET status='PAYMENT_CONFIRMED',confirmed_at=$4 WHERE provider=$1 AND provider_checkout_ref=$2 AND tenant_id=$3 AND status='CREATED' AND offer_id IS NULL RETURNING plan_code", [event.provider,event.checkoutRef,event.tenantId,now]);
       if (!checkout.rowCount || checkout.rows[0].plan_code !== current.plan_code) throw new Error("checkout_session_not_bound");
       const registration = (await client.query("SELECT email_verified_at,iam_provisioned_at FROM saas.pending_registrations WHERE tenant_id=$1 FOR UPDATE", [event.tenantId])).rows[0];
       if (!registration?.email_verified_at || !registration?.iam_provisioned_at) throw new Error("activation_prerequisites_missing");
@@ -212,7 +247,7 @@ export function registerBillingWebhookRoute(app, { pool, enabled, billingAdapter
   });
 }
 
-export function registerSaasRoutes(app, { pool, enabled, verificationPepper, invitationPepper = "", loadInternalIdentity, requireInternalAdmin, csrf, saasCsrf = csrf, emailAdapter = new UnconfiguredEmailAdapter(), billingAdapter = new UnconfiguredBillingAdapter(), loginUrl = "" }) {
+export function registerSaasRoutes(app, { pool, enabled, verificationPepper, invitationPepper = "", loadInternalIdentity, requireInternalAdmin, csrf, saasCsrf = csrf, emailAdapter = new UnconfiguredEmailAdapter(), billingAdapter = new UnconfiguredBillingAdapter(), loginUrl = "", upgradeUrl = "" }) {
   const guard = async (_, reply) => { if (!enabled) return reply.code(404).send({ error: "saas_disabled" }); };
   registerBillingWebhookRoute(app, { pool, enabled, billingAdapter });
   app.get("/saas/assets/commercial.css", { preHandler: guard }, async (_, r) => r.type("text/css").send(commercialCss));
@@ -257,13 +292,36 @@ export function registerSaasRoutes(app, { pool, enabled, verificationPepper, inv
   app.post("/api/saas/checkout", { preHandler: [guard, loadInternalIdentity, saasCsrf] }, async (req, reply) => {
     if (!req.identity?.saas) return reply.code(403).send({ error: "saas_membership_required" });
     if (!billingAdapter.configured) return reply.code(503).send({ error: "payment_provider_not_configured", trialActivated: false });
-    if (req.identity.saas.status !== "PENDING_PAYMENT") return reply.code(409).send({ error: "checkout_not_available_for_state" });
-    const checkout = await billingAdapter.createCheckout({ tenantId: req.identity.saas.tenant_id, plan: req.identity.saas.plan_code, trialDays: 14, paymentRequired: true });
-    await withTenantContext(pool,{tenantId:req.identity.saas.tenant_id,actorUserId:req.identity.userId},(db)=>db.query("INSERT INTO saas.checkout_sessions(provider,provider_checkout_ref,tenant_id,plan_code) VALUES($1,$2,$3,$4) ON CONFLICT(provider,provider_checkout_ref) DO NOTHING",[billingAdapter.provider,checkout.id,req.identity.saas.tenant_id,req.identity.saas.plan_code]));
+    const requestedProductKey = String(req.body?.productKey || "").trim() || null;
+    const requestedPriceId = String(req.body?.priceId || "").trim() || null;
+    if (requestedPriceId && !/^price_[A-Za-z0-9_]+$/.test(requestedPriceId)) return reply.code(400).send({ error: "stripe_price_invalid" });
+    if (!requestedProductKey && req.identity.saas.status !== "PENDING_PAYMENT") return reply.code(409).send({ error: "checkout_not_available_for_state" });
+    if (requestedProductKey && !["PENDING_PAYMENT","TRIAL_ACTIVE","ACTIVE","PAST_DUE"].includes(req.identity.saas.status)) return reply.code(409).send({ error: "checkout_not_available_for_state" });
+    let offer = null;
+    if (requestedProductKey) {
+      const offers = await withTenantContext(pool,{tenantId:req.identity.saas.tenant_id,actorUserId:req.identity.userId},async(db)=>(await db.query(`SELECT o.id,o.stripe_price_id,o.commercial_product_key,o.status,o.billing_interval,o.currency,o.amount_minor,p.offer_class,p.expected_currency,p.expected_amount_minor FROM saas.stripe_price_offers o JOIN saas.products p ON p.product_key=o.commercial_product_key WHERE o.provider='stripe' AND o.status='ACTIVE' AND p.active AND o.commercial_product_key=$1 AND ($2::text IS NULL OR o.stripe_price_id=$2) ORDER BY o.stripe_price_id`,[requestedProductKey,requestedPriceId])).rows);
+      try { offer = selectCommercialOffer(offers, { productKey: requestedProductKey, priceId: requestedPriceId }); }
+      catch (error) { return reply.code(409).send({ error: error.message }); }
+    }
+    if (offer?.offer_class === 'PAID_TRIAL' && (offer.billing_interval !== 'ONE_TIME' || offer.currency !== 'EUR' || Number(offer.amount_minor) !== 19900 || offer.expected_currency !== 'EUR' || Number(offer.expected_amount_minor) !== 19900)) return reply.code(409).send({error:'paid_trial_offer_contract_invalid'});
+    const checkout = await billingAdapter.createCheckout({ tenantId: req.identity.saas.tenant_id, plan: requestedProductKey ? null : req.identity.saas.plan_code, priceId: offer?.stripe_price_id, productKey: offer?.commercial_product_key, billingInterval: offer?.billing_interval || 'MONTH', paymentRequired: true });
+    await withTenantContext(pool,{tenantId:req.identity.saas.tenant_id,actorUserId:req.identity.userId},(db)=>db.query("INSERT INTO saas.checkout_sessions(provider,provider_checkout_ref,tenant_id,plan_code,commercial_product_key,stripe_price_id,offer_id) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(provider,provider_checkout_ref) DO NOTHING",[billingAdapter.provider,checkout.id,req.identity.saas.tenant_id,req.identity.saas.plan_code,offer?.commercial_product_key||null,checkout.priceId||null,offer?.id||null]));
     return reply.code(201).send({ checkoutUrl: checkout.url, trialActivated: false });
   });
   app.get("/saas/login", { preHandler: guard }, async (_, reply) => loginUrl ? reply.redirect(loginUrl) : reply.code(503).type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/saas/assets/commercial.css"><title>Anmeldung</title></head><body><main class="panel"><h1>Anmeldung noch nicht freigeschaltet</h1><p>Die sichere IAM-Anbindung muss vor dem kommerziellen Start konfiguriert werden. Es wurde kein Ersatzpasswortsystem angelegt.</p></main></body></html>`));
   app.get("/api/saas/me", { preHandler: [guard, loadInternalIdentity] }, async (req, reply) => req.identity?.saas ? { tenant: req.identity.saas } : reply.code(403).send({ error: "saas_membership_required" }));
+  app.get("/api/saas/billing/status", { preHandler: [guard, loadInternalIdentity] }, async (req, reply) => {
+    const tenantId = req.identity?.saas?.tenant_id;
+    if (!uuid.test(String(tenantId || ""))) return reply.code(403).send({ error: "tenant_context_required" });
+    return withTenantContext(pool, { tenantId, actorUserId: req.identity.userId }, async (db) => {
+      const licenses = (await db.query(`SELECT l.commercial_product_key,l.status,l.trial_started_at,l.trial_ends_at,p.offer_class
+        FROM saas.tenant_product_licenses l JOIN saas.products p ON p.product_key=l.commercial_product_key
+        WHERE l.tenant_id=$1 ORDER BY l.created_at DESC`, [tenantId])).rows;
+      const blockers = (await db.query("SELECT module_key,blocker_code,safe_detail FROM saas.commercial_product_blockers WHERE commercial_product_key=$1 ORDER BY module_key", [PAID_TRIAL_PRODUCT_KEY])).rows;
+      return trialBillingStatus({ trial: licenses.find((row) => row.offer_class === "PAID_TRIAL") || null,
+        regularLicenses: licenses.filter((row) => row.offer_class !== "PAID_TRIAL"), blockers, upgradeUrl });
+    });
+  });
   app.post("/api/saas/invitations/accept", { preHandler: [guard, loadInternalIdentity, saasCsrf] }, async (req, reply) => {
     const tenantId=String(req.body?.tenantId||""),token=String(req.body?.token||"");
     if(!uuid.test(tenantId)||!invitationPepper||invitationPepper.length<32||token.length<32)return reply.code(400).send({error:"invitation_invalid"});
@@ -284,8 +342,97 @@ export function registerSaasRoutes(app, { pool, enabled, verificationPepper, inv
     if (!req.identity.saas.access.allowed) return reply.code(403).send({ error: req.identity.saas.access.reason });
     return { product: "WB Business Suite", tenantId: req.identity.saas.tenant_id, modules: navigationCatalog(req.identity.saas) };
   });
-  app.get("/api/saas/admin/tenants", { preHandler: [guard, requireInternalAdmin] }, async (_, reply) =>
-    reply.code(503).send({ error: "privileged_admin_data_plane_not_configured" }));
+  app.get("/api/saas/admin/tenants", { preHandler: [guard, requireInternalAdmin] }, async (req, reply) => {
+    const limit = Math.max(1, Math.min(100, Number(req.query?.limit) || 50));
+    try {
+      const tenants = (await pool.query("SELECT id,slug,display_name,status,created_at,updated_at FROM saas.tenants ORDER BY created_at DESC,id LIMIT $1", [limit])).rows;
+      const items = [];
+      for (const tenant of tenants) {
+        const detail = await withTenantContext(pool, { tenantId: tenant.id, actorUserId: req.identity.userId }, async (db) => {
+          const state = await loadCommercialAdminState(db, tenant.id);
+          return { activeProducts: state.licenses.filter((item) => licenseAllowsAccess(item)),
+            effectiveModules: state.explanations.filter((item) => item.entitled).map((item) => item.moduleKey),
+            overlappingModules: state.explanations.filter((item) => item.overlappingLicense).map((item) => item.moduleKey),
+            explicitOverrides: state.explicitModules };
+        });
+        items.push({ ...tenant, ...detail });
+      }
+      return { items, limit, externalSubmissionEnabled: false };
+    } catch (error) {
+      req.log?.warn({ code: error.code || "admin_data_plane_unavailable" }, "commercial admin data plane unavailable");
+      return reply.code(503).send({ error: "privileged_admin_data_plane_not_configured" });
+    }
+  });
+  app.get("/api/saas/admin/trials", { preHandler: [guard, requireInternalAdmin] }, async (req, reply) => {
+    const days = Math.max(1, Math.min(90, Number(req.query?.days) || 14));
+    try {
+      const trials = (await pool.query(`SELECT l.tenant_id,l.id license_id,l.status,l.trial_started_at,l.trial_ends_at,
+          EXISTS(SELECT 1 FROM saas.tenant_product_licenses regular JOIN saas.products rp ON rp.product_key=regular.commercial_product_key
+            WHERE regular.tenant_id=l.tenant_id AND rp.offer_class='REGULAR' AND regular.status IN('ACTIVE','PAST_DUE')) converted
+        FROM saas.tenant_product_licenses l JOIN saas.products p ON p.product_key=l.commercial_product_key
+        WHERE p.offer_class='PAID_TRIAL' AND (l.status='EXPIRED' OR l.trial_ends_at<=now()+make_interval(days=>$1))
+        ORDER BY l.trial_ends_at,l.tenant_id`, [days])).rows;
+      const reminders = (await pool.query(`SELECT r.tenant_id,r.license_id,r.offset_days,r.due_at,r.status,r.attempts,r.sent_at,r.last_error_code
+        FROM saas.trial_reminder_deliveries r JOIN saas.tenant_product_licenses l ON l.id=r.license_id
+        WHERE l.trial_ends_at<=now()+make_interval(days=>$1) ORDER BY r.due_at,r.offset_days DESC`, [days])).rows;
+      const auditEvents = (await pool.query(`SELECT e.tenant_id,e.license_id,e.event_type,e.occurred_at,e.reason,e.metadata
+        FROM saas.license_events e WHERE e.event_type LIKE 'TRIAL_%' ORDER BY e.occurred_at DESC LIMIT 500`)).rows;
+      return { windowDays: days, trials, reminders, auditEvents, externalSubmissionEnabled: false };
+    } catch (error) {
+      req.log?.warn({ code: error.code || "trial_admin_data_plane_unavailable" }, "trial admin observability unavailable");
+      return reply.code(503).send({ error: "privileged_trial_observability_not_configured" });
+    }
+  });
+  app.get("/api/saas/admin/tenants/:id/licenses", { preHandler: [guard, requireInternalAdmin] }, async (req, reply) => {
+    if (!uuid.test(req.params.id)) return reply.code(400).send({ error: "tenant_id_invalid" });
+    return withTenantContext(pool, { tenantId: req.params.id, actorUserId: req.identity.userId }, async (db) => {
+      const state = await loadCommercialAdminState(db, req.params.id);
+      const effective = await loadCommercialEntitlements(db, req.params.id);
+      return { tenantId: req.params.id, activeProducts: state.licenses.filter((item) => licenseAllowsAccess(item)),
+        licenses: state.licenses, effectiveModules: effective.modules, sourceProducts: effective.sources,
+        moduleExplanations: state.explanations, explicitOverrides: state.explicitModules,
+        dataRetentionPolicy: "RETAIN_ON_DOWNGRADE", externalSubmissionEnabled: false };
+    });
+  });
+  app.post("/api/saas/admin/tenants/:id/licenses", { preHandler: [guard, requireInternalAdmin, csrf] }, async (req, reply) => {
+    if (!uuid.test(req.params.id)) return reply.code(400).send({ error: "tenant_id_invalid" });
+    const productKey = String(req.body?.productKey || "").trim(), reason = String(req.body?.reason || "").trim();
+    const expiresAt = req.body?.expiresAt ? new Date(req.body.expiresAt) : null;
+    if (!/^[a-z][a-z0-9_]{2,63}$/.test(productKey) || reason.length < 8 || (expiresAt && (!Number.isFinite(expiresAt.getTime()) || expiresAt <= new Date()))) return reply.code(400).send({ error: "manual_license_input_invalid" });
+    return withTenantContext(pool, { tenantId: req.params.id, actorUserId: req.identity.userId }, async (db) => {
+      const available = await db.query("SELECT 1 FROM saas.products WHERE product_key=$1 AND active", [productKey]);
+      if (!available.rowCount) return reply.code(404).send({ error: "commercial_product_not_available" });
+      const license = (await db.query(`INSERT INTO saas.tenant_product_licenses(tenant_id,commercial_product_key,source,status,expires_at,manual_reason,metadata)
+        VALUES($1,$2,'MANUAL','ACTIVE',$3,$4,$5) RETURNING id,commercial_product_key,status,started_at,expires_at`, [req.params.id, productKey, expiresAt, reason, { actorUserId: req.identity.userId }])).rows[0];
+      await db.query("INSERT INTO saas.license_events(tenant_id,license_id,actor_user_id,event_type,reason,metadata) VALUES($1,$2,$3,'MANUAL_GRANTED',$4,$5)", [req.params.id, license.id, req.identity.userId, reason, { productKey }]);
+      return reply.code(201).send({ tenantId: req.params.id, license, externalSubmissionEnabled: false });
+    });
+  });
+  app.get("/api/saas/admin/tenants/:id/licenses/:licenseId/downgrade-impact", { preHandler: [guard, requireInternalAdmin] }, async (req, reply) => {
+    if (!uuid.test(req.params.id) || !uuid.test(req.params.licenseId)) return reply.code(400).send({ error: "license_identity_invalid" });
+    return withTenantContext(pool, { tenantId: req.params.id, actorUserId: req.identity.userId }, async (db) => {
+      const state = await loadCommercialAdminState(db, req.params.id);
+      let impact; try { impact = assessLicenseRemoval({ licenseId: req.params.licenseId, ...state }); }
+      catch { return reply.code(404).send({ error: "license_not_found" }); }
+      return { tenantId: req.params.id, impact, moduleExplanations: state.explanations, externalSubmissionEnabled: false };
+    });
+  });
+  app.post("/api/saas/admin/tenants/:id/licenses/:licenseId/action", { preHandler: [guard, requireInternalAdmin, csrf] }, async (req, reply) => {
+    if (!uuid.test(req.params.id) || !uuid.test(req.params.licenseId)) return reply.code(400).send({ error: "license_identity_invalid" });
+    const action = String(req.body?.action || "").toUpperCase(), reason = String(req.body?.reason || "").trim();
+    if (!['SUSPEND','REVOKE'].includes(action) || reason.length < 8) return reply.code(400).send({ error: "license_action_invalid" });
+    return withTenantContext(pool, { tenantId: req.params.id, actorUserId: req.identity.userId }, async (db) => {
+      const state = await loadCommercialAdminState(db, req.params.id);
+      let impact; try { impact = assessLicenseRemoval({ licenseId: req.params.licenseId, ...state }); }
+      catch { return reply.code(404).send({ error: "license_not_actionable" }); }
+      const next = action === 'REVOKE' ? 'CANCELED' : 'SUSPENDED';
+      const license = (await db.query(`UPDATE saas.tenant_product_licenses SET status=$3,canceled_at=CASE WHEN $3='CANCELED' THEN now() ELSE canceled_at END,
+        suspended_at=CASE WHEN $3='SUSPENDED' THEN now() ELSE suspended_at END,updated_at=now() WHERE tenant_id=$1 AND id=$2 AND status NOT IN('CANCELED','EXPIRED') RETURNING id,commercial_product_key,status`, [req.params.id, req.params.licenseId, next])).rows[0];
+      if (!license) return reply.code(404).send({ error: "license_not_actionable" });
+      await db.query("INSERT INTO saas.license_events(tenant_id,license_id,actor_user_id,event_type,reason,metadata) VALUES($1,$2,$3,$4,$5,$6)", [req.params.id, license.id, req.identity.userId, `ADMIN_${action}`, reason, { productKey: license.commercial_product_key }]);
+      return { tenantId: req.params.id, license, downgradeImpact: impact, dataRetained: true, externalSubmissionEnabled: false };
+    });
+  });
   app.get("/saas/admin", { preHandler: [guard, requireInternalAdmin] }, async (_, r) => r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SaaS-Mandanten</title><link rel="stylesheet" href="/saas/assets/commercial.css"></head><body><main><h1>SaaS-Mandanten</h1><p>Interne Verwaltung. Statusänderungen sind CSRF-geschützt über die Admin-API verfügbar.</p><p><a href="/api/saas/admin/tenants">Mandantenstatus als JSON anzeigen</a></p></main></body></html>`));
   app.post("/api/saas/admin/tenants/:id/status", { preHandler: [guard, requireInternalAdmin, csrf] }, async (req, reply) => {
     if (!uuid.test(req.params.id)) return reply.code(400).send({ error: "tenant_id_invalid" });
@@ -298,6 +445,27 @@ export function registerSaasRoutes(app, { pool, enabled, verificationPepper, inv
       await db.query("UPDATE saas.tenants SET status=CASE WHEN $2='SUSPENDED' THEN 'SUSPENDED' ELSE 'ACTIVE' END,updated_at=now() WHERE id=$1", [req.params.id, next.status]);
       await db.query("INSERT INTO saas.audit_events(tenant_id,actor_user_id,action,metadata) VALUES($1,$2,$3,$4)", [req.params.id, req.identity.userId, `ADMIN_${action}`, { previousStatus: current.status, newStatus: next.status }]);
       return { ok: true, status: next.status };
+    });
+  });
+  app.post("/api/saas/admin/tenants/:id/modules/:module/action", { preHandler: [guard, requireInternalAdmin, csrf] }, async (req, reply) => {
+    if (!uuid.test(req.params.id)) return reply.code(400).send({ error: "tenant_id_invalid" });
+    let moduleKey; try { moduleKey = normalizeModuleKey(req.params.module); }
+    catch (error) { return reply.code(error.statusCode || 400).send({ error: error.message }); }
+    const action = String(req.body?.action || "").toUpperCase(), reason = String(req.body?.reason || "").trim();
+    const expiresAt = req.body?.expiresAt ? new Date(req.body.expiresAt) : null;
+    if (!["GRANT","REVOKE","SUSPEND"].includes(action) || reason.length < 8 || (expiresAt && (!Number.isFinite(expiresAt.getTime()) || expiresAt <= new Date()))
+      || (action === "SUSPEND" && !expiresAt)) return reply.code(400).send({ error: "module_action_invalid" });
+    return withTenantContext(pool, { tenantId: req.params.id, actorUserId: req.identity.userId }, async (db) => {
+      const enabled = action === "GRANT";
+      await db.query(`INSERT INTO saas.tenant_module_entitlements(tenant_id,module_key,enabled,source,starts_at,ends_at,metadata)
+        VALUES($1,$2,$3,'DIRECT',now(),$4,$5)
+        ON CONFLICT(tenant_id,module_key) DO UPDATE SET enabled=excluded.enabled,source='DIRECT',starts_at=now(),ends_at=excluded.ends_at,
+          metadata=excluded.metadata,updated_at=now()`, [req.params.id, moduleKey, enabled, expiresAt, { action, reason, actorUserId: req.identity.userId, dataRetained: true }]);
+      await db.query("INSERT INTO saas.license_events(tenant_id,actor_user_id,event_type,reason,metadata) VALUES($1,$2,$3,$4,$5)",
+        [req.params.id, req.identity.userId, `MODULE_MANUAL_${action}`, reason, { moduleKey, expiresAt, dataRetained: true }]);
+      const state = await loadCommercialAdminState(db, req.params.id);
+      return { tenantId: req.params.id, module: state.explanations.find((item) => item.moduleKey === moduleKey),
+        dataRetained: true, externalSubmissionEnabled: false };
     });
   });
   app.post("/api/saas/admin/tenants/:id/entitlements", { preHandler: [guard, requireInternalAdmin, csrf] }, async (req, reply) => {

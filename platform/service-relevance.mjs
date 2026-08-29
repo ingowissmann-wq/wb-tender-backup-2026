@@ -48,7 +48,17 @@ export function classifyCompanyService({tender,lot=null,enrichment=null,company,
   const positiveCpvs=unique([...(taxonomy?.cpv||[]),...configuredCpvs,...(profileCapabilities.cpvCodes||[])]);
   const exclusionTerms=unique([...(taxonomy?.exclusions||[]),...configuredExcluded,...(profileCapabilities.exclusions||[])]);
   const positives=termHits(positiveTerms,text),titlePositives=termHits(positiveTerms,titleText),exclusions=termHits(exclusionTerms,text),globalExclusions=termHits(GLOBAL_NEGATIVE,text),positiveCpv=cpvMatch(positiveCpvs,cpvCodes),excludedCpv=cpvMatch(excludedCpvs,cpvCodes),strongText=titlePositives.length>0||positives.length>=2;
-  const protect=company.technical_key==="wb-protect-service"||company.sector_status==="manual-sector-approval-required",explicitA15=values(p.A15,["primaryCompanies","alternativeCompanies","allowedCompanies","assignments"]).map(normalize),a15Allowed=explicitA15.some(value=>value.includes(normalize(company.legal_name))||value.includes(normalize(company.technical_key))),titleProjectConflicts=termHits(SUPPLY_OR_PROJECT_TITLE_TERMS,titleText),serviceSpecificTitleConflicts=termHits(SERVICE_TITLE_CONFLICTS[sector]||[],titleText),serviceOnlyConflict=(["emergency-services","facility-management"].includes(sector)&&titleProjectConflicts.length>0)||serviceSpecificTitleConflicts.length>0;
+  const protect=company.technical_key==="wb-protect-service"||company.sector_status==="manual-sector-approval-required",
+    a15=p.A15,
+    explicitA15=(a15&&typeof a15==="object"&&!Array.isArray(a15)
+      ? values([a15.primaryCompanies,a15.alternativeCompanies,a15.allowedCompanies,a15.assignments,a15.companyIds])
+      : values(a15)).map(normalize),
+    exactDerivedA15=Boolean(a15&&typeof a15==="object"&&!Array.isArray(a15)&&
+      normalize(a15.companyId)===normalize(company.company_id)&&
+      normalize(a15.serviceArea)===normalize(sector)&&
+      normalize(a15.status)==="verified"),
+    primaryAssignmentEvidence=Boolean(exactDerivedA15&&a15.primaryAssignment===true&&normalize(a15.source)!=="authoritative_company_scope"),
+    a15Allowed=exactDerivedA15||explicitA15.some(value=>value===normalize(company.company_id)||value.includes(normalize(company.legal_name))||value.includes(normalize(company.technical_key))),titleProjectConflicts=termHits(SUPPLY_OR_PROJECT_TITLE_TERMS,titleText),serviceSpecificTitleConflicts=termHits(SERVICE_TITLE_CONFLICTS[sector]||[],titleText),serviceOnlyConflict=(["emergency-services","facility-management"].includes(sector)&&titleProjectConflicts.length>0)||serviceSpecificTitleConflicts.length>0;
   let status,gate,reason;
   if(protect&&!a15Allowed){status="NOT_APPLICABLE";gate="FAILED_NOT_RELEVANT";reason="Für WB-Protect & Service fehlt eine aktive eigene A15-Sektor- und Erlaubnisfreigabe."}
   else if(serviceOnlyConflict){status="EXCLUDED";gate="FAILED_EXCLUDED";reason=`Titel enthält einen geprüften fachlichen Konflikt zur operativen ${taxonomy?.label||sector}-Dienstleistung: ${unique([...titleProjectConflicts,...serviceSpecificTitleConflicts]).join(", ")}.`}
@@ -58,16 +68,28 @@ export function classifyCompanyService({tender,lot=null,enrichment=null,company,
   else if(!text||text.length<24){status="MANUAL_CLASSIFICATION_REQUIRED";gate="REVIEW_REQUIRED";reason="Bekanntmachungsdaten reichen für eine sichere fachliche Zuordnung nicht aus."}
   else {status="NOT_APPLICABLE";gate="FAILED_NOT_RELEVANT";reason=`Keine positiven Leistungs- oder CPV-Signale für ${company.legal_name}.`}
   const score=(titlePositives.length*25)+(Math.max(0,positives.length-titlePositives.length)*5)+(positiveCpv?20:0)-(exclusions.length*30)-(excludedCpv?50:0)-(globalExclusions.length*10);
-  return {companyId:company.company_id,companyName:company.legal_name,serviceLine:sector||"CONFIGURATION_REQUIRED",lotKey:lot?.lot_key||lot?.external_id||null,relevanceStatus:status,serviceScopeGate:gate,score,positiveSignals:positives,titlePositiveSignals:titlePositives,positiveCpv,exclusionSignals:unique([...exclusions,...globalExclusions]),cpvCodes,appliedRules:["A01","A02","A03","A04","A05","A06","A07","A14","A15"].map(key=>({key,active:p[key]!==undefined,value:p[key]??null})),reason,configurationRequired:!taxonomy||protect&&!a15Allowed,processable:PROCESSABLE_RELEVANCE.has(status)};
+  return {companyId:company.company_id,companyName:company.legal_name,serviceLine:sector||"CONFIGURATION_REQUIRED",lotKey:lot?.lot_key||lot?.external_id||null,relevanceStatus:status,serviceScopeGate:gate,score,positiveSignals:positives,titlePositiveSignals:titlePositives,positiveCpv,exclusionSignals:unique([...exclusions,...globalExclusions]),cpvCodes,appliedRules:["A01","A02","A03","A04","A05","A06","A07","A14","A15"].map(key=>({key,active:p[key]!==undefined,value:p[key]??null})),reason,configurationRequired:!taxonomy||protect&&!a15Allowed,primaryAssignmentEvidence,processable:PROCESSABLE_RELEVANCE.has(status)};
 }
 
 export function classifyTenderServices({tender,lot=null,enrichment=null,companies=[]}){
-  const evaluations=companies.map(item=>classifyCompanyService({tender,lot,enrichment,...item})),eligible=evaluations.filter(x=>x.relevanceStatus==="RELEVANT").sort((a,b)=>b.score-a.score||a.companyName.localeCompare(b.companyName,"de"));
+  const evaluations=companies.map(item=>classifyCompanyService({tender,lot,enrichment,...item})),initialEligible=evaluations.filter(x=>x.relevanceStatus==="RELEVANT"),groups=Map.groupBy(initialEligible,item=>item.serviceLine),ambiguous=[];
+  const eligible=[];
+  for(const group of groups.values()){
+    if(group.length===1){eligible.push(group[0]);continue}
+    const explicit=group.filter(item=>item.primaryAssignmentEvidence);
+    if(explicit.length===1){eligible.push(explicit[0]);continue}
+    for(const item of group){item.relevanceStatus="POTENTIALLY_RELEVANT";item.serviceScopeGate="REVIEW_REQUIRED";item.reason=`Mehrere Gesellschaften besitzen den autoritativen ${item.serviceLine}-Fachscope; eine tenderbezogene Primärfestlegung fehlt.`;item.processable=false;item.assignmentReviewRequired=true;ambiguous.push(item)}
+  }
+  eligible.sort((a,b)=>b.score-a.score||a.companyName.localeCompare(b.companyName,"de"));
   const primary=eligible[0]||null;
-  for(const evaluation of evaluations){evaluation.primaryCompany=Boolean(primary&&evaluation.companyId===primary.companyId);evaluation.alternativeCompany=false;if(primary&&evaluation!==primary&&!(["EXCLUDED","NOT_RELEVANT"].includes(evaluation.relevanceStatus)))evaluation.relevanceStatus="NOT_APPLICABLE",evaluation.serviceScopeGate="FAILED_NOT_RELEVANT",evaluation.reason=`Primärgesellschaft ist ${primary.companyName}; keine aktive A15-Alternativfreigabe für ${evaluation.companyName}.`,evaluation.processable=false}
+  for(const evaluation of evaluations){evaluation.primaryCompany=Boolean(primary&&evaluation.companyId===primary.companyId);evaluation.alternativeCompany=false;if(primary&&evaluation!==primary&&!evaluation.assignmentReviewRequired&&!(["EXCLUDED","NOT_RELEVANT"].includes(evaluation.relevanceStatus)))evaluation.relevanceStatus="NOT_APPLICABLE",evaluation.serviceScopeGate="FAILED_NOT_RELEVANT",evaluation.reason=`Primärgesellschaft ist ${primary.companyName}; keine aktive A15-Alternativfreigabe für ${evaluation.companyName}.`,evaluation.processable=false}
   if(primary){
     const basis=primary.positiveCpv?"CPV":"TEXT_RULE";
     return {evaluations,primary,alternatives:[],overallStatus:"RELEVANT",decision:{wbRelevanceStatus:"RELEVANT",serviceLine:primary.serviceLine,confidence:"HIGH",basis,ruleId:`WB_${basis}_${primary.serviceLine}`,reason:primary.reason,score:primary.score}};
+  }
+  if(ambiguous.length){
+    const services=unique(ambiguous.map(item=>item.serviceLine));
+    return {evaluations,primary:null,alternatives:[],overallStatus:"MANUAL_CLASSIFICATION_REQUIRED",decision:{wbRelevanceStatus:"REVIEW_REQUIRED",serviceLine:services.length===1?services[0]:null,confidence:"REVIEW",basis:"AUTHORITATIVE_COMPANY_SCOPE_AMBIGUITY",ruleId:"WB_COMPANY_PRIMARY_ASSIGNMENT_REQUIRED",reason:`Mehrere Gesellschaften besitzen denselben autoritativen Fachscope (${services.join(", ")}); die tenderbezogene Primärgesellschaft muss fachlich festgelegt werden.`,score:Math.max(...ambiguous.map(item=>item.score))}};
   }
   const cpvs=canonicalCpvs(evaluations.flatMap(item=>item.cpvCodes)),candidateCpv=cpvs.some(code=>WB_CANDIDATE_CPV_DIVISIONS.has(code.slice(0,2))),allCpvsDefinitelyOutside=cpvs.length>0&&cpvs.every(code=>!WB_CANDIDATE_CPV_DIVISIONS.has(code.slice(0,2))||DEFINITELY_NON_WB_CPV_PREFIXES.some(prefix=>code.startsWith(prefix))),negative=evaluations.find(item=>["EXCLUDED","NOT_RELEVANT"].includes(item.relevanceStatus));
   if(allCpvsDefinitelyOutside||negative){

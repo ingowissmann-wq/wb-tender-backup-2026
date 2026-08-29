@@ -81,10 +81,10 @@ test("parallel cleanup is prevented by the existing file lock and a database adv
 test("portal and public API exclude expired and tombstoned tenders",()=>{
   assert.match(serverSource,/source_lifecycle_status='ACTIVE'/);
   assert.match(serverSource,/data_class='PUBLIC_REAL' AND source_lifecycle_status='ACTIVE'/);
-  assert.match(serverSource,/SELECT external_id,title,buyer,publication_date,offer_deadline,source_url FROM tender\.tenders tender WHERE data_class='PUBLIC_REAL' AND source_lifecycle_status='ACTIVE' AND participation_status IN\('ELIGIBLE','PARTIALLY_ELIGIBLE'\)/);
-  assert.match(serverSource,/source_lifecycle_status='ACTIVE'[\s\S]{0,240}EXISTS\(SELECT 1 FROM tender\.current_participation_eligible_lots eligible WHERE eligible\.tender_id=tender\.id\)/);
+  assert.match(serverSource,/SELECT external_id,title,buyer,publication_date,offer_deadline,source_url FROM tender\.tenders tender WHERE data_class='PUBLIC_REAL' AND source_lifecycle_status='ACTIVE'/);
+  assert.match(serverSource,/source_lifecycle_status='ACTIVE'[\s\S]{0,180}participation_status IN\('ELIGIBLE','PARTIALLY_ELIGIBLE'\)[\s\S]{0,180}current_participation_eligible_lots/);
 });
-test("active tender detail pages retain the same guarded query",()=>assert.match(serverSource,/SELECT \* FROM tender\.tenders tender WHERE id=\$1 AND data_class='PUBLIC_REAL' AND source_lifecycle_status='ACTIVE' AND participation_status IN\('ELIGIBLE','PARTIALLY_ELIGIBLE'\)/));
+test("active tender detail pages retain the guarded and lot-bound query",()=>assert.match(serverSource,/SELECT \* FROM tender\.tenders tender WHERE id=\$1 AND data_class='PUBLIC_REAL' AND source_lifecycle_status='ACTIVE'[\s\S]{0,180}current_participation_eligible_lots/));
 test("tombstones contain only minimal lifecycle identity and audit fields",()=>{
   for(const field of ["source_code","external_id","last_known_deadline","deleted_at","deletion_reason","last_source_status","source_updated_at"]) assert.match(migration,new RegExp(field));
   assert.doesNotMatch(migration,/tender_tombstones[\s\S]{0,800}\b(description|documents|raw_payload)\b/);

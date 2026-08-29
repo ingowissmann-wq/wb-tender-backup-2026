@@ -118,7 +118,12 @@ export function haversineKm(a,b){const rad=x=>x*Math.PI/180,R=6371,dLat=rad(b.la
 
 function sourceLocation(item){
   if(!item||typeof item!=="object")return null;const latitude=Number(item.latitude??item.lat),longitude=Number(item.longitude??item.lon),nutsCode=canonicalNuts(item.nuts??item.region),state=canonicalState(item.state??(nutsCode?.slice(0,3))),postalCode=canonicalPostalCode(item.postalCode??item.postal_code),place=String(item.locality??item.city??item.place??"").trim()||null;
-  return {latitude:Number.isFinite(latitude)?latitude:null,longitude:Number.isFinite(longitude)?longitude:null,nutsCode,state,postalCode,place};
+  const result={latitude:Number.isFinite(latitude)?latitude:null,longitude:Number.isFinite(longitude)?longitude:null,nutsCode,state,postalCode,place};
+  // Country-wide TED markers such as DEU/DE and non-geographic ANYW are
+  // provenance, not additional performance locations. Keeping an all-null
+  // location here turns one precise NUTS location into a false multi-region
+  // result and turns a country-only notice into a false outside-region result.
+  return result.nutsCode||result.state||result.postalCode||result.place||(result.latitude!==null&&result.longitude!==null)?result:null;
 }
 export function evaluateStructuredRegions(value,locations=[]){
   const rules=structuredRules(value),resolved=locations.map(sourceLocation).filter(Boolean),distinct=new Map(resolved.map(x=>[JSON.stringify(x),x]));

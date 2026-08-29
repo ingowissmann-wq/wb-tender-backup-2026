@@ -18,6 +18,7 @@ const assignments = Object.freeze({
   B11:"EVIDENCE",B12:"RISK_ECONOMICS",
   C01:"CALCULATION",C02:"CALCULATION",C03:"CALCULATION",C04:"CALCULATION",C05:"CALCULATION",C06:"CALCULATION",C07:"CALCULATION",C08:"CALCULATION",C09:"CALCULATION",C10:"CALCULATION",C11:"CALCULATION",C12:"CALCULATION",C13:"CALCULATION",C14:"CALCULATION",C15:"CALCULATION",C16:"CALCULATION",C17:"CALCULATION",
   C18:"RISK_ECONOMICS",C19:"RISK_ECONOMICS",C20:"RISK_ECONOMICS",C21:"RISK_ECONOMICS",
+  C22:"CALCULATION",C23:"CALCULATION",
 });
 
 const securityCostParameters=Object.freeze([
@@ -26,6 +27,87 @@ const securityCostParameters=Object.freeze([
   {key:"S03",label:"Notruf-/Servicewoche – Kostenansatz / Einheitspreis",description:"Gesellschaftsscharf freigegebener Netto-Kostenansatz je Notruf- oder Servicewoche.",unit:"EUR/Woche",defaultUnitId:"EUR_PER_WEEK"},
   {key:"S04",label:"Baustellenausstattung – Kostenansatz / Einheitspreis",description:"Gesellschaftsscharf freigegebener Netto-Kostenansatz für Baustellenausstattung.",unit:"EUR",defaultUnitId:"EUR"},
 ].map(item=>Object.freeze({...item,code:item.key,tab:"CALCULATION",tabLabel:TAB.CALCULATION,category:"CALCULATION",dataType:"NUMBER_OR_STRUCTURED",expectedUnit:item.unit,units:parameterUnitRules[item.key].units.map(x=>({id:x.id,label:x.label,aliases:x.aliases,dataType:x.dataType,allowedInputForms:x.allowedInputForms,normalization:x.normalization,conversion:x.conversion})),unitDefinitionComplete:true,requiredFields:["companyId","serviceLine","parameterKey","newValue","unit","source","validFrom","reason"],allowedRoles:["tender.admin","tender.config.costs.edit"],matchingRelevant:false,goNoGoRelevant:false,calculationRelevant:true,sourceStatus:"KOSTENANSATZ_NOCH_NICHT_HINTERLEGT",priority:"S",status:"DRAFT_OPEN"})));
+
+const cleaningPerformanceParameters=Object.freeze([
+  {
+    key:"C22",
+    label:"Reinigungsleistungswert",
+    description:"Gesellschaftsscharf freigegebene Reinigungsleistung zur Umrechnung quellengebundener Jahresleistungsflächen in Produktivstunden.",
+    unit:"m²/h",
+    defaultUnitId:"M2_PER_HOUR"
+  }
+].map(item=>Object.freeze({
+  ...item,
+  code:item.key,
+  tab:"CALCULATION",
+  tabLabel:TAB.CALCULATION,
+  category:"CALCULATION",
+  dataType:"NUMBER_OR_STRUCTURED",
+  expectedUnit:item.unit,
+  units:parameterUnitRules[item.key].units.map(x=>({
+    id:x.id,
+    label:x.label,
+    aliases:x.aliases,
+    dataType:x.dataType,
+    allowedInputForms:x.allowedInputForms,
+    normalization:x.normalization,
+    conversion:x.conversion
+  })),
+  unitDefinitionComplete:true,
+  requiredFields:[
+    "companyId","serviceLine","parameterKey",
+    "newValue","unit","source","validFrom","reason"
+  ],
+  allowedRoles:[
+    "tender.admin",
+    "tender.config.costs.edit"
+  ],
+  matchingRelevant:false,
+  goNoGoRelevant:false,
+  calculationRelevant:true,
+  sourceStatus:"REINIGUNGSLEISTUNGSWERT_NOCH_NICHT_HINTERLEGT",
+  priority:"C",
+  status:"DRAFT_OPEN"
+})));
+
+const workforceCapacityParameters=Object.freeze([
+  {
+    key:"C23",
+    label:"Produktive Jahresstunden je Vollzeitkraft",
+    description:"Gesellschafts- und leistungsscharf freigegebene produktive Jahresstunden einer Vollzeitkraft. Der Wert wird ausschließlich zur nachvollziehbaren FTE-Ermittlung verwendet.",
+    unit:"Stunden/Jahr",
+    defaultUnitId:"HOURS_PER_YEAR"
+  }
+].map(item=>Object.freeze({
+  ...item,
+  code:item.key,
+  tab:"CALCULATION",
+  tabLabel:TAB.CALCULATION,
+  category:"CALCULATION",
+  dataType:"NUMBER_OR_STRUCTURED",
+  expectedUnit:item.unit,
+  units:parameterUnitRules[item.key].units.map(x=>({
+    id:x.id,
+    label:x.label,
+    aliases:x.aliases,
+    dataType:x.dataType,
+    allowedInputForms:x.allowedInputForms,
+    normalization:x.normalization,
+    conversion:x.conversion
+  })),
+  unitDefinitionComplete:true,
+  requiredFields:[
+    "companyId","serviceLine","parameterKey",
+    "newValue","unit","source","validFrom","reason"
+  ],
+  allowedRoles:["tender.admin","tender.config.costs.edit"],
+  matchingRelevant:false,
+  goNoGoRelevant:false,
+  calculationRelevant:true,
+  sourceStatus:"PRODUKTIVE_JAHRESSTUNDEN_NOCH_NICHT_FREIGEGEBEN",
+  priority:"C",
+  status:"DRAFT_OPEN"
+})));
 
 const editPermission = Object.freeze({
   COMPANY_PROFILE:"tender.config.services.edit", SERVICE_CPV:"tender.config.services.edit",
@@ -47,8 +129,8 @@ export const parameterCatalog=Object.freeze([...headings.map((match,index)=>{
     goNoGoRelevant:/^(A0[1-4]|A07|A1[0-5]|B(0[1-9]|10|11|12)|C(18|19|20|21))$/.test(key),
     calculationRelevant:key.startsWith("C"), sourceStatus:block.match(/^Wert:\s*(.+)$/m)?.[1]||"FEHLT", priority:key[0], status:"DRAFT_OPEN",
   });
-}),...securityCostParameters]);
-if(parameterCatalog.length!==53||new Set(parameterCatalog.map(x=>x.key)).size!==53)throw new Error("parameter_catalog_must_contain_53_unique_keys");
+}),...securityCostParameters,...cleaningPerformanceParameters,...workforceCapacityParameters]);
+if(parameterCatalog.length!==55||new Set(parameterCatalog.map(x=>x.key)).size!==55)throw new Error("parameter_catalog_must_contain_55_unique_keys");
 export const parameterByKey=Object.freeze(Object.fromEntries(parameterCatalog.map(x=>[x.key,x])));
 export const editRight=editPermission;
 export function mappingError(key,category){

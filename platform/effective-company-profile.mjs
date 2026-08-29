@@ -35,7 +35,7 @@ export function buildEffectiveCompanyProfile({companyId, serviceArea, parameters
     A05:capabilities.keywords,
     A06:capabilities.synonyms,
     A07:capabilities.exclusions,
-    A15:{companyId,serviceArea,primaryAssignment:true,status:"VERIFIED"}
+    A15:{companyId,serviceArea,scopeAllowed:true,primaryAssignment:false,status:"VERIFIED",source:"AUTHORITATIVE_COMPANY_SCOPE"}
   };
   for(const [key,value] of Object.entries(derived))if(!normalized[key]&&value!==null&&value!==undefined){
     const explicitEmpty=Array.isArray(value)&&value.length===0;

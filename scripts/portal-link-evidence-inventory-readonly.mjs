@@ -1,12 +1,19 @@
 import fs from "node:fs";
 import pg from "pg";
 import { loadTenderLinkEvidence } from "../platform/tender-link-evidence.mjs";
+import {createFixedScopedPool,loadBackgroundScope} from "../platform/scoped-pg-pool.mjs";
 
-const pool = new pg.Pool({
-  connectionString: fs.readFileSync(process.env.DATABASE_URL_FILE || "/run/secrets/database_url", "utf8").trim(),
+const rawPool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL || fs.readFileSync(
+    process.env.DATABASE_URL_FILE || "/run/secrets/database_url", "utf8",
+  ).trim(),
   max: 1,
-  options: "-c default_transaction_read_only=on -c statement_timeout=55000",
+  options: [
+    "-c default_transaction_read_only=on -c statement_timeout=55000",
+    process.env.DATABASE_SESSION_OPTIONS,
+  ].filter(Boolean).join(" "),
 });
+const pool=createFixedScopedPool(rawPool,await loadBackgroundScope(rawPool)).pool;
 
 try {
   const rows = (await pool.query(`WITH scope AS(
@@ -53,5 +60,5 @@ try {
   }
   console.log(JSON.stringify({ readOnly:true, capturedAt:new Date().toISOString(), stableMaterialization:"wb-daily-inbox-pipeline/1.0.0", uniqueTenders:ids.length, tenderCompanyScopes:rows.length, recognizedPortalHosts:[...recognizedHosts].sort(), totals:total, mappingReasons:reasons, groups:[...groups.values()] }, null, 2));
 } finally {
-  await pool.end();
+  await rawPool.end();
 }

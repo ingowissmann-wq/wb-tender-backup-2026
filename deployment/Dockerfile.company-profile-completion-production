@@ -1,0 +1,12 @@
+FROM wb-tender-real-operations:20260820-portal-management.2
+ARG RELEASE_VERSION=20260820-company-profile-completion.1
+ARG SOURCE_FINGERPRINT
+LABEL org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      org.opencontainers.image.base.digest="sha256:2e5cd8ea7180b94c29ae1e91fa86d3d1b6e72c6d5a87d6182ce79f6685cbf3a6" \
+      org.opencontainers.image.description="Company-profile field completion, provenance, immutable history and guided workflow"
+WORKDIR /app
+COPY --chown=root:root platform/company-profile-completion.mjs /app/platform/company-profile-completion.mjs
+COPY --chown=root:root platform/autopilot-routes.mjs /app/platform/autopilot-routes.mjs
+COPY --chown=root:root platform/assets/autopilot-navigation.js /app/platform/assets/autopilot-navigation.js
+COPY --chown=root:root platform/assets/autopilot-navigation.css /app/platform/assets/autopilot-navigation.css

@@ -8,12 +8,11 @@ export const TENDER_PERMISSIONS = Object.freeze([
   "tender.connector.manage","tender.deadletter.view","tender.deadletter.process","tender.admin",
   "tender.import","tender.match.manage","tender.profile.manage","tender.region.manage",
   "tender.score.manage","tender.override","tender.document.analyze",
-  "tender.requirement.manage","tender.calculation.create","tender.calculation.edit",
+  "tender.requirement.manage","tender.calculation.create","tender.calculation.edit","tender.calculation.sandbox",
   "tender.price.approve","tender.offer.generate","tender.offer.approve",
   "tender.portal.manage","tender.secret.manage","tender.question.prepare",
   "tender.question.approve","tender.upload.prepare","tender.upload.approve",
-  "tender.submission.prepare","tender.submission.approve","tender.submission.execute",
-  "tender.submission.audit","tender.submission.kill_switch","tender.board.approve",
+  "tender.submission.prepare","tender.submission.approve","tender.board.approve",
   "tender.log.view","tender.audit.view","tender.config.read","tender.config.draft.edit",
   "tender.config.services.edit","tender.config.regions.edit","tender.config.evidence.edit",
   "tender.config.costs.edit","tender.config.preview","tender.config.submit","tender.config.approve",
@@ -48,11 +47,6 @@ export async function loadIdentity(pool, token, pepper) {
     WHERE user_id=$1 AND active=true
   `,[result.rows[0].user_id]);
   const companyIds=scopes.rows.filter((row)=>row.scope_type==="company").map((row)=>row.scope_id);
-  const companySectors=companyIds.length?(await pool.query(`
-    SELECT DISTINCT sector_slug
-    FROM tender.enterprise_company_links
-    WHERE company_id=ANY($1::uuid[]) AND sector_slug IS NOT NULL
-  `,[companyIds])).rows.map((row)=>row.sector_slug):[];
   return {
     userId: result.rows[0].user_id,
     email: result.rows[0].email,
@@ -60,7 +54,7 @@ export async function loadIdentity(pool, token, pepper) {
     permissions: result.rows[0].permissions || [],
     roles: result.rows[0].roles || [],
     sectorIds: scopes.rows.filter((row)=>row.scope_type==="sector").map((row)=>row.scope_id),
-    sectorSlugs: companySectors,
+    sectorSlugs: [],
     companyIds
   };
 }

@@ -1,3 +1,5 @@
+import {officialTedLinks, tedAccountEvidence} from "./ted-notice-context.mjs";
+
 const SENSITIVE_PARAMETER = /^(?:access_?token|auth(?:entication|orization)?|bearer|code|credential|id_?token|jwt|key|password|refresh_?token|secret|session(?:id)?|sid|ticket|token)$/i;
 
 export const safeExternalHttpsUrl = (value) => {
@@ -90,12 +92,7 @@ const buyerProfileUrl = (raw = {}) =>
     raw?.buyer?.url,
     raw?.buyer_profile_url,
     raw?.buyerProfileUrl,
-    // Review bodies and review contacts are also represented as OCDS parties;
-    // only a party with an explicit buyer/process-contact role may provide a
-    // buyer-profile fallback URL.
-    (Array.isArray(raw?.parties) ? raw.parties : [])
-      .filter((party) => Array.isArray(party?.roles) && party.roles.some((role) => /^(buyer|procuringEntity|processContactPoint)$/i.test(String(role))))
-      .map((party) => party?.contactPoint?.url),
+    (Array.isArray(raw?.parties) ? raw.parties : []).map((party) => party?.contactPoint?.url),
   );
 
 const documentTruth = ({ sourceLinks, enrichmentDocuments, enrichmentId }) => {
@@ -123,14 +120,22 @@ export const buildTenderLinkEvidence = (row, portals = []) => {
     normalized = row.normalized_data || {},
     raw = normalized.raw || normalized.source || normalized,
     originalUrl = sourceCode === "TED"
-      ? firstSafe(preferredLocalizedLink(raw?.links?.html), preferredLocalizedLink(raw?.links?.htmlDirect), `https://ted.europa.eu/de/notice/-/detail/${row.external_id || row.notice_number}`)
+      ? firstSafe(preferredLocalizedLink(raw?.links?.html), preferredLocalizedLink(raw?.links?.htmlDirect), !/\/xml(?:[?#]|$)/i.test(row.source_url || "") && row.source_url)
       : firstSafe(raw?.notice_url, raw?.noticeUrl, raw?.tender?.notice_url, raw?.tender?.noticeUrl),
     technicalSourceUrl = sourceCode === "DOE"
       ? firstSafe([raw?.uri, row.source_url].filter(isDoeTechnicalSource))
       : null,
-    persistedLinks = Array.isArray(row.external_links) ? row.external_links.map(link => ({url:link.original_url,role:link.role,label:link.role === "PROCUREMENT_DOCUMENT" ? "Offizielle Vergabeunterlagen" : "Offizieller Bekanntmachungslink",source:"VERIFIED_LINK_EVIDENCE",publicAccess:link.public_access,verificationStatus:link.verification_status,finalUrl:link.final_url})) : [],
-    tedOfficialLinks = sourceCode === "TED" ? officialTedLinks(row.external_id || row.notice_number).map(link => ({...link,label:link.format === "PDF" ? "Offizielle TED-Bekanntmachung (PDF)" : `Offizielle TED-Bekanntmachung (${link.format})`,source:"TED_OFFICIAL_FORMAT"})) : [],
-    payloadDocuments = uniqueLinks([...sourceDocuments(sourceCode, raw), ...tedOfficialLinks, ...persistedLinks.filter(link => !["LOGIN","REGISTRATION"].includes(link.role))]),
+    persistedLinks = Array.isArray(row.external_links) ? row.external_links.map((link) => ({
+      url: link.original_url,
+      role: link.role,
+      label: link.role === "PROCUREMENT_DOCUMENT" ? "Offizielle Vergabeunterlagen" : "Offizieller Bekanntmachungslink",
+      source: "VERIFIED_LINK_EVIDENCE",
+      publicAccess: link.public_access,
+      verificationStatus: link.verification_status,
+      finalUrl: link.final_url,
+    })) : [],
+    tedOfficialLinks = sourceCode === "TED" ? officialTedLinks(row.external_id || row.notice_number).map((link) => ({...link,label:link.format === "PDF" ? "Offizielle TED-Bekanntmachung (PDF)" : `Offizielle TED-Bekanntmachung (${link.format})`,source:"TED_OFFICIAL_FORMAT"})) : [],
+    payloadDocuments = uniqueLinks([...sourceDocuments(sourceCode, raw),...tedOfficialLinks,...persistedLinks.filter((link) => !["LOGIN","REGISTRATION"].includes(link.role))]),
     enrichmentDocuments = Array.isArray(row.enrichment_documents) ? row.enrichment_documents : [],
     enrichmentLinks = uniqueLinks(enrichmentDocuments.map((document) => ({
       url: document.source_url,
@@ -140,25 +145,47 @@ export const buildTenderLinkEvidence = (row, portals = []) => {
     documents = uniqueLinks([...payloadDocuments, ...enrichmentLinks]),
     publicationHost = (() => { try { return new URL(safeExternalHttpsUrl(row.source_url)).hostname.toLowerCase().replace(/^www\./, ""); } catch { return null; } })(),
     externalPortalLinks = documents.filter((link) => new URL(link.url).hostname.toLowerCase().replace(/^www\./, "") !== publicationHost),
-    portalMatches = externalPortalLinks.map((link) => {
+    legacyPortalMatches = externalPortalLinks.map((link) => {
       const host = new URL(link.url).hostname.toLowerCase().replace(/^www\./, "");
       if (host === publicationHost) return null;
       const matches = portals.filter((portal) => hostMatchesPortal(link.url, portal));
       return matches.length === 1 ? { link, portal: matches[0] } : null;
     }).filter(Boolean),
-    portalIds = [...new Set(portalMatches.map(({ portal }) => String(portal.id || portal.canonical_domain)))],
-    persistedResolution = row.portal_resolution?.resolution_status === "UNIQUE_EVIDENCE" ? row.portal_resolution : null,
-    resolvedPortal = persistedResolution ? portals.find(item=>String(item.id)===String(persistedResolution.portal_id)) : null,
-    portalMatch = resolvedPortal ? {portal:resolvedPortal,link:{url:persistedResolution.evidence_url,role:persistedResolution.evidence_role,label:"Vergabeportal",source:"VERSIONSGEBUNDENE_PORTAL_EVIDENZ"}} : portalIds.length === 1 ? portalMatches[0] : null,
+    authoritative = Array.isArray(row.authoritative_portal_resolutions)
+      ? row.authoritative_portal_resolutions
+      : null,
+    actionResolutions = (authoritative || []).filter((resolution) =>
+      ["SUBMISSION", "PARTICIPATION", "PROCUREMENT_DOCUMENT"].includes(resolution.evidence_role)),
+    roleRank = { SUBMISSION: 0, PARTICIPATION: 1, PROCUREMENT_DOCUMENT: 2 },
+    uniqueResolutions = actionResolutions
+      .filter((resolution) => resolution.resolution_status === "UNIQUE_EVIDENCE" && resolution.portal_id)
+      .sort((left, right) => roleRank[left.evidence_role] - roleRank[right.evidence_role]),
+    authoritativeResolution = uniqueResolutions[0] || null,
+    authoritativePortal = authoritativeResolution
+      ? portals.find((candidate) => String(candidate.id) === String(authoritativeResolution.portal_id)) || null
+      : null,
+    authoritativeMatch = authoritativePortal && safeExternalHttpsUrl(authoritativeResolution.evidence_url)
+      ? { link: { url: safeExternalHttpsUrl(authoritativeResolution.evidence_url), source: "AUTHORITATIVE_ROLE_RESOLUTION" }, portal: authoritativePortal }
+      : null,
+    legacyPortalIds = [...new Set(legacyPortalMatches.map(({ portal }) => String(portal.id || portal.canonical_domain)))],
+    legacyPortalMatch = legacyPortalIds.length === 1 ? legacyPortalMatches[0] : null,
+    portalMatch = authoritative === null ? legacyPortalMatch : authoritativeMatch,
     portalCandidate = portalMatch?.link || null,
     portal = portalMatch?.portal || null,
-    registryVerified = Boolean(portal && (portal.entry_links_verified_at || portal.last_verified_at || portal.login_path)),
-    loginUrl = registryVerified ? safeExternalHttpsUrl(portal.authentication_entry_url || (portal.login_path ? new URL(portal.login_path,`https://${portal.canonical_domain}`).href : null)) : null,
+    registryVerified = Boolean((portal?.entry_links_verified_at || portal?.last_verified_at) && portal?.adapter_validation_status === "PRODUCTION_VALIDATED"),
+    loginUrl = registryVerified ? safeExternalHttpsUrl(portal.authentication_entry_url) : null,
     registrationUrl = registryVerified ? safeExternalHttpsUrl(portal.registration_entry_url) : null,
     submissionUrl = explicitSubmissionUrl(raw),
     buyerUrl = buyerProfileUrl(raw),
     documentEvidence = documentTruth({ sourceLinks: documents, enrichmentDocuments, enrichmentId: row.enrichment_id }),
-    tedAccount = sourceCode === "TED" ? tedAccountEvidence() : null;
+    ambiguousResolution = actionResolutions.some((resolution) => resolution.resolution_status === "REVIEW_REQUIRED"),
+    unresolvedResolution = authoritative !== null && !portal && actionResolutions.length > 0,
+    tedAccount = sourceCode === "TED" ? tedAccountEvidence() : null,
+    portalMappingStatus = portal
+      ? "EINDEUTIG_ZUGEORDNET"
+      : ambiguousResolution || unresolvedResolution || legacyPortalIds.length > 1
+        ? "PORTAL_ASSIGNMENT_REVIEW_REQUIRED"
+        : "PORTAL_ASSIGNMENT_REVIEW_REQUIRED";
   return {
     source: { code: sourceCode || null, displayName: sourceCode === "DOE" ? "oeffentlichevergabe.de" : sourceCode === "TED" ? "TED (Tenders Electronic Daily)" : sourceCode || "Nicht ermittelt", externalId: row.external_id || row.notice_number || null },
     originalNotice: originalUrl ? { url: originalUrl, label: "Originalbekanntmachung öffnen", targetType: "ORIGINAL_NOTICE", provenanceLabel: sourceCode === "TED" ? "TED" : "offizielle Quelle" } : null,
@@ -170,13 +197,13 @@ export const buildTenderLinkEvidence = (row, portals = []) => {
     registration: registrationUrl ? { url: registrationUrl, label: "Beim Vergabeportal registrieren", targetType: "REGISTRATION", provenanceLabel: "administrativ verifiziertes Portalregister", portalId: portal?.id || null, portalName: portal?.display_name || null } : null,
     electronicSubmission: submissionUrl ? { url: submissionUrl, label: "Elektronische Abgabe öffnen", targetType: "ELECTRONIC_SUBMISSION", provenanceLabel: "offizieller Quelldatensatz" } : null,
     buyerProfile: buyerUrl ? { url: buyerUrl, label: "Beschafferprofil öffnen", targetType: "BUYER_PROFILE", provenanceLabel: "offizieller Quelldatensatz" } : null,
-    portalMapping: { status: row.portal_resolution?.resolution_status === "REVIEW_REQUIRED" || portalIds.length > 1 ? "MANUELLE_PRUEFUNG" : portal ? "EINDEUTIG_ZUGEORDNET" : "MANUELLE_PRUEFUNG", portalId: portal?.id || null, reason: row.portal_resolution?.resolution_status === "REVIEW_REQUIRED" || portalIds.length > 1 ? "Mehrere mögliche Portalhosts" : portal ? null : externalPortalLinks.length ? "Portalhost noch nicht in der Registry" : "Kein externer Portalhost in der Quelle" },
+    portalMapping: { status: portalMappingStatus, portalId: portal?.id || null, evidenceRole: authoritativeResolution?.evidence_role || null, reason: ambiguousResolution || legacyPortalIds.length > 1 ? "Mehrere mögliche Portalhosts" : portal ? null : unresolvedResolution ? "Autoritative Portalauflösung ist nicht eindeutig" : externalPortalLinks.length ? "Portalhost noch nicht in der Registry" : "Kein autoritatives Aktionsportal in der Quelle" },
     missingReasons: {
       originalNotice: originalUrl ? null : "Originalbekanntmachung in der Quelle nicht angegeben",
-      procurementPortal: portalCandidate ? null : portalIds.length > 1 ? "Mehrere mögliche Portalhosts – manuelle Prüfung erforderlich" : externalPortalLinks.length ? "Portalhost noch nicht eindeutig in der Registry zugeordnet" : "Vergabeportal in der Quelle nicht angegeben",
+      procurementPortal: portalCandidate ? null : ambiguousResolution || legacyPortalIds.length > 1 ? "Mehrere mögliche Portalhosts – Portalzuordnung prüfen" : externalPortalLinks.length ? "Portalhost noch nicht eindeutig in der Registry zugeordnet" : "Kein autoritatives Vergabeportal ermittelt – Portalzuordnung prüfen",
       documents: documents.filter((link) => link.url !== portalCandidate?.url).length ? null : "Keine getrennten Dokumentlinks in der Quelle angegeben",
-      login: loginUrl || tedAccount ? null : "Loginseite noch nicht verifiziert",
-      registration: registrationUrl || tedAccount ? null : "Registrierungsseite noch nicht verifiziert",
+      login: loginUrl ? null : "Loginseite noch nicht verifiziert",
+      registration: registrationUrl ? null : "Registrierungsseite noch nicht verifiziert",
       electronicSubmission: submissionUrl ? null : "Elektronische Abgabe-URL in der Quelle nicht angegeben",
     },
     documentEvidence,
@@ -191,14 +218,26 @@ export const loadTenderLinkEvidence = async (pool, tenderIds) => {
       `SELECT t.id tender_id,t.source_code,t.source_url,t.external_id,t.notice_number,
         version.normalized_data,enrichment.id enrichment_id,enrichment.structured_data,
         coalesce(documents.items,'[]'::jsonb) enrichment_documents,
-        coalesce(links.items,'[]'::jsonb) external_links,
-        CASE WHEN resolution.id IS NULL THEN NULL ELSE jsonb_build_object('id',resolution.id,'portal_id',resolution.portal_id,'exact_host',resolution.exact_host,'evidence_url',resolution.evidence_url,'evidence_role',resolution.evidence_role,'resolution_status',resolution.resolution_status,'evidence_sha256',resolution.evidence_sha256) END portal_resolution
+        coalesce(resolutions.items,'[]'::jsonb) authoritative_portal_resolutions
        FROM tender.tenders t
        LEFT JOIN LATERAL(SELECT v.normalized_data FROM tender.tender_versions v WHERE v.tender_id=t.id ORDER BY v.version DESC LIMIT 1)version ON true
        LEFT JOIN LATERAL(SELECT e.id,e.structured_data FROM tender.enrichment_versions e WHERE e.tender_id=t.id AND e.historical=false ORDER BY e.version DESC LIMIT 1)enrichment ON true
        LEFT JOIN LATERAL(SELECT jsonb_agg(jsonb_build_object('source_url',d.source_url,'filename',d.filename,'fetch_status',d.fetch_status,'resolution_status',d.resolution_status,'http_status',d.http_status) ORDER BY d.id) items FROM tender.enrichment_documents d WHERE d.enrichment_version_id=enrichment.id)documents ON true
-       LEFT JOIN LATERAL(SELECT jsonb_agg(jsonb_build_object('original_url',l.original_url,'final_url',l.final_url,'role',l.role,'public_access',l.public_access,'verification_status',l.verification_status) ORDER BY l.created_at,l.id) items FROM tender.tender_external_links l WHERE l.tender_id=t.id AND l.tender_version_id=(SELECT id FROM tender.tender_versions WHERE tender_id=t.id ORDER BY version DESC LIMIT 1))links ON true
-       LEFT JOIN LATERAL(SELECT r.* FROM tender.tender_portal_resolutions r WHERE r.tender_id=t.id AND r.tender_version_id=(SELECT id FROM tender.tender_versions WHERE tender_id=t.id ORDER BY version DESC LIMIT 1) LIMIT 1)resolution ON true
+       LEFT JOIN LATERAL(
+         SELECT jsonb_agg(jsonb_build_object(
+           'portal_id',resolution.portal_id,
+           'exact_host',resolution.exact_host,
+           'evidence_url',resolution.evidence_url,
+           'evidence_role',resolution.evidence_role,
+           'resolution_status',resolution.resolution_status,
+           'evidence_priority',resolution.evidence_priority
+         ) ORDER BY CASE resolution.evidence_role WHEN 'SUBMISSION' THEN 1 WHEN 'PARTICIPATION' THEN 2 WHEN 'PROCUREMENT_DOCUMENT' THEN 3 ELSE 4 END) items
+         FROM tender.tender_portal_resolutions resolution
+         JOIN LATERAL(SELECT candidate.id FROM tender.tender_versions candidate
+           WHERE candidate.tender_id=t.id ORDER BY candidate.version DESC,candidate.created_at DESC,candidate.id DESC LIMIT 1) current_version
+           ON current_version.id=resolution.tender_version_id
+         WHERE resolution.tender_id=t.id
+       ) resolutions ON true
        WHERE t.id=ANY($1::uuid[])`,
       [ids],
     ),
@@ -207,4 +246,3 @@ export const loadTenderLinkEvidence = async (pool, tenderIds) => {
   const portals = portalResult.rows || [];
   return new Map((evidenceResult.rows || []).map((row) => [String(row.tender_id), buildTenderLinkEvidence(row, portals)]));
 };
-import {officialTedLinks, tedAccountEvidence} from "./ted-notice-context.mjs";

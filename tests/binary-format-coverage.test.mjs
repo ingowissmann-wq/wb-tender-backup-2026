@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import JSZip from "jszip";
 import {extractArchiveDocuments,parseBinaryDocument} from "../platform/binary-parsers.mjs";
 import {htmlLinks,inferArchiveLotNumber,resolveArchiveChildLotBinding,resolveSingleLotBinding} from "../platform/autopilot-pipeline-worker.mjs";
-import {downloadPublicDuesseldorfNetServerArchive,downloadPublicEvergabeOnlineArchive} from "../platform/semantic-browser-auth.mjs";
+import {downloadPublicAIBietercockpitArchive,downloadPublicDuesseldorfNetServerArchive,downloadPublicNetServerArchive,downloadPublicEvergabeOnlineArchive} from "../platform/semantic-browser-auth.mjs";
 
 test("ODS keeps hidden sheets, rows, values and formulas",async()=>{
   const zip=new JSZip();zip.file("mimetype","application/vnd.oasis.opendocument.spreadsheet");zip.file("content.xml",`<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet><table:table table:name="Hilfstabelle" table:display="false"><table:table-row table:visibility="collapse"><table:table-cell table:formula="of:=1+1"><text:p>2</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>`);
@@ -14,6 +14,19 @@ test("ODS keeps hidden sheets, rows, values and formulas",async()=>{
 test("GAEB XML materializes positions, quantities, units and prices",async()=>{
   const buffer=Buffer.from(`<?xml version="1.0"?><GAEB><BoQ><BoQBody><Item><RNoPart>01.001</RNoPart><Qty>12.5</Qty><QU>h</QU><BriefDescr>Winterdienst</BriefDescr><UP>42.00</UP></Item></BoQBody></BoQ></GAEB>`),parsed=await parseBinaryDocument({buffer,name:"leistungsverzeichnis.x83",mediaType:"application/xml"});
   assert.equal(parsed.type,"GAEB");assert.equal(parsed.gaeb.items[0].position,"01.001");assert.equal(parsed.gaeb.items[0].quantity,"12.5");assert.equal(parsed.gaeb.items[0].unit,"h");
+});
+
+test("official DWG plans and LOG attachments are retained with safe manual-review parsing",async()=>{
+  const dwg=await parseBinaryDocument({buffer:Buffer.concat([Buffer.from("AC1032"),Buffer.alloc(32)]),name:"Werkplan.DWG",mediaType:"image/vnd.dwg"});
+  assert.equal(dwg.type,"DWG");assert.equal(dwg.status,"VORHANDEN_MANUELL_ZU_PRÜFEN");assert.equal(dwg.formatVersion,"AC1032");
+  const log=await parseBinaryDocument({buffer:Buffer.from("Prüfprotokoll\nStatus: ok\n"),name:"Pruefung.log",mediaType:"text/plain"});
+  assert.equal(log.type,"LOG");assert.equal(log.status,"VORHANDEN_MANUELL_ZU_PRÜFEN");
+});
+
+test("archive extraction retains DWG plans and LOG evidence",async()=>{
+  const zip=new JSZip();zip.file("Plan/anlage.dwg",Buffer.concat([Buffer.from("AC1032"),Buffer.alloc(8)]));zip.file("Plan/pruefung.log","ok");
+  const children=await extractArchiveDocuments(await zip.generateAsync({type:"nodebuffer"}));
+  assert.deepEqual(children.map(item=>[item.archivePath,item.mediaType]),[["Plan/anlage.dwg","image/vnd.dwg"],["Plan/pruefung.log","text/plain"]]);
 });
 
 test("ZIP recursively extracts supported procurement documents",async()=>{
@@ -85,12 +98,30 @@ test("Cosinex session path parameters are removed before document persistence",(
   assert.deepEqual(result.links,["https://vergabemarktplatz.brandenburg.de/VMPSatellite/public/company/project/CXP/de/documents/archive/Vergabeunterlagen_CXP.zip"]);assert.equal(JSON.stringify(result).includes("sensitive-session-value"),false);
 });
 
+test("AUMASS public all-files archives are recognized only on the exact bound route",()=>{
+  const html=Buffer.from(`<a href="/Document/GetDocument?doctype=allfiles&aumassid=AV269774-EU">Ohne Registrierung herunterladen.</a><a href="https://evil.example/Document/GetDocument?doctype=allfiles&aumassid=AV269774-EU">evil</a>`);
+  const result=htmlLinks(html,"https://plattform.aumass.de/Publication/TenderPreview?id=fixture");
+  assert.deepEqual(result.links,["https://plattform.aumass.de/Document/GetDocument?doctype=allfiles&aumassid=AV269774-EU"]);
+});
+
 test("eVergabe Online browser download rejects unbound targets before navigation",async()=>{
   await assert.rejects(()=>downloadPublicEvergabeOnlineArchive("https://evil.example/tenderdocuments.html?id=872681"),/evergabe_online_target_forbidden/);
   await assert.rejects(()=>downloadPublicEvergabeOnlineArchive("https://www.evergabe-online.de/tenderdocuments.html?id=not-a-number"),/evergabe_online_target_forbidden/);
 });
 
 test("Düsseldorf NetServer browser download rejects unbound targets before navigation",async()=>{
-  await assert.rejects(()=>downloadPublicDuesseldorfNetServerArchive("https://evil.example/NetServer/TenderingProcedureDetails?function=_Details&TenderOID=54321-Tender-abc"),/duesseldorf_netserver_target_forbidden/);
-  await assert.rejects(()=>downloadPublicDuesseldorfNetServerArchive("https://vergabe.duesseldorf.de/NetServer/TenderingProcedureDetails?function=_DownloadTenderDocuments&TenderOID=54321-Tender-abc"),/duesseldorf_netserver_target_forbidden/);
+  await assert.rejects(()=>downloadPublicDuesseldorfNetServerArchive("https://evil.example/NetServer/TenderingProcedureDetails?function=_Details&TenderOID=54321-Tender-abc"),/netserver_target_forbidden/);
+  await assert.rejects(()=>downloadPublicDuesseldorfNetServerArchive("https://vergabe.duesseldorf.de/NetServer/TenderingProcedureDetails?function=_DownloadTenderDocuments&TenderOID=54321-Tender-abc"),/netserver_target_forbidden/);
+});
+
+test("NetServer archive downloader requires an exact registry-provided host",async()=>{
+  const url="https://vergabe.landbw.de/NetServer/TenderingProcedureDetails?function=_Details&TenderOID=54321-Tender-abc";
+  await assert.rejects(()=>downloadPublicNetServerArchive(url),/netserver_target_forbidden/);
+  await assert.rejects(()=>downloadPublicNetServerArchive(url,{expectedHost:"vergabe.stadt-frankfurt.de"}),/netserver_target_forbidden/);
+  await assert.rejects(()=>downloadPublicNetServerArchive("https://vergabe.landbw.de/NetServer/TenderingProcedureDetails?function=_Details&TenderOID=unbound",{expectedHost:"vergabe.landbw.de"}),/netserver_target_forbidden/);
+});
+
+test("AI Bietercockpit archive downloader rejects every unbound target before navigation",async()=>{
+  await assert.rejects(()=>downloadPublicAIBietercockpitArchive("https://evil.example/VN/X-BBS-2026-0112"),/ai_bietercockpit_target_forbidden/);
+  await assert.rejects(()=>downloadPublicAIBietercockpitArchive("https://www.deutsches-ausschreibungsblatt.de/ausschreibung#/fixture"),/ai_bietercockpit_target_forbidden/);
 });

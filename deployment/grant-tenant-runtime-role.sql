@@ -8,10 +8,10 @@ BEGIN
     THEN RAISE EXCEPTION 'configured_runtime_role_not_found';
   END IF;
   EXECUTE format('GRANT USAGE ON SCHEMA saas,tenant_portal TO %I',role_name);
-  EXECUTE format('GRANT SELECT ON saas.plans,saas.plan_entitlements,saas.modules,saas.products,saas.bundle_modules,saas.module_capabilities,saas.module_dependencies TO %I',role_name);
-  EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON saas.tenants,saas.pending_registrations,saas.tenant_memberships,saas.tenant_companies,saas.subscriptions,saas.trial_claims,saas.billing_events,saas.audit_events,saas.saved_searches,saas.tenant_module_entitlements,saas.tenant_product_entitlements,saas.tenant_invitations,saas.checkout_sessions TO %I',role_name);
+  EXECUTE format('GRANT SELECT ON saas.plans,saas.plan_entitlements,saas.modules,saas.products,saas.bundle_modules,saas.module_capabilities,saas.module_dependencies,saas.commercial_product_modules,saas.commercial_product_capabilities,saas.commercial_product_blockers,saas.stripe_price_offers TO %I',role_name);
+  EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON saas.tenants,saas.pending_registrations,saas.tenant_memberships,saas.tenant_companies,saas.subscriptions,saas.trial_claims,saas.billing_events,saas.audit_events,saas.saved_searches,saas.tenant_module_entitlements,saas.tenant_product_entitlements,saas.tenant_invitations,saas.checkout_sessions,saas.tenant_product_licenses,saas.license_events,saas.trial_reminder_deliveries TO %I',role_name);
   EXECUTE format('GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA tenant_portal TO %I',role_name);
   EXECUTE format('GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA saas,tenant_portal TO %I',role_name);
-  EXECUTE format('GRANT EXECUTE ON FUNCTION saas.current_tenant_id(),saas.current_actor_user_id(),saas.tenant_matches(uuid),saas.module_entitled(uuid,text,timestamptz),saas.module_capability_allowed(uuid,text,text,timestamptz),saas.configure_commercial_entitlements(uuid,text,text[]),tenant_portal.provision_empty_tenant(uuid,text),tenant_portal.enable_synthetic_demo(uuid),tenant_portal.claim_module_job(uuid,uuid) TO %I',role_name);
+  EXECUTE format('GRANT EXECUTE ON FUNCTION saas.current_tenant_id(),saas.current_actor_user_id(),saas.tenant_matches(uuid),saas.module_entitled(uuid,text,timestamptz),saas.effective_tenant_modules(uuid,timestamptz),saas.module_capability_allowed(uuid,text,text,timestamptz),saas.configure_commercial_entitlements(uuid,text,text[]),tenant_portal.provision_empty_tenant(uuid,text),tenant_portal.enable_synthetic_demo(uuid),tenant_portal.claim_module_job(uuid,uuid) TO %I',role_name);
 END $$;
 COMMIT;

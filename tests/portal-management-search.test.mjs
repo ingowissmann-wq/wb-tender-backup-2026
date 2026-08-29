@@ -7,7 +7,7 @@ const ui = readFileSync(new URL("../platform/assets/autopilot-navigation.js", im
   routes = readFileSync(new URL("../platform/autopilot-routes.mjs", import.meta.url), "utf8"),
   worker = readFileSync(new URL("../platform/autopilot-pipeline-worker.mjs", import.meta.url), "utf8");
 
-const portal = (overrides = {}) => ({ portalId:"11111111-1111-4111-8111-111111111111",portalName:"Deutsche eVergabe",operator:"Healy Hudson",domain:"deutsche-evergabe.de",aliases:["e-vergabe"],adapterId:"deutsche-evergabe",portalType:"E-Vergabeportal",loginEntryUrl:"https://deutsche-evergabe.de/login",registrationEntryUrl:"https://deutsche-evergabe.de/register",adapterValidationStatus:"PRODUCTION_VALIDATED",authenticationSupported:true,documentDownloadSupported:true,access:{configured:false,status:"NO_ACCESS"},...overrides });
+const portal = (overrides = {}) => ({ portalId:"11111111-1111-4111-8111-111111111111",portalName:"Deutsche eVergabe",operator:"Healy Hudson",domain:"deutsche-evergabe.de",aliases:["e-vergabe"],adapterId:"deutsche-evergabe",portalType:"E-Vergabeportal",loginEntryUrl:"https://deutsche-evergabe.de/login",registrationEntryUrl:"https://deutsche-evergabe.de/register",adapterValidationStatus:"PRODUCTION_VALIDATED",authenticationSupported:true,documentDownloadSupported:true,access:{configured:false,status:"NOT_CONFIGURED"},...overrides });
 
 test("search covers name, operator, domain, alias and registry id", () => {
   const item = portal(), items = [item];
@@ -21,20 +21,24 @@ test("search is case, umlaut, hyphen and whitespace tolerant", () => {
 });
 
 test("filters, reset-equivalent empty query, pagination and null results", () => {
-  const items = Array.from({length:51},(_,index)=>portal({portalId:String(index),portalName:`Portal ${index}`,access:{configured:index%2===0,status:index%2===0?"LOGGED_IN":"NO_ACCESS"}}));
+  const items = Array.from({length:51},(_,index)=>portal({portalId:String(index),portalName:`Portal ${index}`,access:{configured:index%2===0,status:index%2===0?"VALID":"NOT_CONFIGURED"}}));
   assert.equal(searchPortalResults(items,{access:"present"}).total,26);
-  assert.equal(searchPortalResults(items,{status:"LOGGED_IN"}).total,26);
+  assert.equal(searchPortalResults(items,{status:"VALID"}).total,26);
   assert.equal(searchPortalResults(items,{page:2,pageSize:25}).items.length,25);
   assert.equal(searchPortalResults(items,{page:3,pageSize:25}).items.length,1);
   assert.equal(searchPortalResults(items,{q:"nicht vorhanden"}).total,0);
   assert.equal(searchPortalResults(items,{q:""}).total,51);
 });
 
-test("authoritative status prefers exact active session and current version job", () => {
-  assert.equal(canonicalPortalAccessStatus({configured:false}),"NO_ACCESS");
-  assert.equal(canonicalPortalAccessStatus({configured:true,jobStatus:"RUNNING"}),"CHECK_RUNNING");
-  assert.equal(canonicalPortalAccessStatus({configured:true,sessionEffectiveStatus:"ACTIVE",jobStatus:"SUCCEEDED"}),"LOGGED_IN");
-  assert.equal(canonicalPortalAccessStatus({configured:true,sessionEffectiveStatus:"RELOGIN_REQUIRED_INACTIVE"}),"RELOGIN_REQUIRED");
+test("authoritative status keeps stored credentials distinct from current validation", () => {
+  assert.equal(canonicalPortalAccessStatus({configured:false}),"NOT_CONFIGURED");
+  assert.equal(canonicalPortalAccessStatus({configured:true}),"CONFIGURED_UNVERIFIED");
+  assert.equal(canonicalPortalAccessStatus({configured:true,jobStatus:"RUNNING"}),"CONFIGURED_UNVERIFIED");
+  assert.equal(canonicalPortalAccessStatus({configured:true,jobStatus:"RUNNING",jobCreatedAt:"2026-08-29T06:59:00Z",jobTimeoutAt:"2026-08-29T07:02:00Z",now:new Date("2026-08-29T07:00:00Z")}),"VALIDATION_PENDING");
+  assert.equal(canonicalPortalAccessStatus({configured:true,sessionEffectiveStatus:"ACTIVE",jobStatus:"SUCCEEDED"}),"VALID");
+  assert.equal(canonicalPortalAccessStatus({configured:true,captchaRequired:true}),"CAPTCHA_OR_USER_ACTION_REQUIRED");
+  assert.equal(canonicalPortalAccessStatus({configured:true,jobResultCode:"CAPTCHA_MANUELL_ERFORDERLICH"}),"CAPTCHA_OR_USER_ACTION_REQUIRED");
+  assert.equal(canonicalPortalAccessStatus({configured:true,sessionEffectiveStatus:"RELOGIN_REQUIRED_REVOKED"}),"EXPIRED");
 });
 
 test("UI provides requested keyboard, filter, paging and no secret search fields", () => {

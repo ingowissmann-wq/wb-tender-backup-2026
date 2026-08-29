@@ -1,0 +1,20 @@
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+import test from "node:test";
+const script=readFileSync(new URL("../scripts/repair-active-ted-missing-enrichment.mjs",import.meta.url),"utf8");
+const worker=readFileSync(new URL("../platform/autopilot-pipeline-worker.mjs",import.meta.url),"utf8");
+test("active TED enrichment repair is source-authoritative, hash-bound and tender-global only",()=>{
+  assert.match(script,/active_ted_enrichment_plan_hash_mismatch/);
+  assert.match(script,/process\.argv\.includes\("--summary"\)/);
+  assert.match(script,/source_url~'\^https:\/\//);
+  assert.ok(script.includes("ted\\\\.europa\\\\.eu"));
+  assert.match(script,/context\.lot_key=''/);
+  assert.match(script,/context_integrity_status='REPAIR_REQUIRED'/);
+  assert.match(script,/context_integrity_status!=="TENDER_GLOBAL"/);
+  assert.match(script,/externalSubmission:false,transmitted:false/);
+  assert.doesNotMatch(script,/SUBMIT|PACKAGE_UPLOAD|BINDING_SUBMISSION/);
+  assert.match(worker,/export \{ loadNotice,materializeDocumentContract,persistEnrichment \}/);
+  assert.match(worker,/nextTedNoticeFetchAt=Date\.now\(\)\+1_100/);
+  assert.match(worker,/\[408,425,429,500,502,503,504\]\.includes/);
+  assert.match(worker,/for\(let attempt=0;attempt<4;attempt\+=1\)/);
+});

@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "gate": "node tests/production-gate.mjs",
+    "gate": "node tests/production-gate.mjs && node scripts/historical-regression-gate.mjs && node scripts/portal-restoration-acceptance-gate.mjs",
     "gate:readiness": "node scripts/release-readiness-gate.mjs",
     "gate:saas": "node scripts/saas-commercial-readiness-gate.mjs",
     "test:tenant-isolation": "node scripts/tenant-isolation-integration.mjs",

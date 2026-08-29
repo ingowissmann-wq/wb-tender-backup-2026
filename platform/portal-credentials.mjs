@@ -18,12 +18,6 @@ export function credentialKey(path=process.env.PORTAL_CREDENTIAL_KEY_FILE){if(!p
 export function encryptSecret(payload,key=credentialKey()){const iv=crypto.randomBytes(12),cipher=crypto.createCipheriv("aes-256-gcm",key,iv);cipher.setAAD(Buffer.from("WB_TENDER_PORTAL_CREDENTIAL_V1"));const ciphertext=Buffer.concat([cipher.update(JSON.stringify(payload),"utf8"),cipher.final()]);return {ciphertext,iv,authTag:cipher.getAuthTag(),keyVersion:1}}
 export function decryptSecret(record,key=credentialKey()){const decipher=crypto.createDecipheriv("aes-256-gcm",key,record.iv);decipher.setAAD(Buffer.from("WB_TENDER_PORTAL_CREDENTIAL_V1"));decipher.setAuthTag(record.auth_tag||record.authTag);return JSON.parse(Buffer.concat([decipher.update(record.ciphertext),decipher.final()]).toString("utf8"))}
 export function maskUsername(value){const text=String(value||"").trim();if(!text)return null;const at=text.indexOf("@");if(at>0)return `${text[0]}***@${text.slice(at+1)}`;return `${text.slice(0,Math.min(2,text.length))}***`}
-const metadataStatusToken=value=>String(value??"").trim().toUpperCase().replace(/Ä/g,"AE").replace(/Ö/g,"OE").replace(/Ü/g,"UE").replace(/ẞ/g,"SS").normalize("NFKD").replace(/[\u0300-\u036f]/g,"").replace(/[^A-Z0-9]+/g,"_").replace(/^_+|_+$/g,"");
-const portalMetadataStatuses={
-  registrationStatus:new Map([["NICHT_REGISTRIERT","NICHT_REGISTRIERT"],["REGISTRIERUNG_OFFEN","REGISTRIERUNG_OFFEN"],["REGISTRIERT","REGISTRIERT"],["MANUELLE_PRUEFUNG","MANUELLE_PRUEFUNG"]]),
-  loginStatus:new Map([["LOGIN_UNGEPRUEFT","LOGIN_UNGEPRUEFT"],["UNGEPRUEFT","LOGIN_UNGEPRUEFT"],["LOGIN_BESTAETIGT","LOGIN_BESTAETIGT"],["BESTAETIGT","LOGIN_BESTAETIGT"],["MFA_ERFORDERLICH","MFA_ERFORDERLICH"],["ZUGANG_GESPERRT","ZUGANG_GESPERRT"],["ZUGANG_ABGELAUFEN","ZUGANG_ABGELAUFEN"],["MANUELLE_PRUEFUNG","MANUELLE_PRUEFUNG"]]),
-};
-export function canonicalPortalMetadataStatus(field,value){return portalMetadataStatuses[field]?.get(metadataStatusToken(value))||null}
 export function credentialStateFingerprint({credentialId,version,portalId,companyId,savedAt}){return crypto.createHash("sha256").update(["WB_PORTAL_CREDENTIAL_STATE_V1",credentialId,version,portalId,companyId,new Date(savedAt).toISOString()].join(":"),"utf8").digest("hex")}
 export function portalCredentialJobKey({actionType,portalId,companyId,credentialId,credentialVersion}){return [String(actionType),String(portalId),String(companyId),String(credentialId),`CREDV${Number(credentialVersion)}`].join(":")}
 export function isTechnicalPublicationSource(portal={}){

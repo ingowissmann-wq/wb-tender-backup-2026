@@ -29,16 +29,19 @@ export const capabilityState = (feature = {}) => ({
 
 export function readinessGate({ transmittedTrue = 0, portals = [] } = {}) {
   const unsafeTransmission = Number(transmittedTrue) !== 0;
-  const configuredWithoutBrowserEvidence = portals.flatMap((portal) =>
+  const incompleteCapabilities = portals.flatMap((portal) =>
     Object.entries(portal.features || {})
-      .filter(([, feature]) => feature.configured && !feature.productiveBrowserVerified)
-      .map(([featureKey]) => ({ portalId: portal.portalId, featureKey })),
+      .filter(([, feature]) => feature.configured && !(feature.portalSupported === "SUPPORTED" && feature.autopilotSupported && feature.technicallyTested && feature.productiveBrowserVerified))
+      .map(([featureKey, feature]) => ({ portalId: portal.portalId, featureKey, error: !feature.technicallyTested ? "PRODUCTION_TEST_EVIDENCE_MISSING" : !feature.productiveBrowserVerified ? "BROWSER_ACCEPTANCE_EVIDENCE_MISSING" : !feature.autopilotSupported ? "AUTOPILOT_NOT_SUPPORTED" : "PORTAL_SUPPORT_NOT_CONFIRMED" })),
   );
+  const capabilityReady = incompleteCapabilities.length === 0;
   return {
-    editionReady: !unsafeTransmission,
+    editionReady: !unsafeTransmission && capabilityReady,
+    portalCapabilitiesReady: capabilityReady,
     externalSubmissionReady: false,
-    status: unsafeTransmission ? "NOT_READY_SAFETY_VIOLATION" : "READY_WITH_EXPLICIT_PRODUCT_BOUNDARY",
-    configuredWithoutBrowserEvidence,
+    status: unsafeTransmission ? "NOT_READY_SAFETY_VIOLATION" : capabilityReady ? "READY_WITH_EXPLICIT_PRODUCT_BOUNDARY" : "SAFE_FAIL_CLOSED_CAPABILITY_REVIEW_REQUIRED",
+    configuredWithoutBrowserEvidence: incompleteCapabilities.filter((item) => item.error === "BROWSER_ACCEPTANCE_EVIDENCE_MISSING"),
+    incompleteCapabilities,
     boundary: PRODUCT_BOUNDARY,
   };
 }

@@ -4,10 +4,10 @@
     "Aufgaben": "flow", "Wiedervorlagen": "flow", "Notizen": "flow",
     "Dokumente": "docs", "Dateien": "docs", "Kalkulator": "insights",
   };
-  fetch("/api/admin/v1/iam/me", { credentials: "same-origin", cache: "no-store" })
+  fetch("/api/admin/v1/iam/bootstrap", { credentials: "same-origin", cache: "no-store" })
     .then((response) => response.ok ? response.json() : Promise.reject())
     .then((identity) => {
-      if (!identity.saas) return;
+      if (!identity.authenticated || !identity.saas) return;
       const modules = new Set(identity.modules || []);
       const enforce = () => {
         document.querySelectorAll("aside button, aside a").forEach((node) => {

@@ -14,13 +14,11 @@ test("overview discovers relevant public notices independently of portal executi
   assert.match(overview, /portal_scope_registered/);
 });
 
-test("public TED document detail is allowed while portal execution stays registered-scope protected", () => {
+test("portal execution and notice detail remain registered-scope protected", () => {
   const context = routes.slice(routes.indexOf('"/api/autopilot/navigation/context/:tenderId"'), routes.indexOf('"/api/autopilot/navigation/context/:tenderId/tasks"'));
-  assert.match(context, /resolveDocumentScope\(reply, tender\.id, company\.company_id\)/);
-  assert.match(routes, /source\?\.source_code === "TED" && source\.has_public_documents/);
-  assert.match(routes, /return requireRegisteredScope\(reply, tenderId, companyId\)/);
-  assert.match(ui, /Öffentliche Bekanntmachungs-\/Dokumentquelle/);
-  assert.match(ui, /Ausschreibung öffnen/);
+  assert.match(context, /requireRegisteredScope\(reply, tender\.id, company\.company_id\)/);
+  assert.match(ui, /Nur öffentliche Quelle; Portalzuordnung erforderlich/);
+  assert.match(ui, /x\.portal_scope_registered\?/);
 });
 
 test("ingestion suppresses only the unscoped pipeline trigger and hard-locks submission", () => {

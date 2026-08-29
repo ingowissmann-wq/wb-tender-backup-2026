@@ -1,0 +1,24 @@
+{
+  "regularOffers": [
+    { "productKey": "tender_scout", "stripePriceId": null, "verificationStatus": "MISSING" },
+    { "productKey": "tender_autopilot", "stripePriceId": null, "verificationStatus": "MISSING" },
+    { "productKey": "tender_professional", "stripePriceId": null, "verificationStatus": "MISSING" },
+    { "productKey": "crm", "stripePriceId": null, "verificationStatus": "MISSING" },
+    { "productKey": "flow", "stripePriceId": null, "verificationStatus": "MISSING" },
+    { "productKey": "docs", "stripePriceId": null, "verificationStatus": "MISSING" },
+    { "productKey": "insights", "stripePriceId": null, "verificationStatus": "MISSING" },
+    { "productKey": "cms", "stripePriceId": null, "verificationStatus": "MISSING" },
+    { "productKey": "recruiting", "stripePriceId": null, "verificationStatus": "MISSING" },
+    { "productKey": "security", "stripePriceId": null, "verificationStatus": "MISSING" },
+    { "productKey": "business_suite", "stripePriceId": null, "verificationStatus": "MISSING" }
+  ],
+  "existingContractOffer": {
+    "productKey": "wb_business_suite_trial_14d",
+    "stripePriceId": "price_1U5VsIE0SiqbbyKf1wdyWTUR",
+    "verificationStatus": "REPOSITORY_CONTRACT_ONLY",
+    "currency": "EUR",
+    "amountMinor": 19900,
+    "billingType": "ONE_TIME",
+    "elapsedDays": 14
+  }
+}

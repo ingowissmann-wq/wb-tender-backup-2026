@@ -1,12 +1,18 @@
 import fs from "node:fs";
 import pg from "pg";
+import {createFixedScopedPool,loadBackgroundScope} from "../platform/scoped-pg-pool.mjs";
 
 const databaseUrlFile = process.env.DATABASE_URL_FILE || "/run/secrets/database_url";
-const pool = new pg.Pool({
-  connectionString: fs.readFileSync(databaseUrlFile, "utf8").trim(),
+const databaseOptions = [
+  "-c default_transaction_read_only=on -c statement_timeout=55000",
+  process.env.DATABASE_SESSION_OPTIONS,
+].filter(Boolean).join(" ");
+const rawPool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL || fs.readFileSync(databaseUrlFile, "utf8").trim(),
   max: 1,
-  options: "-c default_transaction_read_only=on -c statement_timeout=55000",
+  options: databaseOptions,
 });
+const pool=createFixedScopedPool(rawPool,await loadBackgroundScope(rawPool)).pool;
 
 const query = async (text, params = []) => (await pool.query(text, params)).rows;
 
@@ -99,5 +105,5 @@ try {
     accessByCompany, permissions, urlCoverage, doeSamples, tedSamples,
   }, null, 2));
 } finally {
-  await pool.end();
+  await rawPool.end();
 }

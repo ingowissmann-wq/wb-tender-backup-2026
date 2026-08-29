@@ -32,10 +32,19 @@ try{
       VALUES($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT(fixture_key) DO UPDATE SET manifest=excluded.manifest,manifest_sha256=excluded.manifest_sha256,company_id=excluded.company_id,service_area=excluded.service_area`,[definition.fixtureKey,tender.id,company.company_id,definition.serviceArea,stable(manifest),manifestHash]);
     let version=(await client.query("SELECT * FROM tender.tender_versions WHERE tender_id=$1 AND source_sha256=$2",[tender.id,manifestHash])).rows[0];
     if(!version)version=(await client.query("INSERT INTO tender.tender_versions(tender_id,version,source_sha256,normalized_data,change_kind,source_timestamp) SELECT $1,coalesce(max(version),0)+1,$2,$3::jsonb,CASE WHEN count(*)=0 THEN 'INITIAL' ELSE 'UPDATED' END,now() FROM tender.tender_versions WHERE tender_id=$1 RETURNING *",[tender.id,manifestHash,stable(manifest)])).rows[0];
+    const lot=(await client.query(`INSERT INTO tender.lots(tender_id,external_id,title,deadline)
+      VALUES($1,'LOT-ACCEPTANCE-001',$2,$3)
+      ON CONFLICT(tender_id,external_id) WHERE external_id IS NOT NULL DO UPDATE
+      SET title=excluded.title,deadline=excluded.deadline RETURNING id`,[tender.id,definition.title,manifest.offerDeadline])).rows[0];
+    await client.query(`INSERT INTO tender.tender_lot_lifecycles(tender_id,lot_key,lifecycle_status,participation_status,offer_deadline,deadline_quality,is_current)
+      VALUES($1,'LOT-ACCEPTANCE-001',CASE WHEN $2::timestamptz>now() THEN 'ACTIVE' ELSE 'EXPIRED' END,
+        CASE WHEN $2::timestamptz>now() THEN 'ELIGIBLE' ELSE 'NOT_ELIGIBLE' END,$2,'EXACT',true)
+      ON CONFLICT(tender_id,lot_key) DO UPDATE SET lifecycle_status=excluded.lifecycle_status,participation_status=excluded.participation_status,
+        participation_block_reason=NULL,offer_deadline=excluded.offer_deadline,deadline_quality='EXACT',is_current=true,updated_at=now()`,[tender.id,manifest.offerDeadline]);
     const key=["RUN_FULL_PIPELINE",tender.id,"LOT-ACCEPTANCE-001",company.company_id,manifestHash,"acceptance-v1"].join(":");
-    const job=(await client.query(`INSERT INTO tender.autopilot_queue(request_id,action_type,tender_id,tender_version_id,notice_id,lot_key,company_id,service_scope,reason,status,current_step,idempotency_key,max_attempts)
-      VALUES(gen_random_uuid(),'RUN_FULL_PIPELINE',$1,$2,$3,'LOT-ACCEPTANCE-001',$4,$5,$6,'QUEUED','DISCOVERED',$7,3)
-      ON CONFLICT(idempotency_key) WHERE status IN ('PENDING','CLAIMED','RETRY','QUEUED','RUNNING') DO UPDATE SET idempotency_key=excluded.idempotency_key RETURNING id,status`,[tender.id,version.id,definition.fixtureKey,company.company_id,definition.serviceArea,`INTERNAL_ACCEPTANCE_FIXTURE:${definition.fixtureKey}`,key])).rows[0];
+    const job=(await client.query(`INSERT INTO tender.autopilot_queue(request_id,action_type,tender_id,tender_version_id,notice_id,lot_id,lot_key,company_id,service_scope,reason,status,current_step,idempotency_key,max_attempts)
+      VALUES(gen_random_uuid(),'RUN_FULL_PIPELINE',$1,$2,$3,$4,'LOT-ACCEPTANCE-001',$5,$6,$7,'QUEUED','DISCOVERED',$8,3)
+      ON CONFLICT(idempotency_key) WHERE status IN ('PENDING','CLAIMED','RETRY','QUEUED','RUNNING') DO UPDATE SET idempotency_key=excluded.idempotency_key RETURNING id,status`,[tender.id,version.id,definition.fixtureKey,lot.id,company.company_id,definition.serviceArea,`INTERNAL_ACCEPTANCE_FIXTURE:${definition.fixtureKey}`,key])).rows[0];
     await client.query("INSERT INTO tender.audit_events(action,tender_id,metadata) VALUES('internal_acceptance_fixture_created',$1,$2::jsonb)",[tender.id,stable({fixtureKey:definition.fixtureKey,classification:"INTERNAL_ACCEPTANCE_FIXTURE",manifestSha256:manifestHash,companyId:company.company_id,serviceArea:definition.serviceArea,externalWrite:false,transmitted:false})]);
     created.push({fixtureKey:definition.fixtureKey,tenderId:tender.id,companyId:company.company_id,serviceArea:definition.serviceArea,manifestSha256:manifestHash,jobId:job.id,jobStatus:job.status});
   }

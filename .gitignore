@@ -17,3 +17,5 @@ logs/
 *.pfx
 tmp/
 production-snapshot/deployment/
+# Forensic staging copy retained locally; the repository root is canonical.
+current/
