@@ -36,5 +36,8 @@ test("BLKA forensics inventories performance, productive-hour and duration evide
   assert.match(runner, /performanceScenario/);
   assert.match(runner, /C22_GROUP_SCENARIO_REQUIRES_BUSINESS_APPROVAL/);
   assert.match(runner, /SCENARIO_ONLY_NOT_APPROVED/);
+  assert.match(runner, /C22_GROUP_SCENARIO_PARTIAL_MISSING_RANGE/);
+  assert.match(runner, /priceSheetProductivityInventory/);
+  assert.match(runner, /performanceGroup/);
   assert.match(runner, /sha256: document\.payload_sha256/);
 });

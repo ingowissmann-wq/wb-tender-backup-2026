@@ -33,6 +33,7 @@ const sourceArea = facts.find(item => item.key === "areas");
 const contractDuration = facts.find(item => item.key === "contract_duration_months");
 const maximumContractDuration = facts.find(item => item.key === "contract_maximum_duration_months");
 const annualAreaByGroup = facts.find(item => item.key === "annual_cleaning_area_by_group");
+const priceSheetProductivityInventory = facts.find(item => item.key === "price_sheet_productivity_inventory");
 if (annualArea?.value !== 2589414.889362)
   throw new Error(`BLKA annual cleaning area mismatch: ${annualArea?.value ?? "missing"}`);
 if (sourceArea?.value !== 29142.6877)
@@ -114,11 +115,13 @@ for (const group of [...new Set(rangeCandidates.map(item => item.group))].sort()
 
 const groupAreas = Array.isArray(annualAreaByGroup?.value) ? annualAreaByGroup.value : [];
 const scenarioRows = groupAreas.map(areaRow => {
-  const range = ranges.find(item => item.group === areaRow.group);
-  if (!range) return { ...areaRow, status: "MISSING_PERFORMANCE_RANGE" };
+  const performanceGroup = areaRow.group.match(/^([A-Z])(?:\/\d+)?$/)?.[1] ?? null;
+  const range = ranges.find(item => item.group === performanceGroup);
+  if (!range) return { ...areaRow, performanceGroup, status: "MISSING_PERFORMANCE_RANGE" };
   const midpoint = (range.minimum + range.maximum) / 2;
   return {
     ...areaRow,
+    performanceGroup,
     minimumPerformance: range.minimum,
     midpointPerformance: midpoint,
     maximumPerformance: range.maximum,
@@ -128,27 +131,35 @@ const scenarioRows = groupAreas.map(areaRow => {
     status: "SCENARIO_ONLY_NOT_APPROVED",
   };
 });
-const scenarioComplete = scenarioRows.length > 0 && scenarioRows.every(item => item.status === "SCENARIO_ONLY_NOT_APPROVED");
-const sum = (key) => Number(scenarioRows.reduce((total, item) => total + Number(item[key] || 0), 0).toFixed(6));
-const scenario = scenarioComplete ? {
+const approvedScenarioRows = scenarioRows.filter(item => item.status === "SCENARIO_ONLY_NOT_APPROVED");
+const missingScenarioRows = scenarioRows.filter(item => item.status !== "SCENARIO_ONLY_NOT_APPROVED");
+const scenarioComplete = scenarioRows.length > 0 && missingScenarioRows.length === 0;
+const sum = (rows, key) => Number(rows.reduce((total, item) => total + Number(item[key] || 0), 0).toFixed(6));
+const coveredAnnualArea = sum(approvedScenarioRows, "annualCleaningArea");
+const missingAnnualArea = sum(missingScenarioRows, "annualCleaningArea");
+const scenario = {
   rows: scenarioRows,
+  status: scenarioComplete ? "COMPLETE_NOT_APPROVED" : "PARTIAL_MISSING_PERFORMANCE_RANGE",
+  coveredAnnualArea,
+  missingAnnualArea,
+  coveredFraction: annualArea.value > 0 ? Number((coveredAnnualArea / annualArea.value).toFixed(9)) : 0,
   annualHours: {
-    minimum: sum("minimumAnnualHours"),
-    midpoint: sum("midpointAnnualHours"),
-    maximum: sum("maximumAnnualHours"),
+    minimum: sum(approvedScenarioRows, "minimumAnnualHours"),
+    midpoint: sum(approvedScenarioRows, "midpointAnnualHours"),
+    maximum: sum(approvedScenarioRows, "maximumAnnualHours"),
   },
   contractMonths: contractDuration?.value ?? null,
   contractHours: contractDuration?.value ? {
-    minimum: Number((sum("minimumAnnualHours") * contractDuration.value / 12).toFixed(6)),
-    midpoint: Number((sum("midpointAnnualHours") * contractDuration.value / 12).toFixed(6)),
-    maximum: Number((sum("maximumAnnualHours") * contractDuration.value / 12).toFixed(6)),
+    minimum: Number((sum(approvedScenarioRows, "minimumAnnualHours") * contractDuration.value / 12).toFixed(6)),
+    midpoint: Number((sum(approvedScenarioRows, "midpointAnnualHours") * contractDuration.value / 12).toFixed(6)),
+    maximum: Number((sum(approvedScenarioRows, "maximumAnnualHours") * contractDuration.value / 12).toFixed(6)),
   } : null,
   fteAt1670AnnualHours: {
-    minimum: Number((sum("minimumAnnualHours") / 1670).toFixed(6)),
-    midpoint: Number((sum("midpointAnnualHours") / 1670).toFixed(6)),
-    maximum: Number((sum("maximumAnnualHours") / 1670).toFixed(6)),
+    minimum: Number((sum(approvedScenarioRows, "minimumAnnualHours") / 1670).toFixed(6)),
+    midpoint: Number((sum(approvedScenarioRows, "midpointAnnualHours") / 1670).toFixed(6)),
+    maximum: Number((sum(approvedScenarioRows, "maximumAnnualHours") / 1670).toFixed(6)),
   },
-} : { rows: scenarioRows, status: "INCOMPLETE_GROUP_RANGE_BINDING" };
+};
 
 const result = {
   mode: "READ_ONLY_BLKA_INPUT_FORENSICS",
@@ -174,6 +185,8 @@ const result = {
     maximumContractDuration: maximumContractDuration?.value ?? null,
     maximumContractDurationUnit: maximumContractDuration?.unit ?? null,
     annualCleaningAreaByGroup: groupAreas,
+    priceSheetProductivityInventory: priceSheetProductivityInventory?.value ?? [],
+    priceSheetProductivityEvidence: priceSheetProductivityInventory?.evidence ?? [],
     performanceRanges: ranges,
     performanceScenario: scenario,
     performanceCandidates: candidates.performance,
@@ -189,6 +202,8 @@ const result = {
     C11Unit: "EUR_PER_HOUR",
     status: scenarioComplete && contractDuration?.value
       ? "C22_GROUP_SCENARIO_REQUIRES_BUSINESS_APPROVAL"
+      : approvedScenarioRows.length && missingScenarioRows.length
+        ? "C22_GROUP_SCENARIO_PARTIAL_MISSING_RANGE"
       : candidates.performance.length
         ? "C22_SOURCE_CANDIDATES_REQUIRE_EXACT_REVIEW"
       : "CALCULATION_BLOCKED_MISSING_INPUT_C22",

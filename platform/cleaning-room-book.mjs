@@ -381,7 +381,9 @@ export function derivePriceSheetCleaningFacts(documents = [], selectedLotKey = n
   const areaColumn = headerColumns.get("fläche in m2"),
     daysColumn = headerColumns.get("tage/jahr"),
     annualColumn = headerColumns.get("fläche in m2 pro jahr"),
-    groupColumn = headerColumns.get("reinigungsgruppe");
+    groupColumn = headerColumns.get("reinigungsgruppe"),
+    performanceColumn = headerColumns.get("m2/stunde"),
+    hoursColumn = headerColumns.get("stunde/jahr");
   if (![areaColumn, daysColumn, annualColumn].every(Number.isInteger)) return [];
   const derivedRows = [];
   for (const row of rows) {
@@ -398,7 +400,15 @@ export function derivePriceSheetCleaningFacts(documents = [], selectedLotKey = n
     const group = Number.isInteger(groupColumn)
       ? String(cleaningCellValue(byColumn.get(groupColumn)) ?? "").normalize("NFKC").trim().toUpperCase()
       : null;
+    const performance = Number.isInteger(performanceColumn)
+      ? cleaningNumber(cleaningCellValue(byColumn.get(performanceColumn)))
+      : null;
+    const annualHours = Number.isInteger(hoursColumn)
+      ? cleaningNumber(cleaningCellValue(byColumn.get(hoursColumn)))
+      : null;
     derivedRows.push({ rowNumber: Number(row.rowNumber), area, days, annualArea, group: group || null,
+      performance: Number.isFinite(performance) && performance > 0 ? performance : null,
+      annualHours: Number.isFinite(annualHours) && annualHours > 0 ? annualHours : null,
       areaCell: areaCell?.address, daysCell: daysCell?.address, annualCell: annualCell?.address });
   }
   if (!derivedRows.length) return [];
@@ -446,6 +456,60 @@ export function derivePriceSheetCleaningFacts(documents = [], selectedLotKey = n
       unit: "m²/Jahr je Reinigungsgruppe",
       formula: "Gruppierte Summe der verifizierten Excel-Cachewerte Fläche in m² × Tage/Jahr",
       evidence: evidence.map(item => ({ ...item, columns: { ...item.columns, cleaningGroup: groupColumn } })),
+    });
+  }
+  if (Number.isInteger(performanceColumn) || Number.isInteger(hoursColumn)) {
+    const grouped = new Map();
+    for (const row of derivedRows) {
+      const key = row.group || "UNASSIGNED";
+      const current = grouped.get(key) || {
+        group: key,
+        rows: 0,
+        rowsWithPerformance: 0,
+        rowsWithAnnualHours: 0,
+        rowsWithConsistentPerformanceHours: 0,
+        performanceValues: new Set(),
+        annualHours: 0,
+      };
+      current.rows += 1;
+      if (row.performance) {
+        current.rowsWithPerformance += 1;
+        current.performanceValues.add(row.performance);
+      }
+      if (row.annualHours) {
+        current.rowsWithAnnualHours += 1;
+        current.annualHours += row.annualHours;
+      }
+      if (row.performance && row.annualHours) {
+        const expected = row.annualArea / row.performance;
+        const tolerance = Math.max(0.01, Math.abs(expected) * 1e-6);
+        if (Math.abs(expected - row.annualHours) <= tolerance)
+          current.rowsWithConsistentPerformanceHours += 1;
+      }
+      grouped.set(key, current);
+    }
+    result.push({
+      key: "price_sheet_productivity_inventory",
+      value: [...grouped.values()].sort((left, right) => left.group.localeCompare(right.group)).map(item => ({
+        group: item.group,
+        rows: item.rows,
+        rowsWithPerformance: item.rowsWithPerformance,
+        rowsWithAnnualHours: item.rowsWithAnnualHours,
+        rowsWithConsistentPerformanceHours: item.rowsWithConsistentPerformanceHours,
+        performanceValues: [...item.performanceValues].sort((left, right) => left - right),
+        annualHours: Number(item.annualHours.toFixed(6)),
+      })),
+      unit: "Read-only Preisblatt-Inventar",
+      formula: "Inventar vorhandener Preisblattwerte; keine fehlenden Werte werden ergänzt",
+      evidence: evidence.map(item => ({
+        ...item,
+        columns: {
+          ...item.columns,
+          cleaningGroup: groupColumn ?? null,
+          performance: performanceColumn ?? null,
+          annualHours: hoursColumn ?? null,
+        },
+      })),
     });
   }
   return result;

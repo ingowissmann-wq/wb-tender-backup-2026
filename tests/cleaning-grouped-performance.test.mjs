@@ -17,16 +17,20 @@ const workbook = {
         { address: "F8", value: "Reinigungsgruppe" },
         { address: "G8", value: "Tage/Jahr" },
         { address: "H8", value: "Fläche in m2 pro Jahr" },
+        { address: "I8", value: "m2/Stunde" },
+        { address: "J8", value: "Stunde/Jahr" },
       ] },
       { rowNumber: 9, cells: [
         { address: "E9", value: 100 }, { address: "F9", value: "A" },
         { address: "G9", value: 200 },
         { address: "H9", result: 20000, formula: "Fläche in m² * Tage/Jahr" },
+        { address: "I9", value: 200 }, { address: "J9", result: 100 },
       ] },
       { rowNumber: 10, cells: [
         { address: "E10", value: 50 }, { address: "F10", value: "C" },
         { address: "G10", value: 100 },
         { address: "H10", result: 5000, formula: "Fläche in m² * Tage/Jahr" },
+        { address: "I10", value: null }, { address: "J10", value: null },
       ] },
     ],
   }] },
@@ -38,6 +42,12 @@ test("price-sheet facts preserve annual cleaning area by exact cleaning group", 
   assert.deepEqual(facts.find(item => item.key === "annual_cleaning_area_by_group").value, [
     { group: "A", sourceArea: 100, annualCleaningArea: 20000, rows: 1 },
     { group: "C", sourceArea: 50, annualCleaningArea: 5000, rows: 1 },
+  ]);
+  assert.deepEqual(facts.find(item => item.key === "price_sheet_productivity_inventory").value, [
+    { group: "A", rows: 1, rowsWithPerformance: 1, rowsWithAnnualHours: 1,
+      rowsWithConsistentPerformanceHours: 1, performanceValues: [200], annualHours: 100 },
+    { group: "C", rows: 1, rowsWithPerformance: 0, rowsWithAnnualHours: 0,
+      rowsWithConsistentPerformanceHours: 0, performanceValues: [], annualHours: 0 },
   ]);
 });
 
