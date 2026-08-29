@@ -17,6 +17,9 @@ test("BLKA grouped shadow binds the exact approved business values and base term
   assert.match(runner, /createCalculationContractSnapshot/);
   assert.match(runner, /executeCalculationContractSnapshot/);
   assert.match(runner, /VERIFIED_PROCUREMENT_DOCUMENT_SET/);
+  assert.match(runner, /createGroupedPerformanceDecision/);
+  assert.match(runner, /classification: "CASE_APPROVED"/);
+  assert.match(runner, /groupedPerformanceDecision/);
   assert.doesNotMatch(runner, /calculateSectorTender/);
 });
 

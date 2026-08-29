@@ -12,6 +12,7 @@ import {
   createCalculationContractSnapshot,
   executeCalculationContractSnapshot,
 } from "../platform/calculation-contract.mjs";
+import {createGroupedPerformanceDecision} from "../platform/grouped-performance.mjs";
 
 const [documentsPath, parametersPath, metadataPath, selectedEnrichmentLotId] = process.argv.slice(2);
 if (!documentsPath || !parametersPath || !metadataPath || !selectedEnrichmentLotId)
@@ -133,6 +134,25 @@ const scope = {
   lotId: expected.lotId,
   lotKey: expected.lotKey,
 };
+const groupedPerformanceDecision = createGroupedPerformanceDecision({
+  scope,
+  defaultPerformance: null,
+  groups: Object.entries(approvedPerformance).map(([groupKey, approvedPerformanceValue]) => ({
+    groupKey,
+    minimumPerformance: null,
+    approvedPerformance: approvedPerformanceValue,
+    maximumPerformance: null,
+    unit: "M2_PER_HOUR",
+    priority: 100,
+    classification: "CASE_APPROVED",
+  })),
+  applications: groupRows.map(row => ({subgroupKey: row.group, groupKey: row.performanceGroup})),
+  approval: {
+    inputId: "board-approval-2026-08-29-blka-lot-0001-c22-grouped",
+    approvedBy: approvalIdentity,
+    approvedAt: "2026-08-29",
+  },
+});
 const exactLocation = evidence => {
   if (Number(evidence?.page) > 0) return {page: Number(evidence.page)};
   const worksheet = evidence?.worksheet ?? evidence?.table;
@@ -236,7 +256,7 @@ const snapshot = createCalculationContractSnapshot({
       source: {type: "VERIFIED_PROCUREMENT_DOCUMENT_SET", evidence: documentEvidence(sourceArea)}},
     {key: "duration", value: duration.value, unit: duration.unit, termType: "BASE", scope,
       source: {type: "VERIFIED_PROCUREMENT_DOCUMENT_SET", evidence: documentEvidence(duration)}},
-    {key: "groupedCleaningPerformance", value: approvedPerformance, unit: "M2_PER_HOUR_BY_GROUP", scope,
+    {key: "groupedCleaningPerformance", value: groupedPerformanceDecision, unit: "M2_PER_HOUR_BY_GROUP", scope,
       source: {type: "EXPLICIT_MANAGEMENT_INPUT", inputId: "board-approval-2026-08-29-blka-lot-0001-c22-grouped", approvedBy: approvalIdentity, approvedAt: "2026-08-29"}},
     {key: "productiveHours", value: productiveHoursRaw, unit: "HOURS", scope,
       source: {type: "DETERMINISTIC_DERIVATION", ruleTypeId: "cleaning-grouped-area-hours", ruleVersion: 1,
@@ -306,6 +326,7 @@ console.log(JSON.stringify({
   },
   inputs: {
     groupedPerformance: approvedPerformance,
+    groupedPerformanceDecision,
     groupedPerformanceUnit: "M2_PER_HOUR",
     groupedPerformancePersistence: "NONE_CASE_SCOPED_SHADOW_ONLY",
     groupRows: groupRows.map(row => ({
