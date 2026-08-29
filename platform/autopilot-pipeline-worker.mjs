@@ -2835,6 +2835,7 @@ async function materializeDocumentFacts(
   const authoritativeSources = selectLotAuthoritativeDocuments(
     unique,
     selectedLotIds,
+    selected.length === 1 ? selected[0]?.lotKey || null : null,
   );
   const selectedLotId =
     selectedLotIds.size === 1 ? [...selectedLotIds][0] : null;
@@ -3934,9 +3935,25 @@ async function persistCalculation(pool, item, tender, enrichment) {
       [enrichment.id],
     )
   ).rows;
+  const selectedEnrichmentLot = item.lot_key
+    ? (
+        await pool.query(
+          "SELECT id FROM tender.enrichment_lots WHERE enrichment_version_id=$1 AND lot_key=$2 ORDER BY id LIMIT 2",
+          [enrichment.id, item.lot_key],
+        )
+      ).rows
+    : [],
+    selectedCalculationLotIds = new Set(
+      selectedEnrichmentLot.length === 1 ? [selectedEnrichmentLot[0].id] : [],
+    ),
+    authoritativeCalculationDocuments = selectLotAuthoritativeDocuments(
+      documents,
+      selectedCalculationLotIds,
+      item.lot_key,
+    );
   const validation = validateCalculationInputs(
       result.review,
-      documents,
+      authoritativeCalculationDocuments,
       item.lot_key,
     ),
     config = (
@@ -3956,7 +3973,7 @@ async function persistCalculation(pool, item, tender, enrichment) {
     ),
     derivedContractFacts =
       item.service_scope === "cleaning"
-        ? deriveCleaningRoomBookFacts(documents, item.lot_key)
+        ? deriveCleaningRoomBookFacts(authoritativeCalculationDocuments, item.lot_key)
         : [],
     genericContractDuration =
       item.service_scope !== "cleaning"

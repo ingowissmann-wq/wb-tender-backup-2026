@@ -5,9 +5,52 @@ const number = value => {
 
 const cellValue = cell => number(cell?.result ?? cell?.displayed ?? cell?.value);
 
-export function selectLotAuthoritativeDocuments(documents,selectedLotIds){
+const lotNumberFromKey = value => {
+  const match = String(value || "").match(/(?:LOT-0*|LOS\s*0*)(\d+)/i);
+  return match ? Number(match[1]) : null;
+};
+
+const explicitLotNumbers = value => [
+  ...String(value || "").matchAll(/(?:^|[^A-Za-z0-9])(?:los|lot)[\s_-]*0*(\d+)\b/gi),
+].map(match => Number(match[1])).filter(Number.isFinite);
+
+const workbookLotNumbers = document => {
+  const numbers = [];
+  for (const sheet of document?.extracted_data?.worksheets || [])
+    for (const row of (sheet.rows || []).filter(row => Number(row.rowNumber) <= 12))
+      for (const cell of row.cells || [])
+        numbers.push(...explicitLotNumbers(cell?.displayed ?? cell?.result ?? cell?.value));
+  return numbers;
+};
+
+export function declaredDocumentLotNumbers(document) {
+  return [...new Set([
+    ...explicitLotNumbers(document?.filename),
+    ...explicitLotNumbers(document?.provenance?.archivePath),
+    ...workbookLotNumbers(document),
+  ])].sort((left, right) => left - right);
+}
+
+const explicitlyConflictsWithSelectedLot = (document, selectedLotKey) => {
+  const selectedLotNumber = lotNumberFromKey(selectedLotKey);
+  if (!selectedLotNumber) return false;
+  const declared = declaredDocumentLotNumbers(document);
+  return declared.length > 0 &&
+    (declared.length !== 1 || declared[0] !== selectedLotNumber);
+};
+
+const explicitlyMatchesSelectedLot = (document, selectedLotKey) => {
+  const selectedLotNumber = lotNumberFromKey(selectedLotKey);
+  if (!selectedLotNumber) return false;
+  const declared = declaredDocumentLotNumbers(document);
+  return declared.length === 1 && declared[0] === selectedLotNumber;
+};
+
+export function selectLotAuthoritativeDocuments(documents,selectedLotIds,selectedLotKey=null){
   if(selectedLotIds.size!==1)return documents;
   return documents.filter(document=>{
+    if(explicitlyConflictsWithSelectedLot(document,selectedLotKey))return false;
+    if(explicitlyMatchesSelectedLot(document,selectedLotKey))return true;
     if(selectedLotIds.has(document.lot_id))return true;
 
     const tenderVerified =
@@ -166,6 +209,96 @@ const cleaningColumnNumber = cell => {
     : null;
 };
 
+const workbookRevision = filename => {
+  const revisions = [...String(filename || "").matchAll(/\b(20\d{6})\b/g)]
+    .map(match => Number(match[1]))
+    .filter(Number.isFinite);
+  return revisions.length ? Math.max(...revisions) : 0;
+};
+
+export const priceSheetForSelectedLot = (documents, selectedLotKey) => {
+  const selectedLotNumber = lotNumberFromKey(selectedLotKey);
+  if (!selectedLotNumber) return null;
+  const candidates = documents.filter(document => {
+    if (document?.procurement_verification_status !== "VERIFIED") return false;
+    if (!/preisblatt/i.test(document.filename || "")) return false;
+    if (!/\.(?:xlsx|ods)(?:\.ods)?$/i.test(document.filename || "")) return false;
+    const filenameLots = explicitLotNumbers(document.filename);
+    const workbookLots = workbookLotNumbers(document);
+    return filenameLots.length === 1 && filenameLots[0] === selectedLotNumber &&
+      workbookLots.length > 0 && workbookLots.every(number => number === selectedLotNumber);
+  });
+  if (!candidates.length) return null;
+  const highestRevision = Math.max(...candidates.map(document => workbookRevision(document.filename)));
+  const preferred = candidates.filter(document => workbookRevision(document.filename) === highestRevision);
+  const uniqueHashes = new Set(preferred.map(document => document.payload_sha256).filter(Boolean));
+  return preferred.length === 1 && uniqueHashes.size === 1 ? preferred[0] : null;
+};
+
+export function derivePriceSheetCleaningFacts(documents = [], selectedLotKey = null) {
+  const document = priceSheetForSelectedLot(documents, selectedLotKey);
+  if (!document) return [];
+  const sheet = (document.extracted_data?.worksheets || []).find(item =>
+    /(?:aufma(?:ß|ss)|flächenverzeichnis)/i.test(item.name || "") &&
+    !/(?:glas|fenster)/i.test(item.name || "")
+  );
+  if (!sheet) return [];
+  const rows = sheet.rows || [];
+  const normalized = value => String(value ?? "").normalize("NFKC").trim().toLowerCase();
+  const header = rows.find(row => {
+    const labels = (row.cells || []).map(cell => normalized(cleaningCellValue(cell)));
+    return labels.includes("fläche in m2") && labels.includes("tage/jahr") &&
+      labels.includes("fläche in m2 pro jahr");
+  });
+  if (!header) return [];
+  const headerColumns = new Map(
+    (header.cells || []).map(cell => [normalized(cleaningCellValue(cell)), cleaningColumnNumber(cell)]),
+  );
+  const areaColumn = headerColumns.get("fläche in m2"),
+    daysColumn = headerColumns.get("tage/jahr"),
+    annualColumn = headerColumns.get("fläche in m2 pro jahr");
+  if (![areaColumn, daysColumn, annualColumn].every(Number.isInteger)) return [];
+  const derivedRows = [];
+  for (const row of rows) {
+    if (Number(row.rowNumber) <= Number(header.rowNumber)) continue;
+    const byColumn = new Map((row.cells || []).map(cell => [cleaningColumnNumber(cell), cell]));
+    const areaCell = byColumn.get(areaColumn), daysCell = byColumn.get(daysColumn),
+      annualCell = byColumn.get(annualColumn), area = cleaningNumber(cleaningCellValue(areaCell)),
+      days = cleaningNumber(cleaningCellValue(daysCell)), annualArea = cleaningNumber(cleaningCellValue(annualCell));
+    if (![area, days, annualArea].every(value => Number.isFinite(value) && value > 0)) continue;
+    const formula = String(annualCell?.formula || "");
+    if (!/Fläche in m²/i.test(formula) || !/Tage\/Jahr/i.test(formula)) continue;
+    const expected = area * days, tolerance = Math.max(0.01, Math.abs(expected) * 1e-9);
+    if (Math.abs(expected - annualArea) > tolerance) continue;
+    derivedRows.push({ rowNumber: Number(row.rowNumber), area, days, annualArea,
+      areaCell: areaCell?.address, daysCell: daysCell?.address, annualCell: annualCell?.address });
+  }
+  if (!derivedRows.length) return [];
+  const sourceArea = derivedRows.reduce((sum, row) => sum + row.area, 0),
+    annualArea = derivedRows.reduce((sum, row) => sum + row.annualArea, 0),
+    evidence = [{
+      documentId: document.id,
+      filename: document.filename,
+      sha256: document.payload_sha256,
+      selectedLotKey,
+      declaredLotNumbers: declaredDocumentLotNumbers(document),
+      worksheet: sheet.name,
+      headerRow: header.rowNumber,
+      columns: { area: areaColumn, daysPerYear: daysColumn, annualArea: annualColumn },
+      includedRows: derivedRows.length,
+      firstIncludedRow: Math.min(...derivedRows.map(row => row.rowNumber)),
+      lastIncludedRow: Math.max(...derivedRows.map(row => row.rowNumber)),
+      formula: "Fläche in m² × Tage/Jahr = Fläche in m² pro Jahr",
+      cachedFormulaResultsVerified: true,
+    }];
+  return [
+    { key: "annual_cleaning_area_occurrences", value: Number(annualArea.toFixed(6)), unit: "m²/Jahr",
+      formula: "Summe der verifizierten Excel-Cachewerte Fläche in m² × Tage/Jahr", evidence },
+    { key: "areas", value: Number(sourceArea.toFixed(4)), unit: "m²",
+      formula: "Summe der Grundflächen aller Zeilen mit positiver Jahresreinigungsfläche", evidence },
+  ];
+}
+
 export function deriveCleaningRoomBookFacts(
   documents = [],
   selectedLotKey = null
@@ -184,6 +317,13 @@ export function deriveCleaningRoomBookFacts(
     )
   )
     return legacy;
+
+  const priceSheet = derivePriceSheetCleaningFacts(documents, selectedLotKey);
+  if (priceSheet.length)
+    return [
+      ...priceSheet,
+      ...legacy.filter(fact => !priceSheet.some(existing => existing.key === fact.key)),
+    ];
 
   const verified = documents.filter(
     document =>
