@@ -30,13 +30,16 @@ test("Munich shadow keeps C22 nonpersistent and binds C23 to the approved scope"
   assert.doesNotMatch(runner, /INSERT INTO|UPDATE tender\.|DELETE FROM/);
 });
 
-test("Munich shadow asserts accepted values, schema 5 and internal management output", () => {
+test("Munich shadow verifies workforce values and blocks ambiguous C11 commercial pricing", () => {
   for (const marker of [
     "productiveHours: 2906.38",
     "annualHours: 726.59",
     "monthlyHours: 60.55",
     "fte: 0.44",
-    'exact(calculation.schemaVersion, 5',
+    '"C11 Bezugsmenge für EUR_PER_UNIT"',
+    '"CALCULATION_BLOCKED_MISSING_INPUT"',
+    '"NICHT_ANGEBOTSFÄHIG"',
+    'workforceStatus: "WORKFORCE_VALUES_VERIFIED"',
     'exact(calculation.externalTransmission, false',
     'exact(management.externalTransmission, false',
   ]) assert.ok(runner.includes(marker), `missing gate: ${marker}`);

@@ -49,6 +49,20 @@ test("C23 requires the canonical annual-hours unit",()=>{
   assert.ok(result.missing.includes("C23 Einheit HOURS_PER_YEAR"));
 });
 
+test("a configured per-unit cost without an authoritative quantity blocks with an actionable detail",()=>{
+  const result=calculateSectorTender({
+    serviceArea:"cleaning",
+    parameters:{C01:15.5,C11:0.5,C23:1670},
+    units:{C11:"EUR_PER_UNIT",C23:"HOURS_PER_YEAR"},
+    facts:{productiveHours:2906.38,duration:48,areas:29142.6877},
+  });
+  assert.equal(result.status,"CALCULATION_BLOCKED_MISSING_INPUT");
+  assert.deepEqual(result.missing,["C11 Bezugsmenge für EUR_PER_UNIT"]);
+  assert.equal(result.missingDetails[0].parameterKey,"C11");
+  assert.equal(result.missingDetails[0].unit,"EUR_PER_UNIT");
+  assert.match(result.missingDetails[0].nextAction,/fachlich passenden Einheit/);
+});
+
 test("legacy C05 divisor semantics are rejected",()=>{
   const result=calculateSectorTender({
     serviceArea:"cleaning",

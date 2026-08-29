@@ -23,6 +23,13 @@ test("Cleaning sends only authoritative derived area to the pricing engine", () 
   );
 });
 
+test("Cleaning never treats generic free-text quantities as a cost quantity", () => {
+  assert.match(
+    worker,
+    /unitCount:\s*item\.service_scope === "cleaning"\s*\? null\s*:\s*valueFor\(result\.review\.scope, "Mengen"\)/,
+  );
+});
+
 test("Cleaning C22 requires active approved exact-scope configuration", () => {
   const c22 = worker.slice(
     worker.indexOf("cleaningPerformanceRow ="),

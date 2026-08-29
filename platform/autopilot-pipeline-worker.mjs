@@ -4698,7 +4698,10 @@ async function persistCalculation(pool, item, tender, enrichment) {
         valueFor(result.review.scope, "Feiertagsstunden"),
       staffingStrength: valueFor(result.review.scope, "Besetzungsstärke"),
       objectCount: valueFor(result.review.scope, "Objektanzahl"),
-      unitCount: valueFor(result.review.scope, "Mengen"),
+      unitCount:
+        item.service_scope === "cleaning"
+          ? null
+          : valueFor(result.review.scope, "Mengen"),
       kilometers: valueFor(result.review.scope, "Fahrtkilometer"),
       siteManagement: valueFor(
         result.review.scope,

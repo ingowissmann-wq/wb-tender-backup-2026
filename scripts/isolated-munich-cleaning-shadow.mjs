@@ -101,6 +101,21 @@ const units = Object.fromEntries(
 const shadowC22 = expected.cleaningPerformance;
 const productiveHours =
   annualArea.value / shadowC22 * duration.value / 12;
+const round2 = value => Math.round((value + Number.EPSILON) * 100) / 100;
+const workforce = {
+  productiveHours: round2(productiveHours),
+  annualHours: round2(productiveHours / duration.value * 12),
+  monthlyHours: round2(productiveHours / duration.value),
+  fte: round2(
+    productiveHours /
+      (Number(c23.new_value) * (duration.value / 12)),
+  ),
+};
+
+exact(workforce.productiveHours, expected.productiveHours, "productive hours");
+exact(workforce.annualHours, expected.annualHours, "annual hours");
+exact(workforce.monthlyHours, expected.monthlyHours, "monthly hours");
+exact(workforce.fte, expected.fte, "FTE");
 
 const calculation = calculateSectorTender({
   serviceArea: "cleaning",
@@ -153,16 +168,24 @@ const calculation = calculateSectorTender({
   },
 });
 
-exact(calculation.status, "CALCULATED", "calculation status");
-exact(calculation.schemaVersion, 5, "calculation schema version");
-exact(calculation.productiveHours, expected.productiveHours, "productive hours");
-exact(calculation.hoursPerYear, expected.annualHours, "annual hours");
-exact(calculation.hoursPerMonth, expected.monthlyHours, "monthly hours");
-exact(calculation.fteAnnualHours, expected.fteAnnualHours, "FTE annual hours");
-exact(calculation.fte, expected.fte, "FTE");
+exact(
+  calculation.status,
+  "CALCULATION_BLOCKED_MISSING_INPUT",
+  "calculation status",
+);
+exact(
+  calculation.missing?.length,
+  1,
+  "commercial calculation blocker count",
+);
+exact(
+  calculation.missing?.[0],
+  "C11 Bezugsmenge für EUR_PER_UNIT",
+  "commercial calculation blocker",
+);
+exact(calculation.missingDetails?.[0]?.parameterKey, "C11", "blocker parameter");
+exact(calculation.missingDetails?.[0]?.unit, "EUR_PER_UNIT", "blocker unit");
 exact(calculation.externalTransmission, false, "external transmission");
-if (!(calculation.totalPrice > 0))
-  throw new Error(`non-positive calculated total price: ${calculation.totalPrice}`);
 
 const management = buildManagementOutput({
   tender: {
@@ -177,15 +200,23 @@ const management = buildManagementOutput({
     revision: c23.version_no,
   },
   documentRevision: metadata.lot.enrichmentVersion,
-  calculation: { ...calculation, status: "CALCULATED_REAL" },
-  missing: [],
+  calculation,
+  missing: calculation.missingDetails,
   jobId: null,
   correlationId: "read-only-munich-cleaning-shadow",
   now: metadata.shadowTimestamp,
 });
 
-exact(management.status, "MANAGEMENT_OUTPUT_GENERATED", "management status");
-exact(management.recommendation?.decision, "CONDITIONAL_GO", "management recommendation");
+exact(
+  management.status,
+  "NICHT_KALKULIERBAR_FEHLENDE_TENDERUNTERLAGEN",
+  "management status",
+);
+exact(
+  management.recommendation?.decision,
+  "NICHT_ANGEBOTSFÄHIG",
+  "management recommendation",
+);
 exact(management.externalTransmission, false, "management external transmission");
 
 console.log(JSON.stringify({
@@ -231,13 +262,14 @@ console.log(JSON.stringify({
     C23ApprovedBy: c23.approved_by,
   },
   calculation: {
-    schemaVersion: calculation.schemaVersion,
-    status: "CALCULATED_REAL_SHADOW",
-    productiveHours: calculation.productiveHours,
-    annualHours: calculation.hoursPerYear,
-    monthlyHours: calculation.hoursPerMonth,
-    fte: calculation.fte,
-    totalPrice: calculation.totalPrice,
+    status: calculation.status,
+    blocker: calculation.missing[0],
+    blockerDetail: calculation.missingDetails[0],
+    workforceStatus: "WORKFORCE_VALUES_VERIFIED",
+    productiveHours: workforce.productiveHours,
+    annualHours: workforce.annualHours,
+    monthlyHours: workforce.monthlyHours,
+    fte: workforce.fte,
     calculationHash: calculation.calculationHash,
     externalTransmission: calculation.externalTransmission,
   },

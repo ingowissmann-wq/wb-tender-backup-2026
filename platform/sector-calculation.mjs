@@ -223,6 +223,14 @@ export function calculateSectorTender({
       missing.push(
         key + " Bezugsmenge für " + unit
       );
+      missingDetails.push({
+        field: `${key} Bezugsmenge`,
+        parameterKey: key,
+        unit,
+        source: "verifizierte tenderbezogene Mengenangabe oder fachlich passende Parametereinheit",
+        nextAction:
+          `${key} mit einer fachlich passenden Einheit freigeben oder eine verifizierte Bezugsmenge bereitstellen`,
+      });
       return 0;
     }
 
