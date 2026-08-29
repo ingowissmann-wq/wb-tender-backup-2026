@@ -31,6 +31,8 @@ const facts = deriveCleaningRoomBookFacts(authoritative, "LOT-0001");
 const annualArea = facts.find(item => item.key === "annual_cleaning_area_occurrences");
 const sourceArea = facts.find(item => item.key === "areas");
 const contractDuration = facts.find(item => item.key === "contract_duration_months");
+const maximumContractDuration = facts.find(item => item.key === "contract_maximum_duration_months");
+const annualAreaByGroup = facts.find(item => item.key === "annual_cleaning_area_by_group");
 if (annualArea?.value !== 2589414.889362)
   throw new Error(`BLKA annual cleaning area mismatch: ${annualArea?.value ?? "missing"}`);
 if (sourceArea?.value !== 29142.6877)
@@ -90,6 +92,64 @@ const fieldCandidates = fields
     sourceDocumentId: field.provenance?.documentId ?? field.provenance?.sourceDocumentId ?? null,
   }));
 
+const rangePattern = /Reinigungsgruppe\s+([A-Z])[^.]{0,180}?Leistungsspanne\s+von\s+(\d{1,4})-(\d{1,4})\s*m2\/h/i;
+const rangeCandidates = candidates.performance.flatMap(candidate => {
+  const match = candidate.text.match(rangePattern);
+  return match ? [{
+    group: match[1],
+    minimum: Number(match[2]),
+    maximum: Number(match[3]),
+    unit: "M2_PER_HOUR",
+    evidence: candidate,
+  }] : [];
+});
+const ranges = [];
+for (const group of [...new Set(rangeCandidates.map(item => item.group))].sort()) {
+  const matches = rangeCandidates.filter(item => item.group === group);
+  const identities = new Set(matches.map(item => `${item.minimum}|${item.maximum}`));
+  if (identities.size !== 1)
+    throw new Error(`conflicting BLKA performance ranges for group ${group}`);
+  ranges.push({ ...matches[0], evidence: matches.map(item => item.evidence) });
+}
+
+const groupAreas = Array.isArray(annualAreaByGroup?.value) ? annualAreaByGroup.value : [];
+const scenarioRows = groupAreas.map(areaRow => {
+  const range = ranges.find(item => item.group === areaRow.group);
+  if (!range) return { ...areaRow, status: "MISSING_PERFORMANCE_RANGE" };
+  const midpoint = (range.minimum + range.maximum) / 2;
+  return {
+    ...areaRow,
+    minimumPerformance: range.minimum,
+    midpointPerformance: midpoint,
+    maximumPerformance: range.maximum,
+    maximumAnnualHours: Number((areaRow.annualCleaningArea / range.minimum).toFixed(6)),
+    midpointAnnualHours: Number((areaRow.annualCleaningArea / midpoint).toFixed(6)),
+    minimumAnnualHours: Number((areaRow.annualCleaningArea / range.maximum).toFixed(6)),
+    status: "SCENARIO_ONLY_NOT_APPROVED",
+  };
+});
+const scenarioComplete = scenarioRows.length > 0 && scenarioRows.every(item => item.status === "SCENARIO_ONLY_NOT_APPROVED");
+const sum = (key) => Number(scenarioRows.reduce((total, item) => total + Number(item[key] || 0), 0).toFixed(6));
+const scenario = scenarioComplete ? {
+  rows: scenarioRows,
+  annualHours: {
+    minimum: sum("minimumAnnualHours"),
+    midpoint: sum("midpointAnnualHours"),
+    maximum: sum("maximumAnnualHours"),
+  },
+  contractMonths: contractDuration?.value ?? null,
+  contractHours: contractDuration?.value ? {
+    minimum: Number((sum("minimumAnnualHours") * contractDuration.value / 12).toFixed(6)),
+    midpoint: Number((sum("midpointAnnualHours") * contractDuration.value / 12).toFixed(6)),
+    maximum: Number((sum("maximumAnnualHours") * contractDuration.value / 12).toFixed(6)),
+  } : null,
+  fteAt1670AnnualHours: {
+    minimum: Number((sum("minimumAnnualHours") / 1670).toFixed(6)),
+    midpoint: Number((sum("midpointAnnualHours") / 1670).toFixed(6)),
+    maximum: Number((sum("maximumAnnualHours") / 1670).toFixed(6)),
+  },
+} : { rows: scenarioRows, status: "INCOMPLETE_GROUP_RANGE_BINDING" };
+
 const result = {
   mode: "READ_ONLY_BLKA_INPUT_FORENSICS",
   scope: {
@@ -111,6 +171,11 @@ const result = {
     contractDuration: contractDuration?.value ?? null,
     contractDurationUnit: contractDuration?.unit ?? null,
     contractDurationEvidence: contractDuration?.evidence ?? [],
+    maximumContractDuration: maximumContractDuration?.value ?? null,
+    maximumContractDurationUnit: maximumContractDuration?.unit ?? null,
+    annualCleaningAreaByGroup: groupAreas,
+    performanceRanges: ranges,
+    performanceScenario: scenario,
     performanceCandidates: candidates.performance,
     productiveHoursCandidates: candidates.productiveHours,
     durationCandidates: candidates.duration,
@@ -122,8 +187,10 @@ const result = {
     C23Unit: "HOURS_PER_YEAR",
     C11: 0.5,
     C11Unit: "EUR_PER_HOUR",
-    status: candidates.performance.length
-      ? "C22_SOURCE_CANDIDATES_REQUIRE_EXACT_REVIEW"
+    status: scenarioComplete && contractDuration?.value
+      ? "C22_GROUP_SCENARIO_REQUIRES_BUSINESS_APPROVAL"
+      : candidates.performance.length
+        ? "C22_SOURCE_CANDIDATES_REQUIRE_EXACT_REVIEW"
       : "CALCULATION_BLOCKED_MISSING_INPUT_C22",
     calculationExecuted: false,
     externalWrite: false,

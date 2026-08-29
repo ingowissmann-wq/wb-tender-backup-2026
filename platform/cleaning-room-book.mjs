@@ -171,6 +171,47 @@ const explicitSingleLotContractPeriod = documents => {
   };
 };
 
+const explicitInitialContractPeriod = documents => {
+  const candidates = [];
+  const pattern = /Vertrag\s+beginnt\s+am\s+(\d{2}\.\d{2}\.\d{4})\s+und\s+endet\s+am\s+(\d{2}\.\d{2}\.\d{4})/gi;
+
+  for (const document of documents.filter(
+    item => item?.procurement_verification_status === "VERIFIED",
+  ))
+    for (const page of document.extracted_data?.pages || []) {
+      const text = String(page.text || "").replace(/\s+/g, " ");
+      for (const match of text.matchAll(pattern)) {
+        const start = parseGermanDate(match[1]);
+        const end = parseGermanDate(match[2]);
+        if (end < start) continue;
+        const maximumEnd = text.match(
+          /endet\s+spätestens\s+mit\s+Ablauf\s+des\s+(\d{2}\.\d{2}\.\d{4})/i,
+        )?.[1] ?? null;
+        candidates.push({
+          start: match[1],
+          end: match[2],
+          months: inclusiveMonths(start, end),
+          maximumEnd,
+          maximumMonths: maximumEnd
+            ? inclusiveMonths(start, parseGermanDate(maximumEnd))
+            : null,
+          evidence: {
+            documentId: document.id,
+            filename: document.filename,
+            hash: document.payload_sha256,
+            page: page.pageNumber || null,
+            match: text.slice(match.index, Math.min(text.length, match.index + 650)),
+          },
+        });
+      }
+    }
+
+  const identities = new Set(
+    candidates.map(item => `${item.start}|${item.end}|${item.months}|${item.maximumEnd ?? ""}`),
+  );
+  return identities.size === 1 ? candidates[0] : null;
+};
+
 export function deriveCleaningContractFacts(documents = [], selectedLotKey = null) {
   const lotNumber=lotNumberFromKey(selectedLotKey);
   if(lotNumber===null)return [];
@@ -192,6 +233,16 @@ export function deriveCleaningContractFacts(documents = [], selectedLotKey = nul
         {key:"contract_periods",value:endTexts.map(end=>({start:startText,end})),unit:"Zeiträume",formula:"Losbezogene Haupt- und Teilobjektzeiträume aus § 3 Vertragsdauer",evidence:[evidence]},
       ];
     }
+  }
+  const initialPeriod=explicitInitialContractPeriod(documents);
+  if(initialPeriod){
+    const facts=[
+      {key:"contract_duration_months",value:initialPeriod.months,unit:"Monate",formula:"Einschließlich gezählte Kalendermonate zwischen eindeutigem Vertragsbeginn und regulärem Vertragsende",evidence:[initialPeriod.evidence]},
+      {key:"contract_periods",value:[{start:initialPeriod.start,end:initialPeriod.end}],unit:"Zeiträume",formula:"Verifizierte Grundlaufzeit ohne optionale Verlängerungen",evidence:[initialPeriod.evidence]},
+    ];
+    if(initialPeriod.maximumEnd&&initialPeriod.maximumMonths)
+      facts.push({key:"contract_maximum_duration_months",value:initialPeriod.maximumMonths,unit:"Monate",formula:"Maximale Laufzeit einschließlich sämtlicher vertraglicher Verlängerungsoptionen",evidence:[initialPeriod.evidence]});
+    return facts;
   }
   if(lotNumber===0){
     const period=explicitSingleLotContractPeriod(documents);
@@ -329,7 +380,8 @@ export function derivePriceSheetCleaningFacts(documents = [], selectedLotKey = n
   );
   const areaColumn = headerColumns.get("fläche in m2"),
     daysColumn = headerColumns.get("tage/jahr"),
-    annualColumn = headerColumns.get("fläche in m2 pro jahr");
+    annualColumn = headerColumns.get("fläche in m2 pro jahr"),
+    groupColumn = headerColumns.get("reinigungsgruppe");
   if (![areaColumn, daysColumn, annualColumn].every(Number.isInteger)) return [];
   const derivedRows = [];
   for (const row of rows) {
@@ -343,7 +395,10 @@ export function derivePriceSheetCleaningFacts(documents = [], selectedLotKey = n
     if (!/Fläche in m²/i.test(formula) || !/Tage\/Jahr/i.test(formula)) continue;
     const expected = area * days, tolerance = Math.max(0.01, Math.abs(expected) * 1e-9);
     if (Math.abs(expected - annualArea) > tolerance) continue;
-    derivedRows.push({ rowNumber: Number(row.rowNumber), area, days, annualArea,
+    const group = Number.isInteger(groupColumn)
+      ? String(cleaningCellValue(byColumn.get(groupColumn)) ?? "").normalize("NFKC").trim().toUpperCase()
+      : null;
+    derivedRows.push({ rowNumber: Number(row.rowNumber), area, days, annualArea, group: group || null,
       areaCell: areaCell?.address, daysCell: daysCell?.address, annualCell: annualCell?.address });
   }
   if (!derivedRows.length) return [];
@@ -364,12 +419,36 @@ export function derivePriceSheetCleaningFacts(documents = [], selectedLotKey = n
       formula: "Fläche in m² × Tage/Jahr = Fläche in m² pro Jahr",
       cachedFormulaResultsVerified: true,
     }];
-  return [
+  const result = [
     { key: "annual_cleaning_area_occurrences", value: Number(annualArea.toFixed(6)), unit: "m²/Jahr",
       formula: "Summe der verifizierten Excel-Cachewerte Fläche in m² × Tage/Jahr", evidence },
     { key: "areas", value: Number(sourceArea.toFixed(4)), unit: "m²",
       formula: "Summe der Grundflächen aller Zeilen mit positiver Jahresreinigungsfläche", evidence },
   ];
+  if (Number.isInteger(groupColumn)) {
+    const grouped = new Map();
+    for (const row of derivedRows) {
+      const key = row.group || "UNASSIGNED";
+      const current = grouped.get(key) || { group: key, sourceArea: 0, annualCleaningArea: 0, rows: 0 };
+      current.sourceArea += row.area;
+      current.annualCleaningArea += row.annualArea;
+      current.rows += 1;
+      grouped.set(key, current);
+    }
+    result.push({
+      key: "annual_cleaning_area_by_group",
+      value: [...grouped.values()].sort((left, right) => left.group.localeCompare(right.group)).map(item => ({
+        group: item.group,
+        sourceArea: Number(item.sourceArea.toFixed(4)),
+        annualCleaningArea: Number(item.annualCleaningArea.toFixed(6)),
+        rows: item.rows,
+      })),
+      unit: "m²/Jahr je Reinigungsgruppe",
+      formula: "Gruppierte Summe der verifizierten Excel-Cachewerte Fläche in m² × Tage/Jahr",
+      evidence: evidence.map(item => ({ ...item, columns: { ...item.columns, cleaningGroup: groupColumn } })),
+    });
+  }
+  return result;
 }
 
 export function deriveCleaningRoomBookFacts(
