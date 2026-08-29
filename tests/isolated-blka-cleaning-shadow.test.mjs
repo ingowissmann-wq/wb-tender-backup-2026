@@ -20,6 +20,8 @@ test("BLKA grouped shadow binds the exact approved business values and base term
   assert.match(runner, /createGroupedPerformanceDecision/);
   assert.match(runner, /classification: "CASE_APPROVED"/);
   assert.match(runner, /groupedPerformanceDecision/);
+  assert.match(runner, /gitCommit: "d31ba4b3bed57944fa02a5e3a66769f3cd35e1f2"/);
+  assert.match(runner, /testEvidence: "tests\/grouped-performance\.test\.mjs"/);
   assert.doesNotMatch(runner, /calculateSectorTender/);
 });
 

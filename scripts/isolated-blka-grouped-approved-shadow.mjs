@@ -265,8 +265,8 @@ const snapshot = createCalculationContractSnapshot({
   ],
   ruleTypes: [{
     id: "cleaning-grouped-area-hours", version: 1,
-    gitCommit: "f862ceb69ee2ee73d3ba3af82c9bad5b7bbf73fc", status: "ACTIVE",
-    testEvidence: "tests/cleaning-grouped-performance.test.mjs",
+    gitCommit: "d31ba4b3bed57944fa02a5e3a66769f3cd35e1f2", status: "ACTIVE",
+    testEvidence: "tests/grouped-performance.test.mjs",
     shadowEvidence: "isolated-blka-grouped-approved-shadow",
     approvedBy: approvalIdentity,
   }],

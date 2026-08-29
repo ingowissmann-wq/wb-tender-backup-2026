@@ -254,7 +254,7 @@ const snapshot = createCalculationContractSnapshot({
   factRecords,
   ruleTypes: [{
     id: "cleaning-area-hours", version: 1,
-    gitCommit: "f862ceb69ee2ee73d3ba3af82c9bad5b7bbf73fc", status: "ACTIVE",
+    gitCommit: "d19a3d11a10fc3ced4fd0bcb28ff05ec1f8a1201", status: "ACTIVE",
     testEvidence: "tests/isolated-munich-cleaning-shadow.test.mjs",
     shadowEvidence: "isolated-munich-cleaning-shadow",
     approvedBy: approvalIdentity,

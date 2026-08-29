@@ -30,6 +30,8 @@ test("Munich shadow keeps C22 nonpersistent and binds C23 to the approved scope"
   assert.match(runner, /createCalculationContractSnapshot/);
   assert.match(runner, /executeCalculationContractSnapshot/);
   assert.match(runner, /VERIFIED_PROCUREMENT_DOCUMENT_SET/);
+  assert.match(runner, /gitCommit: "d19a3d11a10fc3ced4fd0bcb28ff05ec1f8a1201"/);
+  assert.match(runner, /testEvidence: "tests\/isolated-munich-cleaning-shadow\.test\.mjs"/);
   assert.doesNotMatch(runner, /calculateSectorTender/);
   assert.doesNotMatch(runner, /INSERT INTO|UPDATE tender\.|DELETE FROM/);
 });
