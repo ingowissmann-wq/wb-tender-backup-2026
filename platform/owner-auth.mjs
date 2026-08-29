@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import QRCode from "qrcode";
 
 const scryptAsync = promisify(crypto.scrypt);
-const TARGET_EMAIL = "admin@wb-tender.de";
+const DEFAULT_OWNER_EMAIL = "admin@wb-tender.de";
 const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const PASSWORD_N = 65536;
 const PASSWORD_R = 8;
@@ -89,13 +89,22 @@ function generateTotpSecret() {
   return result;
 }
 
-export function totpEnrollmentUri(secret, email = TARGET_EMAIL) {
+export function configuredOwnerEmail() {
+  if (process.env.OWNER_EMAIL) throw new Error("inline_owner_email_forbidden");
+  const path = process.env.OWNER_EMAIL_FILE;
+  const value = path ? readFileSync(path, "utf8").trim().toLowerCase() : DEFAULT_OWNER_EMAIL;
+  if (value.length > 254 || !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(value))
+    throw new Error("owner_email_invalid");
+  return value;
+}
+
+export function totpEnrollmentUri(secret, email = DEFAULT_OWNER_EMAIL) {
   if (!/^[A-Z2-7]{32}$/.test(String(secret || ""))) throw new Error("invalid_totp_enrollment_secret");
   const issuer = "WB Tender";
   return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(String(email).toLowerCase())}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
 }
 
-export async function mfaEnrollmentPayload(secret, email = TARGET_EMAIL) {
+export async function mfaEnrollmentPayload(secret, email = DEFAULT_OWNER_EMAIL) {
   const uri = totpEnrollmentUri(secret, email);
   const qrCodeDataUrl = await QRCode.toDataURL(uri, {
     errorCorrectionLevel: "M",
@@ -151,14 +160,15 @@ const authJs = `(()=>{
   mfa.onsubmit=async event=>{event.preventDefault();const body=new FormData(mfa);try{event.submitter.disabled=true;const data=await post("/mfa",{challenge,code:body.get("code")});if(data.recoveryCodes){mfa.classList.add("hidden");document.querySelector("#recovery").classList.remove("hidden");document.querySelector("#codes").textContent=data.recoveryCodes.join("\\n");document.querySelector("#continue").onclick=()=>location.assign(target);show("Zwei-Faktor-Authentifizierung ist aktiv. Bewahren Sie die Einmal-Wiederherstellungscodes sicher auf.")}else location.assign(target)}catch(error){show(error.message,true)}finally{if(event.submitter)event.submitter.disabled=false}};
 })();`;
 
-function page(mode, uiBase) {
+function page(mode, uiBase, targetEmail) {
   const first = mode === "first";
   const firstForm = `<form><label>Neues Passwort<input name="password" type="password" minlength="14" maxlength="256" autocomplete="new-password" required></label><label>Passwort bestätigen<input name="confirmation" type="password" minlength="14" maxlength="256" autocomplete="new-password" required></label><button type="submit">Passwort sicher speichern</button></form><a id="login-link" class="button hidden" href="${uiBase}/login">Zur Anmeldung</a>`;
-  const loginForm = `<form id="login-form"><label>E-Mail<input name="email" type="email" maxlength="254" autocomplete="username" value="${TARGET_EMAIL}" required></label><label>Passwort<input name="password" type="password" minlength="14" maxlength="256" autocomplete="current-password" required></label><button type="submit">Weiter</button></form><form id="mfa-form" class="hidden"><section id="setup" class="hidden"><p>Öffnen Sie Ihre Authenticator-App und scannen Sie diesen QR-Code. Eine Sitzung entsteht erst nach erfolgreicher Prüfung des sechsstelligen Codes.</p><img id="qr" class="qr hidden" width="256" height="256" alt=""><details><summary>Manuellen Einrichtungsschlüssel anzeigen</summary><p>Nur verwenden, wenn Ihre Authenticator-App keinen QR-Code scannen kann.</p><p id="secret" class="secret"></p></details></section><label>Sechsstelliger Authenticator- oder Wiederherstellungscode<input name="code" minlength="6" maxlength="64" inputmode="numeric" autocomplete="one-time-code" required></label><button type="submit">Sicher anmelden</button></form><section id="recovery" class="hidden"><h2>Wiederherstellungscodes</h2><p>Jeder Code ist nur einmal verwendbar.</p><pre id="codes" class="codes"></pre><button id="continue" type="button">Zum Tender-System</button></section>`;
+  const loginForm = `<form id="login-form"><label>E-Mail<input name="email" type="email" maxlength="254" autocomplete="username" value="${targetEmail}" required></label><label>Passwort<input name="password" type="password" minlength="14" maxlength="256" autocomplete="current-password" required></label><button type="submit">Weiter</button></form><form id="mfa-form" class="hidden"><section id="setup" class="hidden"><p>Öffnen Sie Ihre Authenticator-App und scannen Sie diesen QR-Code. Eine Sitzung entsteht erst nach erfolgreicher Prüfung des sechsstelligen Codes.</p><img id="qr" class="qr hidden" width="256" height="256" alt=""><details><summary>Manuellen Einrichtungsschlüssel anzeigen</summary><p>Nur verwenden, wenn Ihre Authenticator-App keinen QR-Code scannen kann.</p><p id="secret" class="secret"></p></details></section><label>Sechsstelliger Authenticator- oder Wiederherstellungscode<input name="code" minlength="6" maxlength="64" inputmode="numeric" autocomplete="one-time-code" required></label><button type="submit">Sicher anmelden</button></form><section id="recovery" class="hidden"><h2>Wiederherstellungscodes</h2><p>Jeder Code ist nur einmal verwendbar.</p><pre id="codes" class="codes"></pre><button id="continue" type="button">Zum Tender-System</button></section>`;
   return `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>${first ? "Erster Zugang" : "Anmeldung"} · WB Tender</title><link rel="stylesheet" href="${uiBase}/auth.css"><script src="${uiBase}/auth.js" defer></script></head><body data-mode="${mode}"><main class="panel"><h1>${first ? "Sicheren Zugang einrichten" : "WB Tender anmelden"}</h1><p class="muted">Geschützter Eigentümerzugang. Externe Angebotsabgaben bleiben technisch gesperrt.</p><p id="status" class="muted" aria-live="polite">${first ? "Legen Sie jetzt Ihr persönliches Passwort fest." : "Melden Sie sich mit Ihrem persönlichen Passwort an."}</p>${first ? firstForm : loginForm}</main></body></html>`;
 }
 
 export function registerOwnerAuth(app, { pool, authenticate, csrf, uiBase, apiBase, sessionPepper }) {
+  const targetEmail = configuredOwnerEmail();
   const hmac = (value) => crypto.createHmac("sha256", sessionPepper).update(value).digest("hex");
   let expectedOrigin;
   try {
@@ -183,19 +193,19 @@ export function registerOwnerAuth(app, { pool, authenticate, csrf, uiBase, apiBa
   };
   const browserAuth = { config: { browserAuth: true }, preHandler: null };
 
-  app.get("/login", async (_, reply) => reply.type("text/html").send(page("login", uiBase)));
-  app.get("/first-login", async (_, reply) => reply.type("text/html").send(page("first", uiBase)));
+  app.get("/login", async (_, reply) => reply.type("text/html").send(page("login", uiBase, targetEmail)));
+  app.get("/first-login", async (_, reply) => reply.type("text/html").send(page("first", uiBase, targetEmail)));
   app.get("/auth.css", async (_, reply) => reply.type("text/css").send(authCss));
   app.get("/auth.js", async (_, reply) => reply.type("text/javascript").send(authJs));
 
   app.post("/api/auth/first-login", { preHandler: origin, config: { rateLimit: { max: 5, timeWindow: "1 hour" } } }, async (req, reply) => {
     const { token: rawToken, password, confirmation } = req.body || {};
-    if (typeof rawToken !== "string" || rawToken.length < 32 || rawToken.length > 512 || typeof password !== "string" || password.length < 14 || password.length > 256 || password !== confirmation || password.toLowerCase().includes("admin@wb-tender.de"))
+    if (typeof rawToken !== "string" || rawToken.length < 32 || rawToken.length > 512 || typeof password !== "string" || password.length < 14 || password.length > 256 || password !== confirmation || password.toLowerCase().includes(targetEmail))
       return reply.code(400).send({ error: "invalid_request", message: "Token ungültig oder Passwortanforderungen nicht erfüllt." });
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      const reset = (await client.query("SELECT t.user_id FROM iam.password_reset_tokens t JOIN iam.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.used_at IS NULL AND t.expires_at>now() AND lower(u.email)=$2 AND u.active=true FOR UPDATE", [hmac(rawToken), TARGET_EMAIL])).rows[0];
+      const reset = (await client.query("SELECT t.user_id FROM iam.password_reset_tokens t JOIN iam.users u ON u.id=t.user_id WHERE t.token_hash=$1 AND t.used_at IS NULL AND t.expires_at>now() AND lower(u.email)=$2 AND u.active=true FOR UPDATE", [hmac(rawToken), targetEmail])).rows[0];
       if (!reset) {
         await client.query("ROLLBACK");
         return reply.code(400).send({ error: "invalid_or_expired_token", message: "Der Einmallink ist ungültig oder abgelaufen." });
@@ -218,7 +228,7 @@ export function registerOwnerAuth(app, { pool, authenticate, csrf, uiBase, apiBa
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
     const accountHash = sha256(email), networkHash = sha256(ipPrefix(req.ip));
-    if (email !== TARGET_EMAIL || password.length < 14 || password.length > 256)
+    if (email !== targetEmail || password.length < 14 || password.length > 256)
       return reply.code(401).send({ error: "invalid_credentials" });
     const failures = await pool.query("SELECT count(*)::int count FROM iam.login_attempts WHERE account_hash=$1 AND network_hash=$2 AND success=false AND created_at>now()-interval '15 minutes'", [accountHash, networkHash]);
     if (Number(failures.rows[0]?.count || 0) >= 8)
@@ -275,7 +285,7 @@ export function registerOwnerAuth(app, { pool, authenticate, csrf, uiBase, apiBa
         valid = Boolean((await client.query("UPDATE iam.recovery_codes SET used_at=now() WHERE user_id=$1 AND code_hash=$2 AND used_at IS NULL RETURNING id", [user.id, hmac(supplied)])).rowCount);
       }
       if (!valid) {
-        await client.query("INSERT INTO iam.login_attempts(account_hash,network_hash,success) VALUES($1,$2,false)", [sha256(user?.email?.toLowerCase() || TARGET_EMAIL), challenge.network_hash]);
+        await client.query("INSERT INTO iam.login_attempts(account_hash,network_hash,success) VALUES($1,$2,false)", [sha256(user?.email?.toLowerCase() || targetEmail), challenge.network_hash]);
         await client.query("COMMIT");
         return reply.code(401).send({ error: "invalid_mfa" });
       }

@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  configuredOwnerEmail,
   currentTotp,
   mfaEnrollmentPayload,
   passwordHash,
@@ -59,6 +60,24 @@ test("owner enrollment UI prefers QR scanning and keeps the long secret behind a
   assert.match(source, /data\.qrCodeDataUrl/);
   assert.match(source, /Scannen Sie den QR-Code/);
   assert.doesNotMatch(source, /id="uri"/);
+});
+
+test("owner identity is file-configured for a restored IAM without changing credentials", async () => {
+  const directory=await mkdtemp(path.join(os.tmpdir(),"wb-owner-email-"));
+  const emailFile=path.join(directory,"owner-email");
+  const previousFile=process.env.OWNER_EMAIL_FILE,previousInline=process.env.OWNER_EMAIL;
+  try {
+    await writeFile(emailFile,"Admin@WB-Holding.AG\n",{mode:0o600});
+    process.env.OWNER_EMAIL_FILE=emailFile;
+    delete process.env.OWNER_EMAIL;
+    assert.equal(configuredOwnerEmail(),"admin@wb-holding.ag");
+    process.env.OWNER_EMAIL="admin@wb-tender.de";
+    assert.throws(()=>configuredOwnerEmail(),/inline_owner_email_forbidden/);
+  } finally {
+    if(previousFile===undefined)delete process.env.OWNER_EMAIL_FILE;else process.env.OWNER_EMAIL_FILE=previousFile;
+    if(previousInline===undefined)delete process.env.OWNER_EMAIL;else process.env.OWNER_EMAIL=previousInline;
+    await rm(directory,{recursive:true,force:true});
+  }
 });
 
 test("owner routes accept a configured canonical HTTPS origin without hardcoding a tenant domain", async () => {
@@ -143,6 +162,8 @@ test("server integrates owner auth without replacing the reconstructed productio
 test("bootstrap is fail-closed and reads secrets only from files", async () => {
   const bootstrap = await readFile(new URL("../platform/bootstrap-owner.mjs", import.meta.url), "utf8");
   assert.match(bootstrap, /process\.env\[`\$\{name\}_FILE`\]/);
+  assert.match(bootstrap, /configuredOwnerEmail/);
+  assert.match(bootstrap, /ownerEmail/);
   assert.match(bootstrap, /bootstrap_refuses_nonempty_iam/);
   assert.match(bootstrap, /UPDATE iam\.password_reset_tokens SET used_at=now\(\)/);
   assert.doesNotMatch(bootstrap, /postgres(?:ql)?:\/\//i);
