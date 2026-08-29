@@ -37,6 +37,10 @@ const expected = Object.freeze({
   monthlyHours: 60.55,
   fteAnnualHours: 1670,
   fte: 0.44,
+  material: 1453.19,
+  totalPrice: 102572.2,
+  hourlyRate: 35.29,
+  annualPrice: 25643.05,
 });
 
 const exact = (actual, wanted, label) => {
@@ -70,6 +74,14 @@ exact(Number(c23.new_value), expected.fteAnnualHours, "C23 value");
 exact(c23.unit, "HOURS_PER_YEAR", "C23 unit");
 if (!c23.approved_by || !c23.approved_at || !c23.activated_at)
   throw new Error("C23 approval/activation provenance is incomplete");
+
+const c11Rows = parameterRows.filter(row => row.parameter_key === "C11");
+if (c11Rows.length !== 1) throw new Error(`expected exactly one C11 row, found ${c11Rows.length}`);
+const c11 = c11Rows[0];
+exact(Number(c11.new_value), 0.5, "C11 value");
+exact(c11.unit, "EUR_PER_HOUR", "C11 unit");
+if (!c11.approved_by || !c11.approved_at || !c11.activated_at)
+  throw new Error("C11 approval/activation provenance is incomplete");
 
 const authoritative = selectLotAuthoritativeDocuments(
   documents,
@@ -170,21 +182,21 @@ const calculation = calculateSectorTender({
 
 exact(
   calculation.status,
-  "CALCULATION_BLOCKED_MISSING_INPUT",
+  "CALCULATED",
   "calculation status",
 );
-exact(
-  calculation.missing?.length,
-  1,
-  "commercial calculation blocker count",
-);
-exact(
-  calculation.missing?.[0],
-  "C11 Bezugsmenge für EUR_PER_UNIT",
-  "commercial calculation blocker",
-);
-exact(calculation.missingDetails?.[0]?.parameterKey, "C11", "blocker parameter");
-exact(calculation.missingDetails?.[0]?.unit, "EUR_PER_UNIT", "blocker unit");
+exact(calculation.schemaVersion, 5, "calculation schema version");
+exact(calculation.productiveHours, expected.productiveHours, "calculated productive hours");
+exact(calculation.hoursPerYear, expected.annualHours, "calculated annual hours");
+exact(calculation.hoursPerMonth, expected.monthlyHours, "calculated monthly hours");
+exact(calculation.fteAnnualHours, expected.fteAnnualHours, "calculated C23");
+exact(calculation.fte, expected.fte, "calculated FTE");
+exact(calculation.material, expected.material, "calculated C11 material cost");
+exact(calculation.totalPrice, expected.totalPrice, "calculated contract price");
+exact(calculation.hourlyRate, expected.hourlyRate, "calculated hourly rate");
+exact(calculation.annualPrice, expected.annualPrice, "calculated annual price");
+if (calculation.unappliedConditionalCosts?.map(item => item.parameterKey).join(",") !== "C13,C14")
+  throw new Error(`conditional cost disclosure mismatch: ${JSON.stringify(calculation.unappliedConditionalCosts)}`);
 exact(calculation.externalTransmission, false, "external transmission");
 
 const management = buildManagementOutput({
@@ -201,7 +213,7 @@ const management = buildManagementOutput({
   },
   documentRevision: metadata.lot.enrichmentVersion,
   calculation,
-  missing: calculation.missingDetails,
+  missing: [],
   jobId: null,
   correlationId: "read-only-munich-cleaning-shadow",
   now: metadata.shadowTimestamp,
@@ -209,12 +221,12 @@ const management = buildManagementOutput({
 
 exact(
   management.status,
-  "NICHT_KALKULIERBAR_FEHLENDE_TENDERUNTERLAGEN",
+  "MANAGEMENT_OUTPUT_GENERATED",
   "management status",
 );
 exact(
   management.recommendation?.decision,
-  "NICHT_ANGEBOTSFÄHIG",
+  "CONDITIONAL_GO",
   "management recommendation",
 );
 exact(management.externalTransmission, false, "management external transmission");
@@ -260,16 +272,23 @@ console.log(JSON.stringify({
     C23Unit: c23.unit,
     C23Version: c23.version_no,
     C23ApprovedBy: c23.approved_by,
+    C11: Number(c11.new_value),
+    C11Unit: c11.unit,
+    C11Version: c11.version_no,
+    C11ApprovedBy: c11.approved_by,
   },
   calculation: {
     status: calculation.status,
-    blocker: calculation.missing[0],
-    blockerDetail: calculation.missingDetails[0],
     workforceStatus: "WORKFORCE_VALUES_VERIFIED",
     productiveHours: workforce.productiveHours,
     annualHours: workforce.annualHours,
     monthlyHours: workforce.monthlyHours,
     fte: workforce.fte,
+    material: calculation.material,
+    totalPrice: calculation.totalPrice,
+    hourlyRate: calculation.hourlyRate,
+    annualPrice: calculation.annualPrice,
+    unappliedConditionalCosts: calculation.unappliedConditionalCosts,
     calculationHash: calculation.calculationHash,
     externalTransmission: calculation.externalTransmission,
   },

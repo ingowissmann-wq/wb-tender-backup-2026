@@ -31,7 +31,8 @@ fingerprint() {
     (SELECT count(*) FROM tender.calculation_input_snapshots),
     (SELECT count(*) FROM tender.configuration_active_parameters),
     (SELECT count(*) FROM tender.external_action_receipts),
-    (SELECT count(*) FROM app.schema_migrations WHERE version='0155-c23-canonical-calculation-contract')
+    (SELECT count(*) FROM app.schema_migrations WHERE version='0155-c23-canonical-calculation-contract'),
+    (SELECT count(*) FROM app.schema_migrations WHERE version='0156-c11-hourly-material-contract')
   )"
 }
 
@@ -53,6 +54,7 @@ published=$(docker inspect -f '{{range $port,$bindings := .NetworkSettings.Ports
 test -z "$published" || fail "restore clone publishes host ports: $published"
 docker inspect -f 'container={{.Name}} image={{.Config.Image}} networks={{range $name,$value := .NetworkSettings.Networks}}{{$name}} {{end}}mounts={{range .Mounts}}{{.Type}}:{{.Name}}:{{.Destination}} {{end}}' "$container"
 test "$(scalar "SELECT count(*) FROM app.schema_migrations WHERE version='0155-c23-canonical-calculation-contract'")" = 1 || fail "migration 155 candidate state is absent"
+test "$(scalar "SELECT count(*) FROM app.schema_migrations WHERE version='0156-c11-hourly-material-contract'")" = 1 || fail "migration 156 candidate state is absent"
 
 source_chain=$(scalar "SELECT count(*) FROM tender.tenders source JOIN tender.current_service_relevance relevance ON relevance.tender_id=source.id AND relevance.company_id='$company_id'::uuid AND relevance.service_line='cleaning' AND relevance.lot_key='$lot_key' JOIN tender.lots lot ON lot.id='$lot_id'::uuid AND lot.tender_id=source.id AND lot.external_id=relevance.lot_key JOIN tender.enrichment_context_bindings binding ON binding.tender_id=source.id AND binding.company_id=relevance.company_id AND binding.lot_id=lot.id AND binding.source_lot_id=relevance.lot_key AND binding.enrichment_version_id='$enrichment_version'::uuid WHERE source.id='$tender_id'::uuid AND source.external_id='552392-2026' AND source.source_lifecycle_status='ACTIVE' AND relevance.relevance_status='RELEVANT' AND relevance.service_scope_gate='PASSED' AND relevance.primary_company=true")
 test "$source_chain" = 1 || fail "exact Munich source chain is not unique: $source_chain"
@@ -65,6 +67,9 @@ test "$c22_count" = 0 || fail "C22 is persisted although only case-scoped shadow
 
 c23_count=$(scalar "SELECT count(*) FROM tender.configuration_active_parameters active JOIN tender.configuration_changes change ON change.id=active.change_id JOIN tender.configuration_versions version ON version.id=active.version_id WHERE active.company_id='$company_id'::uuid AND active.service_line='cleaning' AND active.parameter_key='C23' AND change.new_value='1670'::jsonb AND change.unit='HOURS_PER_YEAR' AND version.status='ACTIVE' AND version.approved_by IS NOT NULL AND version.approved_at IS NOT NULL AND change.valid_from<=current_date AND (change.valid_until IS NULL OR change.valid_until>=current_date)")
 test "$c23_count" = 1 || fail "approved exact-scope C23=1670 is not unique: rows=$c23_count"
+
+c11_count=$(scalar "SELECT count(*) FROM tender.configuration_active_parameters active JOIN tender.configuration_changes change ON change.id=active.change_id JOIN tender.configuration_versions version ON version.id=active.version_id WHERE active.company_id='$company_id'::uuid AND active.service_line='cleaning' AND active.parameter_key='C11' AND change.new_value='0.5'::jsonb AND change.unit='EUR_PER_HOUR' AND change.source='Vorstandsfreigabe Dr. Ingo Wissmann vom 29.08.2026' AND version.status='ACTIVE' AND version.approved_by='fe93f980-5699-44f4-ad41-69d254dcaa9f'::uuid AND version.approved_at IS NOT NULL AND change.valid_from='2026-08-29'::date AND change.valid_until IS NULL")
+test "$c11_count" = 1 || fail "approved exact-scope C11=0.50 EUR_PER_HOUR is not unique: rows=$c11_count"
 
 before=$(fingerprint)
 printf 'before_fingerprint=%s\n' "$before"
@@ -217,4 +222,5 @@ printf 'after_fingerprint=%s\n' "$after"
 test "$before" = "$after" || fail "protected clone fingerprint changed"
 printf 'persisted_C22_rows=%s\n' "$c22_count"
 printf 'approved_C23_rows=%s\n' "$c23_count"
-printf 'PASS: Munich Cleaning schema-5 shadow matched all accepted operational values; C22 remained case-scoped and nonpersistent, C23 came from the approved exact scope, management output stayed internal, and the isolated clone remained unchanged.\n'
+printf 'approved_C11_rows=%s\n' "$c11_count"
+printf 'PASS: Munich Cleaning schema-5 shadow matched all accepted workforce and C11 values; C22 remained case-scoped and nonpersistent, C23 and C11 came from approved exact scopes, conditional C13/C14 omissions stayed explicit, management output stayed internal, and the isolated clone remained unchanged.\n'

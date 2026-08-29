@@ -30,17 +30,29 @@ test("Munich shadow keeps C22 nonpersistent and binds C23 to the approved scope"
   assert.doesNotMatch(runner, /INSERT INTO|UPDATE tender\.|DELETE FROM/);
 });
 
-test("Munich shadow verifies workforce values and blocks ambiguous C11 commercial pricing", () => {
+test("Munich shadow verifies workforce values and the exact approved hourly C11 price", () => {
   for (const marker of [
     "productiveHours: 2906.38",
     "annualHours: 726.59",
     "monthlyHours: 60.55",
     "fte: 0.44",
-    '"C11 Bezugsmenge für EUR_PER_UNIT"',
-    '"CALCULATION_BLOCKED_MISSING_INPUT"',
-    '"NICHT_ANGEBOTSFÄHIG"',
+    'material: 1453.19',
+    'totalPrice: 102572.2',
+    'hourlyRate: 35.29',
+    'annualPrice: 25643.05',
+    '"CALCULATED"',
+    '"MANAGEMENT_OUTPUT_GENERATED"',
+    '"CONDITIONAL_GO"',
+    '"C13,C14"',
     'workforceStatus: "WORKFORCE_VALUES_VERIFIED"',
     'exact(calculation.externalTransmission, false',
     'exact(management.externalTransmission, false',
   ]) assert.ok(runner.includes(marker), `missing gate: ${marker}`);
+});
+
+test("Munich replay requires exact approved C11 and migration 156", () => {
+  assert.match(script, /0156-c11-hourly-material-contract/);
+  assert.match(script, /approved exact-scope C11=0\.50 EUR_PER_HOUR/);
+  assert.match(runner, /exact\(c11\.unit, "EUR_PER_HOUR"/);
+  assert.match(runner, /C11 approval\/activation provenance is incomplete/);
 });

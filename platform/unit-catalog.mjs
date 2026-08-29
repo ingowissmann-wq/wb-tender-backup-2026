@@ -39,7 +39,7 @@ export const parameterUnitRules=Object.freeze({
  C08:rule("C08","Verwaltungskosten",["PERCENT","EUR"]),
  C09:rule("C09","Objektleitung",["EUR_PER_HOUR","PERCENT"]),
  C10:rule("C10","Einsatzleitung",["EUR_PER_HOUR","PERCENT"]),
- C11:rule("C11","Material",["EUR_PER_UNIT","EUR_PER_OBJECT"]),
+ C11:rule("C11","Material",["EUR_PER_UNIT","EUR_PER_OBJECT","EUR_PER_HOUR"]),
  C12:rule("C12","Geräte",["EUR_PER_HOUR","EUR_PER_MONTH"]),
  C13:rule("C13","Fahrzeuge",["EUR_PER_KM","EUR_PER_HOUR","EUR_PER_MONTH"]),
  C14:rule("C14","Fahrtkosten",["EUR_PER_KM","EUR_PER_HOUR"]),
