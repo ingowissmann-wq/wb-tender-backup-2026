@@ -166,7 +166,7 @@ test("deterministic derivations bind their exact versioned rule and evidenced in
   };
   const productiveHours = {
     key: "productiveHours", value: 28023.66, unit: "HOURS", scope, classification: "DETERMINISTIC_DERIVED",
-    source: {type: "DETERMINISTIC_DERIVATION", ruleTypeId: "cleaning-area-hours", ruleVersion: 1, inputFactKeys: ["annualCleaningArea", "cleaningPerformance", "duration"]},
+    source: {type: "DETERMINISTIC_DERIVATION", ruleTypeId: "cleaning-area-hours", ruleVersion: 1, inputFactKeys: ["annualCleaningArea", "cleaningPerformance", "duration"], inputParameterKeys: ["C23"]},
   };
   const validation = validateCalculationContractInput({
     scope, engineInput, documentFingerprints, parameterRecords, ruleTypes,

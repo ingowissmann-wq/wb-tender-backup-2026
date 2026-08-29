@@ -39,6 +39,11 @@ const BLOCKING_FACT_CLASSIFICATIONS = new Set([
   CALCULATION_FACT_CLASSIFICATIONS.MISSING_INPUT,
   CALCULATION_FACT_CLASSIFICATIONS.OUTSIDE_ALLOWED_RANGE,
 ]);
+const BLOCKING_REASON_CLASSIFICATIONS = new Set([
+  CALCULATION_FACT_CLASSIFICATIONS.CONFLICTING_EVIDENCE,
+  CALCULATION_FACT_CLASSIFICATIONS.MISSING_INPUT,
+  CALCULATION_FACT_CLASSIFICATIONS.OUTSIDE_ALLOWED_RANGE,
+]);
 
 const stable = value => {
   if (Array.isArray(value)) return value.map(stable);
@@ -108,6 +113,19 @@ export function validateCalculationContractInput(input = {}) {
   }
   if (!Object.values(CALCULATION_CONTRACT_STATES).includes(state))
     errors.push({code: "UNKNOWN_CONTRACT_STATE", state});
+
+  const blockingReasons = Array.isArray(input.blockingReasons) ? input.blockingReasons : [];
+  if (EXECUTABLE_STATES.has(state) && blockingReasons.length)
+    errors.push({code: "EXECUTABLE_CONTRACT_HAS_BLOCKERS"});
+  if (state === CALCULATION_CONTRACT_STATES.QUARANTINED && !blockingReasons.length)
+    errors.push({code: "QUARANTINED_CONTRACT_REQUIRES_BLOCKER"});
+  for (const blocker of blockingReasons) {
+    if (!supplied(blocker?.key)) errors.push({code: "BLOCKING_REASON_KEY_MISSING"});
+    if (!BLOCKING_REASON_CLASSIFICATIONS.has(blocker?.classification))
+      errors.push({code: "BLOCKING_REASON_CLASSIFICATION_INVALID", key: blocker?.key || null});
+    if (![blocker?.reason, blocker?.nextAction].every(supplied))
+      errors.push({code: "BLOCKING_REASON_ACTION_INCOMPLETE", key: blocker?.key || null});
+  }
 
   const evidenceByKey = new Map();
   for (const record of input.factRecords || []) {
@@ -202,6 +220,12 @@ export function validateCalculationContractInput(input = {}) {
     if (supplied(engineUnit) && String(record.unit || "").toUpperCase() !== String(engineUnit).toUpperCase())
       errors.push({code: "PARAMETER_UNIT_EVIDENCE_MISMATCH", parameterKey: key});
   }
+  for (const record of input.factRecords || []) {
+    if (record?.source?.type !== DERIVATION_SOURCE) continue;
+    for (const parameterKey of record.source.inputParameterKeys || [])
+      if (!parameterRecords.has(String(parameterKey)))
+        errors.push({code: "DERIVATION_INPUT_PARAMETER_EVIDENCE_MISSING", fact: record.key, parameterKey});
+  }
   return immutable({valid: errors.length === 0, errors});
 }
 
@@ -225,6 +249,7 @@ export function createCalculationContractSnapshot(input = {}) {
     parameterRecords: input.parameterRecords || [],
     documentFingerprints: input.documentFingerprints || [],
     ruleTypes: input.ruleTypes || [],
+    blockingReasons: input.blockingReasons || [],
   });
   return immutable({...body, snapshotSha256: snapshotHash(body)});
 }

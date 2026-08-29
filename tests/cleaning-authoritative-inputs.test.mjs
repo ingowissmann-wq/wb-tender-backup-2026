@@ -19,15 +19,17 @@ test("Cleaning sends only authoritative derived area to the pricing engine", () 
   assert.match(worker, /fact\.key === "areas"/);
   assert.match(
     worker,
-    /item\.service_scope === "cleaning"\s*\? Number\.isFinite\(derivedCleaningArea\)/,
+    /addDocumentFact\("areas", derivedCleaningArea, "SQUARE_METRES", areaFact\)/,
   );
+  assert.match(worker, /Fact lacks an exact document hash and page, worksheet, row or cell locator/);
 });
 
 test("Cleaning never treats generic free-text quantities as a cost quantity", () => {
-  assert.match(
-    worker,
-    /unitCount:\s*item\.service_scope === "cleaning"\s*\? null\s*:\s*valueFor\(result\.review\.scope, "Mengen"\)/,
+  const contract = worker.slice(
+    worker.indexOf("const scope = {", worker.indexOf("async function persistCalculation")),
+    worker.indexOf("contractExecution = runPipelineCalculationContract"),
   );
+  assert.doesNotMatch(contract, /unitCount|valueFor\(result\.review\.scope, "Mengen"\)/);
 });
 
 test("Cleaning C22 requires active approved exact-scope configuration", () => {

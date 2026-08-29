@@ -61,8 +61,8 @@ import {
 } from "./effective-company-profile.mjs";
 import {
   buildManagementOutput,
-  calculateSectorTender,
 } from "./sector-calculation.mjs";
+import {runPipelineCalculationContract} from "./pipeline-calculation-contract.mjs";
 import { deriveRibSecurityLvFacts } from "./rib-security-lv.mjs";
 import {
   deriveCleaningContractFacts,
@@ -81,6 +81,39 @@ process.env.PORTAL_CREDENTIAL_KEY_FILE ||=
 export const PIPELINE_VERSION =
   "wb-full-autopilot/6.4.0-direct-eforms-lot-identity";
 const json = (value) => JSON.stringify(value ?? null).replaceAll("\\u0000", "");
+const contractLocation = evidence => {
+  const page = Number(evidence?.page);
+  if (Number.isInteger(page) && page > 0) return {page};
+  const worksheet = evidence?.worksheet ?? evidence?.table;
+  const row = Number(evidence?.row);
+  const rowStart = Number(evidence?.firstIncludedRow ?? evidence?.rowStart);
+  const rowEnd = Number(evidence?.lastIncludedRow ?? evidence?.rowEnd);
+  const cell = evidence?.cell ?? evidence?.areaCell ?? evidence?.annualCell;
+  if (!worksheet) return null;
+  const location = {worksheet};
+  if (Number.isInteger(row) && row > 0) location.row = row;
+  if (Number.isInteger(rowStart) && rowStart > 0 && Number.isInteger(rowEnd) && rowEnd >= rowStart) {
+    location.rowStart = rowStart;
+    location.rowEnd = rowEnd;
+  }
+  if (cell) location.cell = cell;
+  return location.row || location.rowStart || location.cell ? location : null;
+};
+const contractDocumentEvidence = fact => (fact?.evidence || []).map(evidence => ({
+  documentId: evidence.documentId,
+  documentSha256: String(evidence.sha256 ?? evidence.hash ?? "").toLowerCase(),
+  location: contractLocation(evidence),
+}));
+const exactDocumentFactRecord = ({key, value, unit, scope, fact}) => {
+  const evidence = contractDocumentEvidence(fact);
+  if (!evidence.length || evidence.some(item => !item.documentId || !/^[a-f0-9]{64}$/.test(item.documentSha256) || !item.location))
+    return null;
+  return {
+    key, value, unit, scope,
+    classification: "DOCUMENT_VERIFIED",
+    source: {type: "VERIFIED_PROCUREMENT_DOCUMENT_SET", evidence},
+  };
+};
 const canonicalJson = (value) =>
   JSON.stringify(
     value && typeof value === "object"
@@ -4579,57 +4612,6 @@ async function persistCalculation(pool, item, tender, enrichment) {
       ? "MISSING_COMPANY_PARAMETER"
       : "MISSING_TENDER_INFORMATION",
   }));
-  calculationInput.snapshotId = crypto
-    .createHash("sha256")
-    .update(
-      json({
-        profileSnapshotId,
-        values: calculationInput.values,
-        provenance: calculationInput.provenance,
-        missing: calculationInput.missing,
-        explicitInputs: explicitInputRows.map((row) => ({
-          id: row.id,
-          fieldKey: row.field_key,
-          version: row.version,
-        })),
-      }),
-    )
-    .digest("hex");
-  const inputRow = (
-    await pool.query(
-      `INSERT INTO tender.calculation_input_snapshots(tenant_id,tender_id,lot_key,company_id,profile_snapshot_id,schema_version,snapshot_sha256,parameters,provenance,missing_inputs)
-       VALUES((SELECT tenant_id FROM saas.legacy_company_tenant_bindings WHERE company_id=$3),$1,$2,$3,$4,1,$5,$6::jsonb,$7::jsonb,$8::jsonb)
-       ON CONFLICT(tender_id,lot_key,company_id,snapshot_sha256) DO UPDATE SET provenance=excluded.provenance RETURNING id`,
-      [
-        tender.id,
-        item.lot_key || "",
-        item.company_id,
-        profileSnapshotId,
-        calculationInput.snapshotId,
-        json(calculationInput.values),
-        json({
-          ...calculationInput.provenance,
-          contractDuration: derivedDuration
-            ? {
-                source: "VERIFIED_PROCUREMENT_DOCUMENT",
-                value: derivedDuration.value,
-                unit: derivedDuration.unit,
-                evidence: derivedDuration.evidence,
-              }
-            : null,
-          explicitUserInputs: explicitInputRows.map((row) => ({
-            id: row.id,
-            fieldKey: row.field_key,
-            version: row.version,
-            unit: row.unit,
-            createdAt: row.created_at,
-            createdBy: row.created_by,
-          })),
-        }),
-        json(calculationInput.missing),
-      ],
-    )
-  ).rows[0];
   const suppliedHours =
     (Number.isFinite(explicitHours) && explicitHours > 0
       ? explicitHours
@@ -4645,164 +4627,244 @@ async function persistCalculation(pool, item, tender, enrichment) {
       : result.review.calculation?.neededHours ??
         valueFor(result.review.scope, "Produktivstunden") ??
         valueFor(result.review.scope, "Leistungsstunden"));
-  const engineResult = calculateSectorTender({
-    serviceArea: item.service_scope,
-    parameters: {
+  const canonicalLot = (
+      await pool.query(
+        "SELECT id FROM tender.lots WHERE id=$1 AND tender_id=$2",
+        [item.lot_id, tender.id],
+      )
+    ).rows[0] || null,
+    tenantBinding = (
+      await pool.query(
+        "SELECT tenant_id FROM saas.legacy_company_tenant_bindings WHERE company_id=$1",
+        [item.company_id],
+      )
+    ).rows;
+  if (tenantBinding.length !== 1)
+    throw Object.assign(Error("authoritative company tenant binding is not unique"), {
+      code: "CALCULATION_TENANT_SCOPE_NOT_UNIQUE",
+    });
+  const scope = {
+      tenantId: tenantBinding[0].tenant_id,
+      companyId: item.company_id,
+      tenderId: tender.id,
+      lotId: canonicalLot?.id || null,
+      lotKey: item.lot_key || "",
+    },
+    rawParameters = {
       ...(result.review.calculation?.parameters || {}),
       ...securityCosts,
-      ...(workforceCapacityRow
-        ? { C23: Number(workforceCapacityRow.new_value) }
-        : {}),
-      ...(cleaningPerformanceRow
-        ? { C22: cleaningPerformance }
-        : {}),
+      ...(workforceCapacityRow ? {C23: Number(workforceCapacityRow.new_value)} : {}),
+      ...(cleaningPerformanceRow ? {C22: cleaningPerformance} : {}),
     },
-    units: {
-      ...(result.review.calculation?.parameterUnits || {}),
-      ...(workforceCapacityRow
-        ? { C23: workforceCapacityRow.unit }
-        : {}),
-      ...(cleaningPerformanceRow
-        ? { C22: cleaningPerformanceRow.unit }
-        : {}),
-    },
-    facts: {
-      productiveHours: suppliedHours,
-      workdays: valueFor(result.review.scope, "Arbeitstage"),
-      duration:
-        item.service_scope === "cleaning" &&
-        Number.isFinite(cleaningContractMonths) &&
-        cleaningContractMonths > 0
-          ? cleaningContractMonths
-          : (
-              derivedDuration?.value ??
-              valueFor(
-                result.review.procurement,
-                "Vertragslaufzeit"
-              )
-            ),
-      areas:
-        item.service_scope === "cleaning"
-          ? Number.isFinite(derivedCleaningArea) && derivedCleaningArea > 0
-            ? derivedCleaningArea
-            : null
-          : valueFor(result.review.scope, "Flächen"),
-      nightHours:
-        securityLvFacts?.nightHours ??
-        valueFor(result.review.scope, "Nachtstunden"),
-      sundayHours:
-        securityLvFacts?.sundayHours ??
-        valueFor(result.review.scope, "Sonntagsstunden"),
-      holidayHours:
-        securityLvFacts?.holidayHours ??
-        valueFor(result.review.scope, "Feiertagsstunden"),
-      staffingStrength: valueFor(result.review.scope, "Besetzungsstärke"),
-      objectCount: valueFor(result.review.scope, "Objektanzahl"),
-      unitCount:
-        item.service_scope === "cleaning"
-          ? null
-          : valueFor(result.review.scope, "Mengen"),
-      kilometers: valueFor(result.review.scope, "Fahrtkilometer"),
-      siteManagement: valueFor(
-        result.review.scope,
-        "Objektleitungsanforderungen",
-      ),
-      operationsManagement: valueFor(
-        result.review.scope,
-        "Einsatzleitungsanforderungen",
-      ),
-      pricePositions:
-        securityLvFacts?.positions ??
-        valueFor(result.review.scope, "Preispositionen"),
-    },
-    provenance: {
-      ...calculationInput.provenance,
-      workforceCapacity: workforceCapacityRow
-        ? {
-            source: "ACTIVE_APPROVED_EXACT_CONFIGURATION_SCOPE",
-            parameterKey: "C23",
-            value: Number(workforceCapacityRow.new_value),
-            unit: workforceCapacityRow.unit,
-            versionId: workforceCapacityRow.version_id,
-            versionNo: workforceCapacityRow.version_no,
-            tenantId: workforceCapacityRow.tenant_id,
-            profileId: workforceCapacityRow.profile_id,
-            approvedBy: workforceCapacityRow.approved_by,
-            approvedAt: workforceCapacityRow.approved_at,
-            activatedAt: workforceCapacityRow.activated_at,
-          }
-        : {
-            source: "ACTIVE_APPROVED_EXACT_CONFIGURATION_SCOPE",
-            parameterKey: "C23",
-            status: "MISSING",
-          },
-      contractDuration: derivedDuration
-        ? {
-            source: "VERIFIED_PROCUREMENT_DOCUMENT",
-            value: derivedDuration.value,
-            unit: derivedDuration.unit,
-            evidence: derivedDuration.evidence,
-          }
-        : null,
-      productiveHours: explicitInputs.productive_hours
-        ? {
-            source: "EXPLICIT_SCOPED_USER_INPUT",
-            inputId: explicitInputs.productive_hours.id,
-            version: explicitInputs.productive_hours.version,
-            unit: explicitInputs.productive_hours.unit,
-            createdAt: explicitInputs.productive_hours.created_at,
-            createdBy: explicitInputs.productive_hours.created_by,
-          }
-        : securityLvFacts?.provenance ??
-          (
-            Number.isFinite(derivedCleaningHours) &&
-            derivedCleaningHours > 0
-              ? {
-                  source:
-                    "AUTHORITATIVE_CLEANING_AREA_AND_COMPANY_PERFORMANCE",
-                  formula:
-                    "Jahresleistungsfläche ÷ gesellschaftsspezifischer Reinigungsleistungswert × Vertragsmonate ÷ 12",
-                  annualCleaningArea,
-                  cleaningPerformance,
-                  cleaningPerformanceUnit:
-                    cleaningPerformanceRow?.unit,
-                  contractMonths:
-                    cleaningContractMonths,
-                  evidence:
-                    derivedContractFacts.find(
-                      fact =>
-                        fact.key ===
-                        "annual_cleaning_area_occurrences"
-                    )?.evidence || [],
-                  configuration: {
-                    parameterKey: "C22",
-                    versionId:
-                      cleaningPerformanceRow?.version_id,
-                    activatedAt:
-                      cleaningPerformanceRow?.activated_at,
-                    activatedBy:
-                      cleaningPerformanceRow?.activated_by,
-                    approvalSource:
-                      cleaningPerformanceRow?.source
-                  }
-                }
-              : calculationInput.provenance.productiveHours
-          ),
-      ...Object.fromEntries(
-        securityCostRows.map((x) => [
-          x.parameter_key,
-          {
-            source: "COMPANY_CONFIGURATION",
-            versionId: x.version_id,
-            activatedAt: x.activated_at,
-            activatedBy: x.activated_by,
-            unit: x.unit,
-            approvalSource: x.source,
-          },
-        ]),
-      ),
-    },
+    approvedParameterRows = (
+      await pool.query(
+        `SELECT active.parameter_key,change.new_value,change.unit,active.version_id,
+                version.tenant_id,version.approved_by,version.approved_at
+         FROM tender.configuration_active_parameters active
+         JOIN tender.configuration_changes change ON change.id=active.change_id
+         JOIN tender.configuration_versions version ON version.id=active.version_id
+           AND version.company_id=active.company_id
+         JOIN tender.configuration_scopes configuration_scope
+           ON configuration_scope.tenant_id=version.tenant_id
+          AND configuration_scope.company_id=version.company_id
+          AND configuration_scope.canonical_service=version.canonical_service
+          AND configuration_scope.profile_id=version.profile_id
+         WHERE active.company_id=$1 AND active.service_line=$2
+           AND version.tenant_id=$3 AND version.status='ACTIVE'
+           AND version.approved_by IS NOT NULL AND version.approved_at IS NOT NULL
+           AND change.valid_from<=current_date
+           AND (change.valid_until IS NULL OR change.valid_until>=current_date)
+         ORDER BY active.parameter_key,version.version_no DESC,active.activated_at DESC`,
+        [item.company_id, item.service_scope, scope.tenantId],
+      )
+    ).rows,
+    approvedParameters = new Map();
+  for (const row of approvedParameterRows)
+    if (!approvedParameters.has(row.parameter_key)) approvedParameters.set(row.parameter_key, row);
+  const blockingReasons = validation.missing.map((entry, index) => ({
+      key: entry.parameterKey || entry.field || `missing-${index + 1}`,
+      classification: "MISSING_INPUT",
+      reason: entry.documentStatus || entry.source || "Required calculation input is not verified",
+      nextAction: entry.nextAction || "Bind the input to exact tender, company, lot and source evidence",
+    })),
+    suppliedParameterKeys = Object.entries(rawParameters)
+      .filter(([, value]) => supplied(value))
+      .map(([key]) => key);
+  for (const key of suppliedParameterKeys)
+    if (!approvedParameters.has(key))
+      blockingReasons.push({
+        key,
+        classification: "MISSING_INPUT",
+        reason: "Parameter is not backed by one active approved exact company/service scope",
+        nextAction: `Approve and activate ${key} in the exact company and service scope`,
+      });
+  const parameterRecords = [...approvedParameters.values()]
+      .filter(row => supplied(rawParameters[row.parameter_key]))
+      .map(row => ({
+        key: row.parameter_key,
+        value: row.new_value,
+        unit: row.unit,
+        classification: "COMPANY_APPROVED",
+        scope: {tenantId: row.tenant_id, companyId: item.company_id, serviceArea: item.service_scope},
+        source: "ACTIVE_APPROVED_EXACT_CONFIGURATION_SCOPE",
+        versionId: row.version_id,
+        approvedBy: row.approved_by,
+        approvedAt: row.approved_at,
+      })),
+    parameters = Object.fromEntries(parameterRecords.map(record => [record.key, record.value])),
+    units = Object.fromEntries(parameterRecords.map(record => [record.key, record.unit])),
+    factRecords = [],
+    facts = {},
+    ruleTypes = [],
+    addDocumentFact = (key, value, unit, fact) => {
+      if (!supplied(value)) return null;
+      const record = exactDocumentFactRecord({key, value, unit, scope, fact});
+      if (!record) {
+        blockingReasons.push({
+          key,
+          classification: "MISSING_INPUT",
+          reason: "Fact lacks an exact document hash and page, worksheet, row or cell locator",
+          nextAction: `Re-extract ${key} with exact immutable document provenance`,
+        });
+        return null;
+      }
+      facts[key] = value;
+      factRecords.push(record);
+      return record;
+    };
+  const durationRecord = addDocumentFact("duration", derivedDuration?.value, "MONTHS", derivedDuration),
+    areaFact = derivedContractFacts.find(fact => fact.key === "areas"),
+    annualAreaFact = derivedContractFacts.find(fact => fact.key === "annual_cleaning_area_occurrences"),
+    annualHoursFact = derivedContractFacts.find(fact => fact.key === "productive_hours_per_year"),
+    documentProductiveFact = derivedContractFacts.find(fact => fact.key === "productive_hours");
+  addDocumentFact("areas", derivedCleaningArea, "SQUARE_METRES", areaFact);
+  if (annualAreaFact) addDocumentFact("annualCleaningArea", annualAreaFact.value, annualAreaFact.unit, annualAreaFact);
+  if (annualHoursFact) addDocumentFact("annualProductiveHours", annualHoursFact.value, annualHoursFact.unit, annualHoursFact);
+
+  if (explicitInputs.productive_hours && Number.isFinite(explicitHours) && explicitHours > 0) {
+    facts.productiveHours = explicitHours;
+    factRecords.push({
+      key: "productiveHours", value: explicitHours, unit: explicitInputs.productive_hours.unit,
+      scope, classification: "CASE_APPROVED",
+      source: {
+        type: "EXPLICIT_MANAGEMENT_INPUT",
+        inputId: explicitInputs.productive_hours.id,
+        approvedBy: explicitInputs.productive_hours.created_by,
+        approvedAt: explicitInputs.productive_hours.created_at,
+      },
+    });
+  } else if (securityLvFacts && Number.isFinite(derivedSecurityHours) && derivedSecurityHours > 0) {
+    const positionsFact = {
+      evidence: securityLvFacts.positions.map(position => ({
+        documentId: position.documentId,
+        hash: position.sha256,
+        page: position.page,
+      })),
+    };
+    if (addDocumentFact("pricePositions", securityLvFacts.positions, "POSITIONS", positionsFact)) {
+      for (const [key, value] of Object.entries({
+        productiveHours: derivedSecurityHours,
+        nightHours: securityLvFacts.nightHours,
+        sundayHours: securityLvFacts.sundayHours,
+        holidayHours: securityLvFacts.holidayHours,
+      })) {
+        facts[key] = value;
+        factRecords.push({
+          key, value, unit: "HOURS", scope, classification: "DETERMINISTIC_DERIVED",
+          source: {type: "DETERMINISTIC_DERIVATION", ruleTypeId: "security-lv-hours", ruleVersion: 1, inputFactKeys: ["pricePositions"]},
+        });
+      }
+      ruleTypes.push({
+        id: "security-lv-hours", version: 1,
+        gitCommit: "f862ceb69ee2ee73d3ba3af82c9bad5b7bbf73fc", status: "ACTIVE",
+        testEvidence: "tests/rib-security-lv.test.mjs", shadowEvidence: "real-security-lv-pipeline",
+        approvedBy: "fe93f980-5699-44f4-ad41-69d254dcaa9f",
+      });
+    }
+  } else if (Number.isFinite(derivedCleaningHours) && derivedCleaningHours > 0) {
+    const inputFactKeys = [];
+    if (documentProductiveFact && annualHoursFact && durationRecord)
+      inputFactKeys.push("annualProductiveHours", "duration");
+    else if (annualAreaFact && durationRecord && approvedParameters.has("C22"))
+      inputFactKeys.push("annualCleaningArea", "duration");
+    if (!inputFactKeys.length)
+      blockingReasons.push({
+        key: "productiveHours",
+        classification: "MISSING_INPUT",
+        reason: "Cleaning hours cannot be bound to exact area/hour facts, base duration and approved C22",
+        nextAction: "Complete the exact Cleaning fact and case/company performance evidence",
+      });
+    else {
+      facts.productiveHours = derivedCleaningHours;
+      factRecords.push({
+        key: "productiveHours", value: derivedCleaningHours, unit: "HOURS", scope,
+        classification: "DETERMINISTIC_DERIVED",
+        source: {
+          type: "DETERMINISTIC_DERIVATION", ruleTypeId: "cleaning-area-hours", ruleVersion: 1,
+          inputFactKeys, inputParameterKeys: approvedParameters.has("C22") ? ["C22"] : [],
+        },
+      });
+      ruleTypes.push({
+        id: "cleaning-area-hours", version: 1,
+        gitCommit: "f862ceb69ee2ee73d3ba3af82c9bad5b7bbf73fc", status: "ACTIVE",
+        testEvidence: "tests/cleaning-authoritative-inputs.test.mjs", shadowEvidence: "isolated-munich-cleaning-shadow",
+        approvedBy: "fe93f980-5699-44f4-ad41-69d254dcaa9f",
+      });
+    }
+  } else blockingReasons.push({
+    key: "productiveHours",
+    classification: "MISSING_INPUT",
+    reason: "No approved explicit or deterministic document-derived productive hours exist",
+    nextAction: "Provide exact productive-hour evidence or an approved tender/company/lot-bound decision",
   });
+  if (!durationRecord)
+    blockingReasons.push({
+      key: "duration",
+      classification: "MISSING_INPUT",
+      reason: "No unique verified base contract duration with exact document location exists",
+      nextAction: "Resolve the base duration without using an option period",
+    });
+  if (!["cleaning", "security"].includes(item.service_scope))
+    blockingReasons.push({
+      key: "ruleType",
+      classification: "MISSING_INPUT",
+      reason: `No released deterministic calculation contract exists for ${item.service_scope}`,
+      nextAction: "Register and shadow-test a new versioned service rule type",
+    });
+  for (const requiredParameter of ["C01", "C23"])
+    if (!approvedParameters.has(requiredParameter))
+      blockingReasons.push({
+        key: requiredParameter,
+        classification: "MISSING_INPUT",
+        reason: `Required parameter ${requiredParameter} has no active approved exact scope`,
+        nextAction: `Approve ${requiredParameter} for the exact company and service scope`,
+      });
+  const uniqueBlockingReasons = [...new Map(blockingReasons.map(blocker => [
+      `${blocker.key}|${blocker.classification}|${blocker.reason}`,
+      blocker,
+    ])).values()],
+    documentFingerprints = authoritativeCalculationDocuments
+      .filter(document => /^[a-f0-9]{64}$/i.test(String(document.payload_sha256 || "")))
+      .map(document => ({documentId: document.id, sha256: String(document.payload_sha256).toLowerCase()})),
+    engineInput = {
+      serviceArea: item.service_scope,
+      parameters,
+      units,
+      facts,
+      provenance: {source: "IMMUTABLE_PIPELINE_CALCULATION_CONTRACT", externalWrite: false},
+    },
+    contractExecution = runPipelineCalculationContract({
+      scope, engineInput, factRecords, parameterRecords, documentFingerprints, ruleTypes,
+      blockingReasons: uniqueBlockingReasons,
+    }),
+    calculationInputSnapshot = contractExecution.snapshot,
+    engineResult = contractExecution.calculation || {
+      status: "CALCULATION_BLOCKED_CONTRACT",
+      missing: uniqueBlockingReasons.map(blocker => blocker.key),
+      inputSnapshotSha256: calculationInputSnapshot.snapshotSha256,
+      calculationContractVersion: calculationInputSnapshot.contractVersion,
+      externalTransmission: false,
+    };
   if (engineResult.status !== "CALCULATED")
     for (const field of engineResult.missing || [])
       if (!validation.missing.some((item) => item.field === field))
@@ -4842,23 +4904,18 @@ async function persistCalculation(pool, item, tender, enrichment) {
         document.procurement_verification_status === "VERIFIED",
     ).length,
     documentsUnavailable = verifiedTenderDocuments === 0,
-    partial =
-      blocked && !documentsUnavailable && engineResult.status === "CALCULATED",
-    status = !blocked
-      ? "CALCULATED_REAL"
-      : partial
+    partial = !documentsUnavailable && (
+      engineResult.status === "CALCULATION_PARTIAL" ||
+      blocked && engineResult.status === "CALCULATED"
+    ),
+    status = partial
         ? "CALCULATION_PARTIAL"
+      : !blocked && engineResult.status === "CALCULATED"
+        ? "CALCULATED_REAL"
         : documentsUnavailable
           ? "CALCULATION_BLOCKED_DOCUMENTS_NOT_AVAILABLE"
           : "CALCULATION_BLOCKED_MISSING_INPUT";
-  const canonicalLot =
-    (
-      await pool.query(
-        "SELECT id FROM tender.lots WHERE id=$1 AND tender_id=$2",
-        [item.lot_id, tender.id],
-      )
-    ).rows[0] || null;
-  let calculationRow = null;
+  let calculationRow = null, inputRow = null;
   if (config) {
     const calculationClient = await pool.connect(),
       calculationLock = `calculation-version:${tender.id}:${item.company_id}:${item.lot_key || ""}`;
@@ -4868,6 +4925,55 @@ async function persistCalculation(pool, item, tender, enrichment) {
         "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
         [calculationLock],
       );
+      inputRow = (
+        await calculationClient.query(
+          `INSERT INTO tender.calculation_input_snapshots(
+             tenant_id,tender_id,lot_key,company_id,profile_snapshot_id,
+             schema_version,snapshot_sha256,contract_version,contract_state,
+             engine_input,fact_records,parameter_records,document_fingerprints,rule_types,
+             parameters,provenance,missing_inputs
+           ) VALUES(
+             $1,$2,$3,$4,$5,4,$6,$7,$8,
+             $9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,
+             $14::jsonb,$15::jsonb,$16::jsonb
+           ) ON CONFLICT(tender_id,lot_key,company_id,snapshot_sha256) DO NOTHING
+           RETURNING id`,
+          [
+            scope.tenantId,
+            tender.id,
+            item.lot_key || "",
+            item.company_id,
+            profileSnapshotId,
+            calculationInputSnapshot.snapshotSha256,
+            calculationInputSnapshot.contractVersion,
+            calculationInputSnapshot.state,
+            json(calculationInputSnapshot.engineInput),
+            json(calculationInputSnapshot.factRecords),
+            json(calculationInputSnapshot.parameterRecords),
+            json(calculationInputSnapshot.documentFingerprints),
+            json(calculationInputSnapshot.ruleTypes),
+            json(calculationInputSnapshot.engineInput.parameters),
+            json({
+              factModelVersion: calculationInputSnapshot.factModelVersion,
+              mode: calculationInputSnapshot.mode,
+              scope: calculationInputSnapshot.scope,
+              externalWrite: false,
+            }),
+            json(calculationInputSnapshot.blockingReasons),
+          ],
+        )
+      ).rows[0] || (
+        await calculationClient.query(
+          `SELECT id FROM tender.calculation_input_snapshots
+           WHERE tender_id=$1 AND lot_key=$2 AND company_id=$3 AND snapshot_sha256=$4
+           FOR SHARE`,
+          [tender.id, item.lot_key || "", item.company_id, calculationInputSnapshot.snapshotSha256],
+        )
+      ).rows[0];
+      if (!inputRow)
+        throw Object.assign(Error("canonical calculation input snapshot was not materialized"), {
+          code: "CALCULATION_INPUT_SNAPSHOT_NOT_MATERIALIZED",
+        });
       const version = Number(
         (
           await calculationClient.query(
@@ -4878,9 +4984,13 @@ async function persistCalculation(pool, item, tender, enrichment) {
       );
       calculationRow = (
         await calculationClient.query(
-          `INSERT INTO tender.calculations(tender_id,lot_id,lot_key,company_id,version,service_line,scenario,config_id,status,blocked_reasons,totals)
-      VALUES($1,$2,$3,$4,$5,$6,'BASE',$7,$8,$9::jsonb,$10::jsonb) RETURNING id`,
+          `INSERT INTO tender.calculations(
+             tenant_id,tender_id,lot_id,lot_key,company_id,version,service_line,
+             scenario,config_id,status,blocked_reasons,totals,calculation_input_snapshot_id
+           ) VALUES($1,$2,$3,$4,$5,$6,$7,'BASE',$8,$9,$10::jsonb,$11::jsonb,$12)
+           RETURNING id`,
           [
+            scope.tenantId,
             tender.id,
             canonicalLot?.id || null,
             item.lot_key,
@@ -4898,9 +5008,15 @@ async function persistCalculation(pool, item, tender, enrichment) {
                     missingPositions: validation.missing,
                   }
                 : blocked
-                  ? {}
+                  ? {
+                      status,
+                      calculationContractVersion: calculationInputSnapshot.contractVersion,
+                      inputSnapshotSha256: calculationInputSnapshot.snapshotSha256,
+                      externalTransmission: false,
+                    }
                   : { ...engineResult, status: "CALCULATED_REAL" },
             ),
+            inputRow.id,
           ],
         )
       ).rows[0];
@@ -4929,6 +5045,8 @@ async function persistCalculation(pool, item, tender, enrichment) {
           status,
           missing: validation.missing,
           verifiedTenderDocuments,
+          calculationContractVersion: calculationInputSnapshot.contractVersion,
+          inputSnapshotSha256: calculationInputSnapshot.snapshotSha256,
           externalTransmission: false,
         }
       : { ...engineResult, status: "CALCULATED_REAL" };
@@ -4937,7 +5055,7 @@ async function persistCalculation(pool, item, tender, enrichment) {
     missing: validation.missing,
     calculation: effectiveCalculation,
     calculationId: calculationRow?.id || null,
-    calculationInputSnapshotId: inputRow.id,
+    calculationInputSnapshotId: inputRow?.id || null,
     profileSnapshotId,
     documentStatus: documents.map((x) => ({
       filename: x.filename,

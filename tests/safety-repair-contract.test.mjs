@@ -68,8 +68,8 @@ test("database derives company tenant authoritatively and replays no submission 
     source("platform/autopilot-pipeline-worker.mjs"),
     source("migrations/113_authoritative_tenant_writer_guard.sql"),
   ]);
-  assert.match(worker, /calculation_input_snapshots\(tenant_id,tender_id/);
-  assert.match(worker, /legacy_company_tenant_bindings WHERE company_id=\$3/);
+  assert.match(worker, /calculation_input_snapshots\(\s*tenant_id,tender_id/);
+  assert.match(worker, /legacy_company_tenant_bindings WHERE company_id=\$1/);
   assert.match(sql, /assign_authoritative_company_tenant/);
   assert.match(sql, /company_tenant_binding_mismatch/);
   assert.match(sql, /DLQ_RUNTIME_SCOPE_RECONCILIATION_V2/);
