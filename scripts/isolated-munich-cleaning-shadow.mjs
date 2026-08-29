@@ -1,0 +1,251 @@
+import fs from "node:fs/promises";
+
+import {
+  deriveCleaningRoomBookFacts,
+  selectLotAuthoritativeDocuments,
+} from "../platform/cleaning-room-book.mjs";
+import {
+  buildManagementOutput,
+  calculateSectorTender,
+} from "../platform/sector-calculation.mjs";
+
+const [documentsPath, parametersPath, metadataPath, selectedEnrichmentLotId] =
+  process.argv.slice(2);
+
+if (!documentsPath || !parametersPath || !metadataPath || !selectedEnrichmentLotId)
+  throw new Error(
+    "usage: isolated-munich-cleaning-shadow.mjs DOCUMENTS_JSON PARAMETERS_JSON METADATA_JSON SELECTED_ENRICHMENT_LOT_ID",
+  );
+
+const [documents, parameterRows, metadata] = await Promise.all([
+  fs.readFile(documentsPath, "utf8").then(JSON.parse),
+  fs.readFile(parametersPath, "utf8").then(JSON.parse),
+  fs.readFile(metadataPath, "utf8").then(JSON.parse),
+]);
+
+const expected = Object.freeze({
+  externalId: "552392-2026",
+  tenderId: "2203e521-6be7-4760-a15e-1357f833b279",
+  companyId: "15c3c602-aa51-4dd4-adc1-3586dc82e523",
+  lotKey: "LOT-0000",
+  enrichmentVersionId: "f00be7ac-3de5-487b-b867-fe859e45c14a",
+  annualCleaningArea: 163483.68,
+  cleaningPerformance: 225,
+  contractMonths: 48,
+  productiveHours: 2906.38,
+  annualHours: 726.59,
+  monthlyHours: 60.55,
+  fteAnnualHours: 1670,
+  fte: 0.44,
+});
+
+const exact = (actual, wanted, label) => {
+  if (actual !== wanted)
+    throw new Error(`${label} mismatch: expected=${wanted} actual=${actual}`);
+};
+
+exact(metadata?.tender?.externalId, expected.externalId, "external tender id");
+exact(metadata?.tender?.id, expected.tenderId, "tender id");
+exact(metadata?.company?.id, expected.companyId, "company id");
+exact(metadata?.lot?.key, expected.lotKey, "lot key");
+exact(
+  metadata?.lot?.enrichmentVersionId,
+  expected.enrichmentVersionId,
+  "enrichment version id",
+);
+
+if (!Array.isArray(documents) || !documents.length)
+  throw new Error("verified Munich document set is empty");
+if (documents.some(document => document.procurement_verification_status !== "VERIFIED"))
+  throw new Error("unverified document entered the Munich shadow set");
+if (!Array.isArray(parameterRows) || !parameterRows.length)
+  throw new Error("active exact-scope Cleaning parameters are empty");
+if (parameterRows.some(row => row.parameter_key === "C22"))
+  throw new Error("C22 must not be persisted for this case-specific shadow replay");
+
+const c23Rows = parameterRows.filter(row => row.parameter_key === "C23");
+if (c23Rows.length !== 1) throw new Error(`expected exactly one C23 row, found ${c23Rows.length}`);
+const c23 = c23Rows[0];
+exact(Number(c23.new_value), expected.fteAnnualHours, "C23 value");
+exact(c23.unit, "HOURS_PER_YEAR", "C23 unit");
+if (!c23.approved_by || !c23.approved_at || !c23.activated_at)
+  throw new Error("C23 approval/activation provenance is incomplete");
+
+const authoritative = selectLotAuthoritativeDocuments(
+  documents,
+  new Set([selectedEnrichmentLotId]),
+  expected.lotKey,
+);
+if (!authoritative.length)
+  throw new Error("no authoritative Munich documents survived exact-lot selection");
+
+const facts = deriveCleaningRoomBookFacts(authoritative, expected.lotKey);
+const annualArea = facts.find(fact => fact.key === "annual_cleaning_area_occurrences");
+const sourceArea = facts.find(fact => fact.key === "areas");
+const duration = facts.find(fact => fact.key === "contract_duration_months");
+
+exact(annualArea?.value, expected.annualCleaningArea, "annual cleaning area");
+exact(duration?.value, expected.contractMonths, "contract duration");
+if (!annualArea?.evidence?.length || !duration?.evidence?.length)
+  throw new Error("Munich area or duration provenance is incomplete");
+
+const parameters = Object.fromEntries(
+  parameterRows.map(row => [row.parameter_key, row.new_value]),
+);
+const units = Object.fromEntries(
+  parameterRows.map(row => [row.parameter_key, row.unit]),
+);
+
+// C22 is an explicitly approved value for this known Munich case only. It is
+// deliberately never written to the clone or merged into the persisted rows.
+const shadowC22 = expected.cleaningPerformance;
+const productiveHours =
+  annualArea.value / shadowC22 * duration.value / 12;
+
+const calculation = calculateSectorTender({
+  serviceArea: "cleaning",
+  parameters: { ...parameters, C22: shadowC22 },
+  units: { ...units, C22: "M2_PER_HOUR" },
+  facts: {
+    productiveHours,
+    duration: duration.value,
+    areas: sourceArea?.value ?? null,
+  },
+  provenance: {
+    mode: "READ_ONLY_MUNICH_CLEANING_SHADOW",
+    annualCleaningArea: {
+      source: "VERIFIED_PROCUREMENT_DOCUMENT",
+      value: annualArea.value,
+      unit: annualArea.unit,
+      evidence: annualArea.evidence,
+    },
+    contractDuration: {
+      source: "VERIFIED_PROCUREMENT_DOCUMENT",
+      value: duration.value,
+      unit: duration.unit,
+      evidence: duration.evidence,
+    },
+    cleaningPerformance: {
+      source: "NONPERSISTENT_CASE_APPROVED_SHADOW_INPUT",
+      parameterKey: "C22",
+      value: shadowC22,
+      unit: "M2_PER_HOUR",
+      scope: {
+        tenderId: expected.tenderId,
+        companyId: expected.companyId,
+        lotKey: expected.lotKey,
+      },
+    },
+    workforceCapacity: {
+      source: "ACTIVE_APPROVED_EXACT_CONFIGURATION_SCOPE",
+      parameterKey: "C23",
+      value: Number(c23.new_value),
+      unit: c23.unit,
+      versionId: c23.version_id,
+      versionNo: c23.version_no,
+      tenantId: c23.tenant_id,
+      profileId: c23.profile_id,
+      approvedBy: c23.approved_by,
+      approvedAt: c23.approved_at,
+      activatedAt: c23.activated_at,
+    },
+    externalWrite: false,
+  },
+});
+
+exact(calculation.status, "CALCULATED", "calculation status");
+exact(calculation.schemaVersion, 5, "calculation schema version");
+exact(calculation.productiveHours, expected.productiveHours, "productive hours");
+exact(calculation.hoursPerYear, expected.annualHours, "annual hours");
+exact(calculation.hoursPerMonth, expected.monthlyHours, "monthly hours");
+exact(calculation.fteAnnualHours, expected.fteAnnualHours, "FTE annual hours");
+exact(calculation.fte, expected.fte, "FTE");
+exact(calculation.externalTransmission, false, "external transmission");
+if (!(calculation.totalPrice > 0))
+  throw new Error(`non-positive calculated total price: ${calculation.totalPrice}`);
+
+const management = buildManagementOutput({
+  tender: {
+    buyer: metadata.tender.buyer,
+    title: metadata.tender.title,
+    offer_deadline: metadata.tender.offerDeadline,
+  },
+  lotKey: expected.lotKey,
+  company: { sector_slug: "cleaning" },
+  profileSnapshot: {
+    id: c23.profile_id,
+    revision: c23.version_no,
+  },
+  documentRevision: metadata.lot.enrichmentVersion,
+  calculation: { ...calculation, status: "CALCULATED_REAL" },
+  missing: [],
+  jobId: null,
+  correlationId: "read-only-munich-cleaning-shadow",
+  now: metadata.shadowTimestamp,
+});
+
+exact(management.status, "MANAGEMENT_OUTPUT_GENERATED", "management status");
+exact(management.recommendation?.decision, "CONDITIONAL_GO", "management recommendation");
+exact(management.externalTransmission, false, "management external transmission");
+
+console.log(JSON.stringify({
+  mode: "READ_ONLY_MUNICH_CLEANING_SHADOW",
+  scope: {
+    externalId: expected.externalId,
+    tenderId: expected.tenderId,
+    companyId: expected.companyId,
+    lotKey: expected.lotKey,
+    enrichmentVersionId: expected.enrichmentVersionId,
+  },
+  source: {
+    inputDocuments: documents.length,
+    authoritativeDocuments: authoritative.length,
+    annualAreaEvidence: annualArea.evidence.map(item => ({
+      documentId: item.documentId,
+      filename: item.filename,
+      sha256: item.sha256 ?? item.hash,
+      worksheet: item.worksheet ?? item.table ?? null,
+      includedRows: item.includedRows ?? null,
+    })),
+    durationEvidence: duration.evidence.map(item => ({
+      documentId: item.documentId,
+      filename: item.filename,
+      sha256: item.sha256 ?? item.hash,
+      page: item.page ?? null,
+      start: item.start ?? null,
+      end: item.end ?? item.endDates ?? null,
+    })),
+  },
+  inputs: {
+    annualCleaningArea: annualArea.value,
+    annualCleaningAreaUnit: annualArea.unit,
+    sourceArea: sourceArea?.value ?? null,
+    sourceAreaUnit: sourceArea?.unit ?? null,
+    contractMonths: duration.value,
+    C22: shadowC22,
+    C22Unit: "M2_PER_HOUR",
+    C22Persistence: "NONE_CASE_SCOPED_SHADOW_ONLY",
+    C23: Number(c23.new_value),
+    C23Unit: c23.unit,
+    C23Version: c23.version_no,
+    C23ApprovedBy: c23.approved_by,
+  },
+  calculation: {
+    schemaVersion: calculation.schemaVersion,
+    status: "CALCULATED_REAL_SHADOW",
+    productiveHours: calculation.productiveHours,
+    annualHours: calculation.hoursPerYear,
+    monthlyHours: calculation.hoursPerMonth,
+    fte: calculation.fte,
+    totalPrice: calculation.totalPrice,
+    calculationHash: calculation.calculationHash,
+    externalTransmission: calculation.externalTransmission,
+  },
+  management: {
+    status: management.status,
+    decision: management.recommendation.decision,
+    outputHash: management.outputHash,
+    externalTransmission: management.externalTransmission,
+  },
+  externalWrite: false,
+}));
