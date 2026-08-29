@@ -4,7 +4,9 @@ import {calculateSectorTender} from "./sector-calculation.mjs";
 export const CALCULATION_CONTRACT_VERSION = "wb-tender-calculation-contract/1.0.0";
 export const CANONICAL_FACT_MODEL_VERSION = "wb-tender-facts/1.0.0";
 export const AI_EXTRACTION_INTERFACE_VERSION = "wb-tender-ai-extraction/1.0.0";
-export const CALCULATION_INPUT_SNAPSHOT_SCHEMA_VERSION = 2;
+// Database snapshot schema versions 1-3 are historical formats. Version 4 is
+// the first format whose hash covers the exact engine input and its evidence.
+export const CALCULATION_INPUT_SNAPSHOT_SCHEMA_VERSION = 4;
 
 export const CALCULATION_CONTRACT_STATES = Object.freeze({
   READY: "READY",
