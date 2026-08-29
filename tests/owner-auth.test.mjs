@@ -6,9 +6,11 @@ import test from "node:test";
 
 import {
   currentTotp,
+  mfaEnrollmentPayload,
   passwordHash,
   passwordVerify,
   registerOwnerAuth,
+  totpEnrollmentUri,
 } from "../platform/owner-auth.mjs";
 
 const makeApp = () => {
@@ -37,6 +39,26 @@ test("TOTP generation is deterministic for a fixed secret and instant", () => {
   assert.equal(currentTotp(secret, 0), "282760");
   assert.equal(currentTotp(secret, 59_000), currentTotp(secret, 30_000));
   assert.match(currentTotp(secret, Date.UTC(2026, 7, 29)), /^\d{6}$/);
+});
+
+test("first MFA enrollment returns a scannable local PNG QR code and a manual fallback", async () => {
+  const secret = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
+  const uri = totpEnrollmentUri(secret, "New.User@WB-Holding.AG");
+  assert.equal(uri, "otpauth://totp/WB%20Tender:new.user%40wb-holding.ag?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=WB%20Tender&algorithm=SHA1&digits=6&period=30");
+  const enrollment = await mfaEnrollmentPayload(secret, "New.User@WB-Holding.AG");
+  assert.equal(enrollment.secret, secret);
+  assert.match(enrollment.qrCodeDataUrl, /^data:image\/png;base64,[A-Za-z0-9+/=]+$/);
+  assert.ok(enrollment.qrCodeDataUrl.length > 1_000);
+  assert.equal(Object.hasOwn(enrollment, "uri"), false);
+});
+
+test("owner enrollment UI prefers QR scanning and keeps the long secret behind a fallback", async () => {
+  const source = await readFile(new URL("../platform/owner-auth.mjs", import.meta.url), "utf8");
+  assert.match(source, /id="qr" class="qr hidden"/);
+  assert.match(source, /Manuellen Einrichtungsschlüssel anzeigen/);
+  assert.match(source, /data\.qrCodeDataUrl/);
+  assert.match(source, /Scannen Sie den QR-Code/);
+  assert.doesNotMatch(source, /id="uri"/);
 });
 
 test("owner routes accept a configured canonical HTTPS origin without hardcoding a tenant domain", async () => {
