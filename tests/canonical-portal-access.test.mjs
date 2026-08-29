@@ -60,6 +60,43 @@ test("pending portal status requires fresh unfinished queue evidence", () => {
   }), "CONFIGURED_UNVERIFIED");
 });
 
+test("restored real portal states cannot regress to an endless pending status", () => {
+  const restoredAt = new Date("2026-08-29T18:24:01.707Z");
+
+  assert.equal(canonicalPortalAccessStatus({
+    configured: true,
+    credentialStatus: "ACTIVE",
+    loginStatus: "LOGIN_UNGEPRUEFT",
+    sessionEffectiveStatus: "RELOGIN_REQUIRED_REVOKED",
+    jobStatus: "SUCCEEDED",
+    jobCreatedAt: "2026-08-22T10:13:20.287Z",
+    jobStartedAt: "2026-08-22T10:13:24.307Z",
+    jobHeartbeatAt: "2026-08-22T10:13:34.264Z",
+    jobTimeoutAt: "2026-08-22T10:16:24.307Z",
+    jobFinishedAt: "2026-08-22T10:13:34.264Z",
+    now: restoredAt,
+  }), "EXPIRED");
+
+  assert.equal(canonicalPortalAccessStatus({
+    configured: true,
+    credentialStatus: "ACTIVE",
+    loginStatus: "LOGIN_UNGEPRUEFT",
+    now: restoredAt,
+  }), "CONFIGURED_UNVERIFIED");
+
+  for (const jobStatus of ["SUCCEEDED", "CANCELLED", "FAILED", "DEAD_LETTER"]) {
+    assert.notEqual(canonicalPortalAccessStatus({
+      configured: true,
+      credentialStatus: "ACTIVE",
+      jobStatus,
+      jobCreatedAt: "2026-08-20T06:49:27.333Z",
+      jobTimeoutAt: "2026-08-20T06:52:27.333Z",
+      jobFinishedAt: "2026-08-20T06:49:44.188Z",
+      now: restoredAt,
+    }), "VALIDATION_PENDING", jobStatus);
+  }
+});
+
 test("canonical precedence is fail-closed and does not infer validity from documents", () => {
   assert.equal(canonicalPortalAccessStatus({ configured:true, jobResultCode:"KONTO_GESPERRT" }), "LOCKED");
   assert.equal(canonicalPortalAccessStatus({ configured:true, jobResultCode:"BENUTZERNAME_ODER_PASSWORT_FALSCH" }), "INVALID");
