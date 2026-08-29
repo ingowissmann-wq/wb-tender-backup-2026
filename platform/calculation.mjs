@@ -1,7 +1,11 @@
 import {
-  calculateSectorTender,
   CALCULATION_SCHEMA_VERSION,
 } from "./sector-calculation.mjs";
+import {
+  CALCULATION_CONTRACT_STATES,
+  createCalculationContractSnapshot,
+  executeCalculationContractSnapshot,
+} from "./calculation-contract.mjs";
 
 const REQUIRED_INPUTS = Object.freeze([
   "productiveHours", "baseHourlyRate", "employerBurdenRate",
@@ -50,7 +54,7 @@ export function calculateScenario(input = {}, config = {}) {
     0,
   ) / Math.max(number(input.productiveHours) || 1, 1);
 
-  const canonical = calculateSectorTender({
+  const engineInput = {
     serviceArea: config.serviceArea || input.serviceArea || null,
     parameters: {
       C01: number(input.baseHourlyRate),
@@ -79,7 +83,13 @@ export function calculateScenario(input = {}, config = {}) {
       configVersion: config.version || null,
     },
     contractMonths: number(input.contractMonths) || 12,
+  };
+  const inputSnapshot = createCalculationContractSnapshot({
+    mode: "MANUAL_SANDBOX",
+    state: CALCULATION_CONTRACT_STATES.SHADOW,
+    engineInput,
   });
+  const canonical = executeCalculationContractSnapshot(inputSnapshot);
   if (canonical.status !== "CALCULATED")
     return blocked(canonical.missing || []);
 
@@ -129,6 +139,8 @@ export function calculateScenario(input = {}, config = {}) {
       fTE: canonical.fte,
     },
     canonical,
+    calculationContractVersion: canonical.calculationContractVersion,
+    inputSnapshotSha256: canonical.inputSnapshotSha256,
     sandbox: true,
     persisted: false,
     managementComparable: true,
