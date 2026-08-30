@@ -18,6 +18,8 @@ test("complete backup keeps application and secret payloads cryptographically se
   assert.match(backup, /secret_paths=\(secrets\)/);
   assert.match(backup, /choose exactly one database source/);
   assert.match(backup, /docker exec "\$DATABASE_CONTAINER"/);
+  assert.match(backup, /pg_dumpall --globals-only --no-role-passwords -U "\\$POSTGRES_USER" --database="dbname=\\$POSTGRES_DB"/);
+  assert.doesNotMatch(backup, /pg_dumpall[^\\n]* -d "\\$POSTGRES_DB"/);
   assert.match(backup, /DATABASE_URL_FILE or DATABASE_CONTAINER is required/);
   assert.match(backup, /SHA256SUMS\.enc/);
   assert.doesNotMatch(backup, /data\/postgres["']/);

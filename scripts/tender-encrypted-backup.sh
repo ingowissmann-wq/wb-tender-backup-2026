@@ -81,7 +81,7 @@ dump_to_target() {
   destination=$2
   if test -n "$DATABASE_CONTAINER"; then
     host_destination="$target/${destination#/backup/}"
-    docker exec "$DATABASE_CONTAINER" sh -ec 'if [ "$1" = data ]; then exec pg_dump --format=custom --compress="$2" --no-owner --no-acl -U "$POSTGRES_USER" -d "$POSTGRES_DB"; else exec pg_dumpall --globals-only --no-role-passwords -U "$POSTGRES_USER" -d "$POSTGRES_DB"; fi' backup "$mode" "$PG_DUMP_COMPRESS" \
+    docker exec "$DATABASE_CONTAINER" sh -ec 'if [ "$1" = data ]; then exec pg_dump --format=custom --compress="$2" --no-owner --no-acl -U "$POSTGRES_USER" -d "$POSTGRES_DB"; else exec pg_dumpall --globals-only --no-role-passwords -U "$POSTGRES_USER" --database="dbname=$POSTGRES_DB"; fi' backup "$mode" "$PG_DUMP_COMPRESS" \
       >"$host_destination"
   else
     docker run --rm --network "$DOCKER_NETWORK" \
