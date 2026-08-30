@@ -18,5 +18,4 @@ ENV EXTERNAL_SUBMISSION_ENABLED=false \
 
 WORKDIR /app
 COPY --chown=root:root . /app/
-COPY --chown=root:root deployment/wb-tender-ingestion-entrypoint /usr/local/bin/wb-tender-ingestion-entrypoint
-RUN chmod 0555 /usr/local/bin/wb-tender-ingestion-entrypoint
+COPY --chown=root:root --chmod=0555 deployment/wb-tender-ingestion-entrypoint /usr/local/bin/wb-tender-ingestion-entrypoint
