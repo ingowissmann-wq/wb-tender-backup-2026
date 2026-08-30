@@ -130,6 +130,7 @@ const required = [
   "scripts/tender-restore-verify.sh",
   "deployment/wb-tender-backup.service",
   "deployment/wb-tender-backup.timer",
+  "deployment/wb-tender-backup.env.example",
   "docs/tender-safety-repair-runbook.md",
   "tests/safety-repair-contract.test.mjs",
   "Dockerfile.release",

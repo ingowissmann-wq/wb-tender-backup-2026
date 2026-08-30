@@ -43,3 +43,7 @@ Production cutover is permitted only after the candidate passes all gates and an
 ## Backup gate
 
 The daily encrypted backup is complete only when its service succeeds, checksums validate, and `scripts/tender-restore-verify.sh` restores the archive in an isolated container with `rlsMissing=0`. Timer activity alone is not proof of a successful backup.
+
+The version-2 package has four independently checksummed encrypted payloads: the logical database, global roles, the non-secret application state, and a separate secret archive. The application payload fixes the exact Git commit/tree, runtime image IDs, compose file, immutable artifacts, and discovered SQLite state. It must never contain the production or canary secret directories or a physical PostgreSQL data directory. The per-backup encryption key is stored only below the separate key root.
+
+An accepted restore must validate all checksums, decrypt and extract both filesystem payloads into a temporary isolated directory, verify the embedded source archive and identity, restore the logical database into a new unexposed PostgreSQL container, and enforce the recorded tender/document/package and forced-RLS invariants. This verification never deploys the extracted configuration or secrets.

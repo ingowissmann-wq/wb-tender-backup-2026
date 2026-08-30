@@ -1,12 +1,12 @@
 [Unit]
-Description=Encrypted WB Tender PostgreSQL backup
+Description=Encrypted complete WB Tender backup
 After=docker.service
 Requires=docker.service
 
 [Service]
 Type=oneshot
-EnvironmentFile=/srv/wb-green/wb-tender-backup-v1/backup.env
-ExecStart=/srv/wb-green/wb-tender-backup-v1/tender-encrypted-backup.sh
+EnvironmentFile=/srv/wb-green/wb-tender-backup-v2/backup.env
+ExecStart=/srv/wb-green/wb-tender-backup-v2/tender-encrypted-backup.sh
 User=root
 Group=root
 UMask=0077
