@@ -45,8 +45,9 @@ test("inbox materialization is idempotent",()=>assert.match(pipeline,/ON CONFLIC
 test("identical completed region batches are reused idempotently",()=>{assert.match(pipeline,/SELECT id FROM tender\.region_evaluation_batches WHERE algorithm_version=.*status='COMPLETED'/);assert.match(pipeline,/batchId=completedBatch\?\.id\|\|/)});
 test("canonical lot rematerialization has a new authoritative pipeline identity",()=>{assert.match(pipeline,/wb-daily-inbox-pipeline\/2\.1\.0-canonical-lot-context/);assert.match(pipeline,/pipelineFingerprint:fingerprint/)});
 test("region materialization preserves one context per company and canonical lot",()=>{
-  assert.match(pipeline,/DISTINCT ON\(t\.id,r\.company_id,r\.lot_key\)/);
-  assert.match(pipeline,/LEFT JOIN tender\.lots canonical_lot ON canonical_lot\.tender_id=t\.id AND canonical_lot\.external_id=r\.lot_key/);
+  assert.match(pipeline,/DISTINCT ON\(t\.id,r\.company_id,eligible_lot\.lot_key\)/);
+  assert.match(pipeline,/JOIN tender\.current_participation_eligible_lots eligible_lot/);
+  assert.match(pipeline,/LEFT JOIN tender\.lots canonical_lot ON canonical_lot\.tender_id=t\.id AND canonical_lot\.external_id=eligible_lot\.lot_key/);
   assert.match(pipeline,/lot_id IS NOT DISTINCT FROM \$6::uuid/);
   assert.match(pipeline,/INSERT INTO tender\.region_evaluations\(batch_id,tender_id,inbox_id,lot_id/);
   assert.match(pipeline,/\[batchId,row\.id,inboxId,row\.canonical_lot_id\|\|null/);
