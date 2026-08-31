@@ -78,8 +78,19 @@ async function targetRows(client,tenderIds,scope={},contextBindings=[]){
     JOIN tender.enterprise_company_links c ON c.company_id=r.company_id AND c.active=true
     JOIN tender.configuration_scopes configuration_scope ON configuration_scope.company_id=r.company_id AND configuration_scope.profile_id=c.tender_profile_id AND configuration_scope.canonical_service=CASE r.service_line WHEN 'facility-management' THEN 'facility_management' WHEN 'emergency-services' THEN 'emergency_services' ELSE r.service_line END
     JOIN LATERAL(SELECT id,normalized_data FROM tender.tender_versions WHERE tender_id=t.id ORDER BY version DESC LIMIT 1)tv ON true
-    JOIN tender.current_participation_eligible_lots eligible_lot ON eligible_lot.tender_id=t.id
-      AND (r.lot_key IS NULL OR eligible_lot.lot_key=r.lot_key)
+    JOIN LATERAL(
+      SELECT eligible.lot_key
+      FROM tender.current_participation_eligible_lots eligible
+      WHERE eligible.tender_id=t.id
+        AND (r.lot_key IS NULL OR eligible.lot_key=r.lot_key)
+      UNION
+      SELECT selection.source_lot_id AS lot_key
+      FROM tender.tender_lot_selections selection
+      WHERE selection.tender_id=t.id
+        AND selection.company_id=r.company_id
+        AND selection.canonical_service=configuration_scope.canonical_service
+        AND (r.lot_key IS NULL OR selection.source_lot_id=r.lot_key)
+    ) eligible_lot ON true
     JOIN tender.lots canonical_lot ON canonical_lot.tender_id=t.id AND canonical_lot.external_id=eligible_lot.lot_key
     WHERE t.id=ANY($1::uuid[]) AND t.data_class='PUBLIC_REAL' AND t.source_lifecycle_status='ACTIVE' AND t.participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE')
       AND ($2::uuid IS NULL OR r.company_id=$2) AND ($3='' OR configuration_scope.canonical_service=$3)
