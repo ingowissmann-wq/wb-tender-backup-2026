@@ -276,7 +276,14 @@ export function registerAutopilotRoutes(
           WHERE candidate.tender_id=lot.tender_id ORDER BY candidate.version DESC LIMIT 1)version ON true
         WHERE lot.tender_id=$3 AND lot.external_id=$4`,[company.tenant_id,companyId,tenderId,lotKey,company.profile_id])).rows;
       if(context.length!==1){await client.query("ROLLBACK");return reply.code(409).send({error:"LOT_SELECTION_CONTEXT_NOT_CANONICAL"})}
-      const selected=context[0],inbox=(await client.query("SELECT id FROM tender.management_inbox WHERE tender_id=$1 AND company_id=$2 ORDER BY updated_at DESC,created_at DESC LIMIT 1",[tenderId,companyId])).rows[0],region=(await client.query("SELECT id FROM tender.region_evaluations WHERE tender_id=$1 AND company_id=$2 ORDER BY evaluation_version DESC LIMIT 1",[tenderId,companyId])).rows[0];
+      const selected=context[0],inbox=(await client.query("SELECT id FROM tender.management_inbox WHERE tender_id=$1 AND company_id=$2 ORDER BY updated_at DESC,created_at DESC LIMIT 1",[tenderId,companyId])).rows[0];
+      const region=(await client.query(`SELECT id FROM tender.current_scoped_region_evaluations
+        WHERE tender_id=$1 AND company_id=$2 AND lot_id=$3 AND active_tenant_id=$4
+          AND active_canonical_service=$5 AND active_profile_id=$6
+          AND configuration_version_id=active_configuration_version_id
+          AND region_profile_version_id=active_region_profile_version_id
+        ORDER BY evaluation_version DESC,created_at DESC,id DESC LIMIT 1`,[tenderId,companyId,selected.lot_id,company.tenant_id,selected.canonical_service,company.profile_id])).rows[0];
+      if(!region){await client.query("ROLLBACK");return reply.code(409).send({error:"EXACT_LOT_REGION_MATERIALIZATION_REQUIRED"})}
       const row=(await client.query(`INSERT INTO tender.tender_lot_selections(tenant_id,company_id,tender_id,tender_version_id,lot_id,source_lot_id,inbox_id,region_evaluation_id,canonical_service,deadline_evidence_id,selection_source,selected_by)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'EXPLICIT_SELECTION',$11)
         ON CONFLICT(tenant_id,company_id,tender_id) DO UPDATE SET tender_version_id=excluded.tender_version_id,
