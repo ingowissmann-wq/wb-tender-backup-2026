@@ -25,3 +25,18 @@ test("migration queues every active scope idempotently",()=>{
  assert.match(migration,/ON CONFLICT\(idempotency_key\) DO NOTHING/);
  assert.match(migration,/0160-global-exact-lot-region-binding/);
 });
+
+test("recalculation includes persisted selections and fails closed on incomplete exact bindings",()=>{
+ assert.match(inbox,/FROM tender\.tender_lot_selections selection/);
+ const worker=readFileSync(new URL("../platform/region-recalculation-worker.mjs",import.meta.url),"utf8");
+ assert.match(worker,/selected_targets AS/);
+ assert.match(worker,/REGION_EXACT_BINDING_INCOMPLETE/);
+ assert.match(worker,/missingExactBindings/);
+});
+test("durability migration installs indexes and automatically queues future scopes",()=>{
+ const durable=readFileSync(new URL("../migrations/161_durable_exact_lot_region_invariant.sql",import.meta.url),"utf8");
+ assert.match(durable,/service_relevance_global_region_recalc_idx/);
+ assert.match(durable,/tender_lot_lifecycles_eligible_lookup_idx/);
+ assert.match(durable,/CREATE TRIGGER configuration_scope_region_recalculation/);
+ assert.match(durable,/AFTER INSERT OR UPDATE OF active_region_version_id/);
+});
