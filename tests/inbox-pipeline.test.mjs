@@ -50,7 +50,7 @@ test("region materialization preserves one context per company and canonical lot
   assert.match(pipeline,/JOIN tender\.lots canonical_lot ON canonical_lot\.tender_id=t\.id AND canonical_lot\.external_id=eligible_lot\.lot_key/);
   assert.match(pipeline,/lot_id IS NOT DISTINCT FROM \$6::uuid/);
   assert.match(pipeline,/INSERT INTO tender\.region_evaluations\(batch_id,tender_id,inbox_id,lot_id/);
-  assert.match(pipeline,/\[batchId,row\.id,inboxId,row\.canonical_lot_id\|\|null/);
+  assert.match(pipeline,/\[batchId,row\.id,inboxId,row\.canonical_lot_id,/);
   assert.doesNotMatch(pipeline,/DISTINCT ON\(t\.id,r\.company_id\) /);
 });
 test("repair materialization accepts only unique exact company tender and lot bindings",()=>{
