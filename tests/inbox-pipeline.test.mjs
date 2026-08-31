@@ -46,7 +46,7 @@ test("identical completed region batches are reused idempotently",()=>{assert.ma
 test("canonical lot rematerialization has a new authoritative pipeline identity",()=>{assert.match(pipeline,/wb-daily-inbox-pipeline\/2\.1\.0-canonical-lot-context/);assert.match(pipeline,/pipelineFingerprint:fingerprint/)});
 test("region materialization preserves one context per company and canonical lot",()=>{
   assert.match(pipeline,/DISTINCT ON\(t\.id,r\.company_id,eligible_lot\.lot_key\)/);
-  assert.match(pipeline,/JOIN tender\.current_participation_eligible_lots eligible_lot/);
+  assert.match(pipeline,/FROM tender\.current_participation_eligible_lots eligible/);\n  assert.match(pipeline,/FROM tender\.tender_lot_selections selection/);
   assert.match(pipeline,/JOIN tender\.lots canonical_lot ON canonical_lot\.tender_id=t\.id AND canonical_lot\.external_id=eligible_lot\.lot_key/);
   assert.match(pipeline,/lot_id IS NOT DISTINCT FROM \$6::uuid/);
   assert.match(pipeline,/INSERT INTO tender\.region_evaluations\(batch_id,tender_id,inbox_id,lot_id/);
