@@ -47,7 +47,7 @@ test("canonical lot rematerialization has a new authoritative pipeline identity"
 test("region materialization preserves one context per company and canonical lot",()=>{
   assert.match(pipeline,/DISTINCT ON\(t\.id,r\.company_id,eligible_lot\.lot_key\)/);
   assert.match(pipeline,/JOIN tender\.current_participation_eligible_lots eligible_lot/);
-  assert.match(pipeline,/LEFT JOIN tender\.lots canonical_lot ON canonical_lot\.tender_id=t\.id AND canonical_lot\.external_id=eligible_lot\.lot_key/);
+  assert.match(pipeline,/JOIN tender\.lots canonical_lot ON canonical_lot\.tender_id=t\.id AND canonical_lot\.external_id=eligible_lot\.lot_key/);
   assert.match(pipeline,/lot_id IS NOT DISTINCT FROM \$6::uuid/);
   assert.match(pipeline,/INSERT INTO tender\.region_evaluations\(batch_id,tender_id,inbox_id,lot_id/);
   assert.match(pipeline,/\[batchId,row\.id,inboxId,row\.canonical_lot_id\|\|null/);
