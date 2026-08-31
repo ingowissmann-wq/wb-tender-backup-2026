@@ -5,7 +5,8 @@ const inbox=readFileSync(new URL("../platform/inbox-pipeline.mjs",import.meta.ur
 const routes=readFileSync(new URL("../platform/autopilot-routes.mjs",import.meta.url),"utf8");
 const migration=readFileSync(new URL("../migrations/160_global_exact_lot_region_binding.sql",import.meta.url),"utf8");
 test("global region pipeline fans out tender-wide relevance to eligible canonical lots",()=>{
- assert.match(inbox,/FROM tender\.current_participation_eligible_lots eligible/);\n assert.match(inbox,/JOIN LATERAL\(/);
+ assert.match(inbox,/FROM tender\.current_participation_eligible_lots eligible/);
+ assert.match(inbox,/JOIN LATERAL\(/);
  assert.match(inbox,/canonical_lot\.external_id=eligible_lot\.lot_key/);
  assert.match(inbox,/binding\.lot_key=eligible_lot\.lot_key/);
 });
