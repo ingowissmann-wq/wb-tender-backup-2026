@@ -14,6 +14,14 @@ WHERE idempotency_key LIKE
    OR idempotency_key LIKE
         'selected-lot-region-v2:%';
 
+UPDATE tender.inbox_pipeline_runs
+SET run_kind='REGION_CONFIGURATION',
+    metadata=metadata||jsonb_build_object(
+      'rollbackOriginalRunKind',
+      'SELECTED_LOT_REGION_REPAIR'
+    )
+WHERE run_kind='SELECTED_LOT_REGION_REPAIR';
+
 ALTER TABLE tender.inbox_pipeline_runs
   DROP CONSTRAINT IF EXISTS inbox_pipeline_runs_run_kind_check;
 ALTER TABLE tender.inbox_pipeline_runs
