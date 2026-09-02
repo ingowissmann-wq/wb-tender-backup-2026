@@ -62,7 +62,12 @@ test("persisted selections bypass discovery gates and future selections enqueue 
  assert.match(selectedMigration,/ALTER COLUMN region_profile_version_id DROP NOT NULL/);
  assert.match(selectedMigration,/LEFT JOIN tender\.region_profile_versions active_region/);
  assert.match(selectedMigration,/coalesce\(active_region\.id::text,'unconfigured'\)/);
+ assert.match(selectedMigration,/inbox_pipeline_runs_run_kind_check/);
+ assert.match(selectedMigration,/SELECTED_LOT_REGION_REPAIR/);
  const selectedDown=readFileSync(new URL("../migrations/162_selected_lot_region_invariant.down.sql",import.meta.url),"utf8");
  assert.match(selectedDown,/selected-lot-region-v2:%/);
+ assert.match(selectedDown,/inbox_pipeline_runs_run_kind_check/);
+ assert.match(selectedDown,/REGION_CONFIGURATION/);
+ assert.doesNotMatch(selectedDown,/SELECTED_LOT_REGION_REPAIR/);
  assert.match(selectedDown,/ALTER COLUMN region_profile_version_id SET NOT NULL/);
 });
