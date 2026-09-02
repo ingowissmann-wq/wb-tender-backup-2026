@@ -5,8 +5,8 @@ export PAGER=cat
 export GIT_PAGER=cat
 export GIT_TERMINAL_PROMPT=0
 
-ADMIN_IMAGE='wb-admin:internal-recovery-candidate.1'
-ADMIN_IMAGE_ID='sha256:b0432f108955504b6cbd198999b9138d74ffdfba23a6ec32885fe45df1fd90b6'
+ADMIN_IMAGE='wb-admin:internal-recovery-candidate.2'
+ADMIN_IMAGE_ID='sha256:871f89c205b68d43043fa06c25a5e3a5a7083f550ab7d41e2b8cd950b11efe86'
 PRODUCTION_API='wb-tender-production-api'
 PRODUCTION_DB='wb-tender-production-db'
 PRODUCTION_IMAGE_ID='sha256:30d64f6334519b095f4af837380ac7b56df6ff0c90fb3652a0c100f3528335e3'
@@ -15,7 +15,7 @@ BACKUP_DIR='/srv/wb-tender-production/rollback/global-region-14-20260902T141327Z
 BACKUP="${BACKUP_DIR}/wb_platform_restore.dump"
 BACKUP_SHA256='e72de7f38e6ceffccf031d7229ee18763f879d20b3bdeab79fb778564d3898eaf'
 
-ROOT='/srv/wb-tender-recovery/admin-runtime-rehearsal-3'
+ROOT='/srv/wb-tender-recovery/admin-runtime-rehearsal-4'
 SECRETS="${ROOT}/secrets"
 DATA="${ROOT}/data"
 LOGS="${ROOT}/logs"
@@ -124,6 +124,8 @@ docker run --rm \
   '
 printf 'admin_secret_access=PASS uid=%s gid=%s\n' "${ADMIN_UID}" "${ADMIN_GID}"
 
+RESTORE_COMPLETE='false'
+
 cleanup_on_error() {
   STATUS="$?"
   trap - ERR INT TERM
@@ -132,9 +134,19 @@ cleanup_on_error() {
   docker logs "${ADMIN_CONTAINER}" > "${LOGS}/admin.log" 2>&1 || true
   docker logs "${REDIS_CONTAINER}" > "${LOGS}/redis.log" 2>&1 || true
   docker logs "${DB_CONTAINER}" > "${LOGS}/database.log" 2>&1 || true
-  docker rm -f "${ADMIN_CONTAINER}" "${REDIS_CONTAINER}" "${DB_CONTAINER}" >/dev/null 2>&1 || true
-  docker network rm "${NETWORK}" >/dev/null 2>&1 || true
-  docker volume rm "${DB_VOLUME}" >/dev/null 2>&1 || true
+  docker rm -f "${ADMIN_CONTAINER}" >/dev/null 2>&1 || true
+
+  if test "${RESTORE_COMPLETE}" = 'true'; then
+    printf '%s\n' 'isolated_restore_preserved=true'
+    printf 'preserved_database_container=%s\n' "${DB_CONTAINER}"
+    printf 'preserved_redis_container=%s\n' "${REDIS_CONTAINER}"
+  else
+    docker rm -f "${REDIS_CONTAINER}" "${DB_CONTAINER}" >/dev/null 2>&1 || true
+    docker network rm "${NETWORK}" >/dev/null 2>&1 || true
+    docker volume rm "${DB_VOLUME}" >/dev/null 2>&1 || true
+    printf '%s\n' 'isolated_partial_resources_removed=true'
+  fi
+
   printf '%s\n' 'REHEARSAL_RECOVERY_COMPLETED'
   printf 'production_health=%s\n' "$(
     curl --max-time 15 --silent --insecure       --resolve 'www.enwi.online:443:127.0.0.1'       --output /dev/null --write-out '%{http_code}'       https://www.enwi.online/healthz 2>/dev/null || true
@@ -195,6 +207,7 @@ while kill -0 "${RESTORE_PID}" 2>/dev/null; do
 done
 
 wait "${RESTORE_PID}"
+RESTORE_COMPLETE='true'
 printf '%s\n' 'restore_progress=complete'
 
 CLONE_FINGERPRINT="$(
