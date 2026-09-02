@@ -12,7 +12,13 @@ async function claim(pool){
       JOIN tender.configuration_scopes scope ON scope.tenant_id=job.tenant_id AND scope.company_id=job.company_id
        AND scope.canonical_service=job.canonical_service AND scope.profile_id=job.profile_id
       WHERE (job.status='QUEUED' OR (job.status='RUNNING' AND job.lease_until<now()))
-        AND scope.active_region_version_id=job.region_profile_version_id
+        AND (
+          scope.active_region_version_id=job.region_profile_version_id
+          OR (
+            scope.active_region_version_id IS NULL
+            AND job.region_profile_version_id IS NULL
+          )
+        )
       ORDER BY job.created_at FOR UPDATE OF job SKIP LOCKED LIMIT 1`)).rows[0];
     if(!job){await client.query("COMMIT");return null}
     const claimed=(await client.query(`UPDATE tender.region_recalculation_jobs SET status='RUNNING',lease_owner=$2,
@@ -39,12 +45,43 @@ async function tenderIds(pool,job){
     ),selected_targets AS(
       SELECT DISTINCT selection.tender_id
       FROM tender.tender_lot_selections selection
-      WHERE selection.company_id=$1 AND selection.canonical_service=$2
+      WHERE selection.company_id=$1
+        AND selection.canonical_service=$2
+        AND selection.tenant_id=$3
     )
     SELECT tender_id FROM current_targets
     UNION
     SELECT tender_id FROM selected_targets
-    ORDER BY tender_id`,[job.company_id,job.canonical_service])).rows.map(row=>row.tender_id);
+    ORDER BY tender_id`,[
+      job.company_id,
+      job.canonical_service,
+      job.tenant_id,
+    ])).rows.map(row=>row.tender_id);
+}
+
+async function selectedContextBindings(pool,job){
+  return (await pool.query(`SELECT DISTINCT
+      selection.tender_id AS "tenderId",
+      selection.company_id AS "companyId",
+      selection.source_lot_id AS "lotKey"
+    FROM tender.tender_lot_selections selection
+    LEFT JOIN tender.current_scoped_region_evaluations evaluation
+      ON evaluation.id=selection.region_evaluation_id
+     AND evaluation.tender_id=selection.tender_id
+     AND evaluation.lot_id=selection.lot_id
+     AND evaluation.company_id=selection.company_id
+     AND evaluation.canonical_service=selection.canonical_service
+    WHERE selection.tenant_id=$1
+      AND selection.company_id=$2
+      AND selection.canonical_service=$3
+      AND selection.source_lot_id IS NOT NULL
+      AND btrim(selection.source_lot_id)<>''
+      AND evaluation.id IS NULL
+    ORDER BY selection.tender_id,selection.source_lot_id`,[
+      job.tenant_id,
+      job.company_id,
+      job.canonical_service,
+    ])).rows;
 }
 
 async function missingExactBindings(pool,job){
@@ -56,19 +93,45 @@ async function missingExactBindings(pool,job){
      AND evaluation.lot_id=selection.lot_id
      AND evaluation.company_id=selection.company_id
      AND evaluation.canonical_service=selection.canonical_service
-    WHERE selection.company_id=$1 AND selection.canonical_service=$2
-      AND evaluation.id IS NULL`,[job.company_id,job.canonical_service])).rows[0].missing);
+    WHERE selection.tenant_id=$1
+      AND selection.company_id=$2
+      AND selection.canonical_service=$3
+      AND evaluation.id IS NULL`,[
+      job.tenant_id,
+      job.company_id,
+      job.canonical_service,
+    ])).rows[0].missing);
 }
 
 export async function processRegionRecalculationJob(pool,job,{batchSize=100}={}){
   try{
     const ids=await tenderIds(pool,job);
-    await pool.query("UPDATE tender.region_recalculation_jobs SET total_count=$2,updated_at=now(),lease_until=now()+interval '2 minutes' WHERE id=$1 AND lease_owner=$3",[job.id,ids.length,workerId]);
-    const result=ids.length?await runInboxPipeline(pool,{
+    const bindings=await selectedContextBindings(pool,job);
+    const totalWork=ids.length+bindings.length;
+    const scope={
+      tenantId:job.tenant_id,
+      companyId:job.company_id,
+      canonicalService:job.canonical_service,
+      profileId:job.profile_id,
+    };
+
+    await pool.query("UPDATE tender.region_recalculation_jobs SET total_count=$2,updated_at=now(),lease_until=now()+interval '2 minutes' WHERE id=$1 AND lease_owner=$3",[job.id,totalWork,workerId]);
+
+    const discoveryResult=ids.length?await runInboxPipeline(pool,{
       tenderIds:ids,runKind:"REGION_CONFIGURATION",batchSize,
-      scope:{tenantId:job.tenant_id,companyId:job.company_id,canonicalService:job.canonical_service,profileId:job.profile_id},
+      scope,
       onProgress:({processed})=>pool.query("UPDATE tender.region_recalculation_jobs SET processed_count=$2,updated_at=now(),lease_until=now()+interval '2 minutes' WHERE id=$1 AND lease_owner=$3",[job.id,processed,workerId]),
     }):{passed:true,checked:0,regionCreated:0,inboxCreated:0};
+
+    const repairResult=bindings.length?await runInboxPipeline(pool,{
+      contextBindings:bindings,
+      runKind:"SELECTED_LOT_REGION_REPAIR",
+      batchSize,
+      scope,
+      onProgress:({processed})=>pool.query("UPDATE tender.region_recalculation_jobs SET processed_count=$2,updated_at=now(),lease_until=now()+interval '2 minutes' WHERE id=$1 AND lease_owner=$3",[job.id,ids.length+processed,workerId]),
+    }):{passed:true,checked:0,regionCreated:0,inboxCreated:0};
+
+    const result={...discoveryResult,selectedLotRepair:repairResult};
     const missing=await missingExactBindings(pool,job);
     if(missing>0)throw Object.assign(new Error("exact lot region bindings incomplete"),{code:"REGION_EXACT_BINDING_INCOMPLETE",missing});
     await pool.query(`UPDATE tender.region_recalculation_jobs SET status='SUCCESS',processed_count=total_count,

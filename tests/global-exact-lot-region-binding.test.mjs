@@ -32,6 +32,12 @@ test("recalculation includes persisted selections and fails closed on incomplete
  const worker=readFileSync(new URL("../platform/region-recalculation-worker.mjs",import.meta.url),"utf8");
  assert.match(worker,/selected_targets AS/);
  assert.match(worker,/REGION_EXACT_BINDING_INCOMPLETE/);
+ assert.match(worker,/async function selectedContextBindings/);
+ assert.match(worker,/contextBindings:bindings/);
+ assert.match(worker,/runKind:"SELECTED_LOT_REGION_REPAIR"/);
+ assert.match(worker,/selection\.tenant_id=\$1/);
+ assert.match(worker,/scope\.active_region_version_id IS NULL/);
+ assert.match(worker,/job\.region_profile_version_id IS NULL/);
  assert.match(worker,/missingExactBindings/);
 });
 test("durability migration installs indexes and automatically queues future scopes",()=>{
@@ -50,4 +56,13 @@ test("persisted selections bypass discovery gates and future selections enqueue 
  assert.match(selectedMigration,/AFTER INSERT OR UPDATE OF company_id,canonical_service,lot_id,source_lot_id/);
  assert.match(selectedMigration,/migration-0162-selected-lot-region:/);
  assert.match(selectedMigration,/evaluation\.id IS NULL/);
+ assert.match(selectedMigration,/ON CONFLICT\(idempotency_key\) DO UPDATE SET/);
+ assert.match(selectedMigration,/status='QUEUED'/);
+ assert.match(selectedMigration,/ALTER COLUMN configuration_version_id DROP NOT NULL/);
+ assert.match(selectedMigration,/ALTER COLUMN region_profile_version_id DROP NOT NULL/);
+ assert.match(selectedMigration,/LEFT JOIN tender\.region_profile_versions active_region/);
+ assert.match(selectedMigration,/coalesce\(active_region\.id::text,'unconfigured'\)/);
+ const selectedDown=readFileSync(new URL("../migrations/162_selected_lot_region_invariant.down.sql",import.meta.url),"utf8");
+ assert.match(selectedDown,/selected-lot-region-v2:%/);
+ assert.match(selectedDown,/ALTER COLUMN region_profile_version_id SET NOT NULL/);
 });

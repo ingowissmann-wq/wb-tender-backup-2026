@@ -3,6 +3,10 @@ SET LOCAL lock_timeout='10s';
 SET LOCAL statement_timeout='120s';
 SELECT pg_advisory_xact_lock(hashtextextended('wb-tender:migration:162-selected-lot-region-invariant',0));
 
+ALTER TABLE tender.region_recalculation_jobs
+  ALTER COLUMN configuration_version_id DROP NOT NULL,
+  ALTER COLUMN region_profile_version_id DROP NOT NULL;
+
 CREATE OR REPLACE FUNCTION tender.enqueue_region_recalculation_for_lot_selection()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -18,7 +22,6 @@ BEGIN
   WHERE tenant_id=NEW.tenant_id
     AND company_id=NEW.company_id
     AND canonical_service=NEW.canonical_service
-    AND active_region_version_id IS NOT NULL
   LIMIT 1;
 
   IF NOT FOUND THEN
@@ -33,10 +36,6 @@ BEGIN
     AND canonical_service=selected_scope.canonical_service
     AND profile_id=selected_scope.profile_id
     AND status='ACTIVE';
-
-  IF NOT FOUND THEN
-    RETURN NEW;
-  END IF;
 
   INSERT INTO tender.region_recalculation_jobs(
     tenant_id,
@@ -56,12 +55,12 @@ BEGIN
     active_region.configuration_version_id,
     active_region.id,
     'QUEUED',
-    'selected-lot-region-v1:'||
+    'selected-lot-region-v2:'||
       selected_scope.tenant_id::text||':'||
       selected_scope.company_id::text||':'||
       selected_scope.canonical_service||':'||
       selected_scope.profile_id::text||':'||
-      active_region.id::text||':'||
+      coalesce(active_region.id::text,'unconfigured')||':'||
       NEW.tender_id::text||':'||
       NEW.lot_id::text
   )
@@ -103,9 +102,9 @@ SELECT DISTINCT
     scope.company_id::text||':'||
     scope.canonical_service||':'||
     scope.profile_id::text||':'||
-    active_region.id::text
+    coalesce(active_region.id::text,'unconfigured')
 FROM tender.configuration_scopes scope
-JOIN tender.region_profile_versions active_region
+LEFT JOIN tender.region_profile_versions active_region
   ON active_region.id=scope.active_region_version_id
  AND active_region.tenant_id=scope.tenant_id
  AND active_region.company_id=scope.company_id
@@ -126,7 +125,16 @@ WHERE EXISTS(
     AND selection.canonical_service=scope.canonical_service
     AND evaluation.id IS NULL
 )
-ON CONFLICT(idempotency_key) DO NOTHING;
+ON CONFLICT(idempotency_key) DO UPDATE SET
+  status='QUEUED',
+  processed_count=0,
+  total_count=0,
+  lease_owner=NULL,
+  lease_until=NULL,
+  started_at=NULL,
+  finished_at=NULL,
+  updated_at=now(),
+  error_code=NULL;
 
 INSERT INTO app.schema_migrations(version,description)
 VALUES(
