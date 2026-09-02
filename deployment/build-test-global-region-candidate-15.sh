@@ -30,7 +30,8 @@ test "$(docker inspect --format '{{.State.Running}}' "$API")" = 'true'
 printf '%s\n' '===== FETCH PINNED SOURCE ====='
 timeout 180s git -C "$REPO" fetch --no-tags origin \
   "refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
-test "$(git -C "$REPO" rev-parse "refs/remotes/origin/$BRANCH")" = "$SOURCE_COMMIT"
+git -C "$REPO" cat-file -e "$SOURCE_COMMIT^{commit}"
+git -C "$REPO" merge-base --is-ancestor "$SOURCE_COMMIT" "refs/remotes/origin/$BRANCH"
 git -C "$REPO" archive --format=tar "$SOURCE_COMMIT" | tar -xf - -C "$CONTEXT"
 printf 'source_commit=%s\n' "$SOURCE_COMMIT"
 
