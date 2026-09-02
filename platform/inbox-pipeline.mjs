@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import {classifyRegion} from "./region-gate.mjs";
 
-export const INBOX_PIPELINE_VERSION="wb-daily-inbox-pipeline/2.2.0-selected-lot-invariant";
+export const INBOX_PIPELINE_VERSION="wb-daily-inbox-pipeline/2.3.0-selected-lot-direct-binding";
 const json=value=>JSON.stringify(value??null);
 const hash=value=>crypto.createHash("sha256").update(json(value)).digest("hex");
 const unique=values=>[...new Set((values||[]).flat().filter(value=>value!==null&&value!==undefined&&String(value).trim()).map(value=>String(value).trim()))];
@@ -70,7 +70,7 @@ async function loadConfiguration(client,companyIds){
   return result;
 }
 
-async function targetRows(client,tenderIds,scope={},contextBindings=[]){
+async function discoveryTargetRows(client,tenderIds,scope={},contextBindings=[]){
   if(!tenderIds.length)return[];
   return (await client.query(`SELECT DISTINCT ON(t.id,r.company_id,eligible_lot.lot_key) t.*,r.company_id,eligible_lot.lot_key,canonical_lot.id canonical_lot_id,r.evaluation_version relevance_version,r.snapshot_sha256 relevance_snapshot,r.service_line,r.relevance_status,r.service_scope_gate,r.reason relevance_reason,c.legal_name,c.technical_key,c.sector_slug,c.sector_status,tv.id tender_version_id,tv.normalized_data,configuration_scope.tenant_id,configuration_scope.canonical_service,configuration_scope.profile_id
     FROM tender.tenders t
@@ -100,6 +100,99 @@ async function targetRows(client,tenderIds,scope={},contextBindings=[]){
       AND NOT EXISTS(SELECT 1 FROM tender.service_relevance_evaluations newer WHERE newer.tender_id=r.tender_id AND newer.company_id=r.company_id AND newer.lot_key IS NOT DISTINCT FROM r.lot_key AND newer.evaluation_version>r.evaluation_version)
       AND ($6::jsonb IS NOT NULL OR NOT EXISTS(SELECT 1 FROM tender.tender_tombstones tomb WHERE tomb.source_code=t.source_code AND tomb.external_id=t.external_id AND tomb.tombstone_status='DELETED'))
     ORDER BY t.id,r.company_id,eligible_lot.lot_key,r.evaluation_version DESC`,[tenderIds,scope.companyId||null,scope.canonicalService||"",scope.tenantId||null,scope.profileId||null,contextBindings.length?json(contextBindings):null])).rows;
+}
+
+async function selectedTargetRows(client,scope={},contextBindings=[]){
+  if(!contextBindings.length)return[];
+  return (await client.query(`WITH requested AS(
+      SELECT * FROM jsonb_to_recordset($1::jsonb)
+        AS binding(tender_id uuid,company_id uuid,lot_key text)
+    )
+    SELECT DISTINCT ON(requested.tender_id,requested.company_id,requested.lot_key)
+      tender.*,
+      selection.company_id,
+      selection.source_lot_id AS lot_key,
+      canonical_lot.id AS canonical_lot_id,
+      relevance.evaluation_version AS relevance_version,
+      relevance.snapshot_sha256 AS relevance_snapshot,
+      CASE selection.canonical_service
+        WHEN 'facility_management' THEN 'facility-management'
+        WHEN 'emergency_services' THEN 'emergency-services'
+        ELSE selection.canonical_service
+      END AS service_line,
+      relevance.relevance_status,
+      relevance.service_scope_gate,
+      relevance.reason AS relevance_reason,
+      company.legal_name,
+      company.technical_key,
+      company.sector_slug,
+      company.sector_status,
+      tender_version.id AS tender_version_id,
+      tender_version.normalized_data,
+      configuration_scope.tenant_id,
+      configuration_scope.canonical_service,
+      configuration_scope.profile_id
+    FROM requested
+    JOIN tender.tender_lot_selections selection
+      ON selection.tender_id=requested.tender_id
+     AND selection.company_id=requested.company_id
+     AND selection.source_lot_id=requested.lot_key
+     AND selection.tenant_id=$2
+     AND selection.canonical_service=$3
+    JOIN tender.tenders tender
+      ON tender.id=selection.tender_id
+    JOIN tender.enterprise_company_links company
+      ON company.company_id=selection.company_id
+    JOIN tender.configuration_scopes configuration_scope
+      ON configuration_scope.tenant_id=selection.tenant_id
+     AND configuration_scope.company_id=selection.company_id
+     AND configuration_scope.canonical_service=selection.canonical_service
+     AND configuration_scope.profile_id=$4
+    JOIN tender.lots canonical_lot
+      ON canonical_lot.id=selection.lot_id
+     AND canonical_lot.tender_id=selection.tender_id
+    JOIN LATERAL(
+      SELECT version.id,version.normalized_data
+      FROM tender.tender_versions version
+      WHERE version.tender_id=tender.id
+      ORDER BY version.version DESC
+      LIMIT 1
+    ) tender_version ON true
+    LEFT JOIN LATERAL(
+      SELECT evaluation_version,snapshot_sha256,relevance_status,
+             service_scope_gate,reason
+      FROM tender.service_relevance_evaluations candidate
+      WHERE candidate.tender_id=selection.tender_id
+        AND candidate.company_id=selection.company_id
+        AND (
+          CASE candidate.service_line
+            WHEN 'facility-management' THEN 'facility_management'
+            WHEN 'emergency-services' THEN 'emergency_services'
+            ELSE candidate.service_line
+          END
+        )=selection.canonical_service
+        AND (
+          candidate.lot_key IS NULL
+          OR candidate.lot_key=selection.source_lot_id
+        )
+      ORDER BY
+        (candidate.lot_key=selection.source_lot_id) DESC,
+        candidate.evaluation_version DESC
+      LIMIT 1
+    ) relevance ON true
+    ORDER BY requested.tender_id,requested.company_id,requested.lot_key`,[
+      json(contextBindings),
+      scope.tenantId||null,
+      scope.canonicalService||"",
+      scope.profileId||null,
+    ])).rows;
+}
+
+async function targetRows(client,tenderIds,scope={},contextBindings=[]){
+  if(contextBindings.length){
+    return selectedTargetRows(client,scope,contextBindings);
+  }
+  return discoveryTargetRows(client,tenderIds,scope,contextBindings);
 }
 
 async function existingDocuments(client,tenderId){return (await client.query(`SELECT d.fetch_status,d.resolution_status FROM tender.enrichment_documents d JOIN tender.enrichment_versions e ON e.id=d.enrichment_version_id WHERE e.tender_id=$1 AND e.historical=false`,[tenderId])).rows}
