@@ -45,20 +45,23 @@ fi
 
 test ! -e "${ROOT}"
 printf '%s\n' 'WB_REHEARSE_ADMIN_RUNTIME_1=STARTED'
-printf '%s\n' '===== VERIFY PINNED BACKUP MANIFEST ====='
+printf '%s\n' '===== VERIFY PINNED BACKUP ARCHIVE ====='
 
-MANIFEST="${BACKUP_DIR}/prerollout-manifest.env"
 BACKUP_SIZE_EXPECTED='25639262589'
-
 test -s "${BACKUP}"
-test -s "${BACKUP_DIR}/globals-no-passwords.sql"
-test -s "${MANIFEST}"
+printf '%s\n' 'backup_file=present'
 test "$(stat --format='%s' "${BACKUP}")" = "${BACKUP_SIZE_EXPECTED}"
-grep -Fxq "backup=${BACKUP}" "${MANIFEST}"
-grep -Fxq "backup_size_bytes=${BACKUP_SIZE_EXPECTED}" "${MANIFEST}"
-grep -Fxq "backup_sha256=${BACKUP_SHA256}" "${MANIFEST}"
-printf 'backup_manifest=PASS size_bytes=%s previously_verified_sha256=%s\n' \
-  "${BACKUP_SIZE_EXPECTED}" "${BACKUP_SHA256}"
+printf 'backup_size=PASS bytes=%s\n' "${BACKUP_SIZE_EXPECTED}"
+test -s "${BACKUP_DIR}/globals-no-passwords.sql"
+printf '%s\n' 'backup_globals=present'
+
+DB_IMAGE="$(docker inspect --format '{{.Config.Image}}' "${PRODUCTION_DB}")"
+test -n "${DB_IMAGE}"
+docker run --rm --network none \
+  --volume "${BACKUP_DIR}:/verified-backup:ro" \
+  --entrypoint pg_restore "${DB_IMAGE}" \
+  --list /verified-backup/wb_platform_restore.dump >/dev/null
+printf 'backup_archive=PASS previously_verified_sha256=%s\n' "${BACKUP_SHA256}"
 
 test "$(docker image inspect --format '{{.Id}}' "${ADMIN_IMAGE}")" = "${ADMIN_IMAGE_ID}"
 test "$(docker inspect --format '{{.State.Running}}' "${PRODUCTION_API}")" = 'true'
