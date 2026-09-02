@@ -75,7 +75,7 @@ trap - EXIT INT TERM
 printf '%s\n' 'WB_GLOBAL_REGION_ROLLOUT_16=STARTED'
 
 CANDIDATE='wb-tender:global-selected-lot-region-candidate.16'
-CANDIDATE_ID="$(docker image inspect --format '{{.Id}}' \"${CANDIDATE}\")"
+CANDIDATE_ID="$(docker image inspect --format '{{.Id}}' "${CANDIDATE}")"
 SOURCE_COMMIT='2b44987bd928f1cd54d013da9ac72c52eee6a4f4'
 PREVIOUS_ID='sha256:b2eb0fc53af146ed6df2c675ecf3dbf084196d539f01c47406fec441699cd21f'
 
