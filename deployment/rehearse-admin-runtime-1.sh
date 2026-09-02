@@ -139,10 +139,24 @@ printf '%s\n' 'restore_progress=started'
 
 docker exec --interactive "${DB_CONTAINER}" sh -euc '
   export PGPASSWORD="$(cat /run/secrets/db_password)"
-  psql --no-psqlrc --username admin_rehearsal --dbname postgres     --file /verified-backup/globals-no-passwords.sql     >/tmp/globals-restore.log 2>&1 || true
-  pg_restore     --exit-on-error     --no-owner     --no-acl     --jobs=2     --username admin_rehearsal     --dbname wb_platform     /verified-backup/wb_platform_restore.dump
-'
+  psql --no-psqlrc --username admin_rehearsal --dbname postgres --file /verified-backup/globals-no-passwords.sql >/tmp/globals-restore.log 2>&1 || true
+  pg_restore --exit-on-error --no-owner --no-acl --jobs=2 --username admin_rehearsal --dbname wb_platform /verified-backup/wb_platform_restore.dump
+' > "${LOGS}/restore.log" 2>&1 &
 
+RESTORE_PID="$!"
+RESTORE_STARTED="$(date +%s)"
+
+while kill -0 "${RESTORE_PID}" 2>/dev/null; do
+  sleep 30
+  if kill -0 "${RESTORE_PID}" 2>/dev/null; then
+    RESTORE_ELAPSED="$(( $(date +%s) - RESTORE_STARTED ))"
+    printf 'restore_progress=running elapsed_seconds=%s database_volume=%s\n' \
+      "${RESTORE_ELAPSED}" \
+      "$(docker system df -v 2>/dev/null | awk -v volume="${DB_VOLUME}" '$1==volume {print $3; found=1} END {if(!found)print "unknown"}')"
+  fi
+done
+
+wait "${RESTORE_PID}"
 printf '%s\n' 'restore_progress=complete'
 
 CLONE_FINGERPRINT="$(
