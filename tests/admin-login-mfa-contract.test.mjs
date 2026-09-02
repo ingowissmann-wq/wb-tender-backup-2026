@@ -8,6 +8,12 @@ import { patchAdminLoginMfa } from "../integrations/wb-admin-portal/candidate/ad
 const workspace = path.resolve(import.meta.dirname, "..");
 const baseline = path.join(workspace, "integrations/wb-admin-portal/production-dist-baseline");
 
+test("MFA image build fails closed when the QR dependency is unavailable", () => {
+  const dockerfile = fs.readFileSync(path.join(workspace, "deployment/Dockerfile.admin-login-mfa-enrollment"), "utf8");
+  assert.match(dockerfile, /await import\("qrcode"\)/);
+  assert.ok(dockerfile.indexOf('await import("qrcode")') < dockerfile.indexOf("admin-login-mfa-enrollment-patch.mjs /app"));
+});
+
 function patchedFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wb-admin-login-"));
   fs.mkdirSync(path.join(root, "apps/api/dist"), { recursive: true });
@@ -37,6 +43,8 @@ test("unconfigured accounts enroll MFA before a session can be created", () => {
     const login = api.slice(api.indexOf('app.post("/api/admin/v1/iam/login"'), api.indexOf('app.post("/api/admin/v1/iam/mfa"'));
     assert.match(login, /mfaSetupSecret/);
     assert.match(login, /mfaSetupRequired: true/);
+    assert.match(api, /import QRCode from "qrcode"/);
+    assert.match(login, /qrDataUrl: await QRCode\.toDataURL\(uri/);
     assert.doesNotMatch(login, /createAdminSession/);
     assert.match(api, /verifyTotp\(decryptSecret\(encryptedSecret\)/);
     assert.match(api, /else if \(!preauth\.mfaSetupSecret\)/);
@@ -44,6 +52,8 @@ test("unconfigured accounts enroll MFA before a session can be created", () => {
     assert.ok(api.indexOf("mfa_self_enrollment") < api.indexOf("return createAdminSession", api.indexOf('app.post("/api/admin/v1/iam/mfa"')));
     assert.match(client, /challenge:R\.challenge/);
     assert.match(client, /Eine Sitzung wird erst nach erfolgreicher Codeprüfung erstellt/);
+    assert.match(client, /src:R\.qrDataUrl/);
+    assert.match(client, /alt:"QR-Code für die Authenticator-App"/);
     assert.notEqual(asset, "index-2Yce_8u7.js");
     assert.match(html, new RegExp(`assets/${asset.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   } finally {
