@@ -7,6 +7,19 @@ ALTER TABLE tender.region_recalculation_jobs
   ALTER COLUMN configuration_version_id DROP NOT NULL,
   ALTER COLUMN region_profile_version_id DROP NOT NULL;
 
+ALTER TABLE tender.inbox_pipeline_runs
+  DROP CONSTRAINT IF EXISTS inbox_pipeline_runs_run_kind_check;
+ALTER TABLE tender.inbox_pipeline_runs
+  ADD CONSTRAINT inbox_pipeline_runs_run_kind_check
+  CHECK(run_kind IN(
+    'SCHEDULED',
+    'BACKFILL',
+    'MANUAL',
+    'TEST',
+    'REGION_CONFIGURATION',
+    'SELECTED_LOT_REGION_REPAIR'
+  ));
+
 CREATE OR REPLACE FUNCTION tender.enqueue_region_recalculation_for_lot_selection()
 RETURNS trigger
 LANGUAGE plpgsql
