@@ -10,7 +10,6 @@ WORKDIR /app
 
 RUN npm install \
       --omit=dev \
-      --ignore-scripts \
       --no-audit \
       --no-fund \
       --package-lock=false \
@@ -20,6 +19,7 @@ RUN npm install \
       'ioredis@5.6.1' \
       'sanitize-html@2.17.0' \
       'zod@3.25.76' \
+      'argon2@0.41.1' \
  && npm cache clean --force
 
 RUN install -d -m 0755 \
@@ -34,15 +34,18 @@ COPY --chown=root:root integrations/wb-admin-portal/candidate/db.js /tmp/admin-c
 COPY --chown=root:root integrations/wb-admin-portal/candidate/admin-login-mfa-enrollment-patch.mjs /tmp/admin-login-mfa-enrollment-patch.mjs
 COPY --chown=root:root deployment/admin-commercial-tenancy-patch.mjs /tmp/admin-commercial-tenancy-patch.mjs
 COPY --chown=root:root --chmod=0555 deployment/wb-admin-runtime-entrypoint /usr/local/bin/wb-admin-runtime-entrypoint
+COPY --chown=root:root deployment/admin-runtime-dependency-audit.mjs /tmp/admin-runtime-dependency-audit.mjs
 
 RUN node /tmp/admin-login-mfa-enrollment-patch.mjs /app \
  && node /tmp/admin-commercial-tenancy-patch.mjs /app /tmp/admin-commercial-tenancy-db.js \
  && node --check /app/apps/api/dist/server.js \
  && node --check /app/apps/api/dist/db.js \
+ && node /tmp/admin-runtime-dependency-audit.mjs \
  && rm -f \
       /tmp/admin-login-mfa-enrollment-patch.mjs \
       /tmp/admin-commercial-tenancy-patch.mjs \
       /tmp/admin-commercial-tenancy-db.js \
+      /tmp/admin-runtime-dependency-audit.mjs \
  && chown -R root:root /app/apps \
  && chmod -R a=rX,u+w /app/apps
 
