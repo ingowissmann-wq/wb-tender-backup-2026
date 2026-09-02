@@ -5,7 +5,7 @@ export GIT_PAGER=cat PAGER=cat GIT_TERMINAL_PROMPT=0
 REPO='/srv/wb-tender-recovery/canonical-source/f862ceb69ee2ee73d3ba3af82c9bad5b7bbf73fc'
 BRANCH='repair/global-exact-lot-region-binding'
 SOURCE_COMMIT='c66eb107bbfa8ea898e4439663fec50f1a2fea2d'
-BASE_IMAGE='wb-tender:global-selected-lot-region-candidate.17'
+BASE_IMAGE='wb-tender:global-selected-lot-region-candidate.16'
 BASE_ID='sha256:c8d0c93c27ee5fe59781e360fa915656de7e624f48999ce4c86ed5b3416072a2'
 CANDIDATE='wb-tender:global-selected-lot-region-candidate.17'
 CONTEXT="$(mktemp -d /srv/wb-tender-recovery/region-candidate-17.XXXXXXXX)"
