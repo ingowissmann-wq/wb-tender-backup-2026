@@ -15,7 +15,7 @@ BACKUP_DIR='/srv/wb-tender-production/rollback/global-region-14-20260902T141327Z
 BACKUP="${BACKUP_DIR}/wb_platform_restore.dump"
 BACKUP_SHA256='e72de7f38e6ceffccf031d7229ee18763f879d20b3bdeab79fb778564d3898eaf'
 
-ROOT='/srv/wb-tender-recovery/admin-runtime-rehearsal-2'
+ROOT='/srv/wb-tender-recovery/admin-runtime-rehearsal-3'
 SECRETS="${ROOT}/secrets"
 DATA="${ROOT}/data"
 LOGS="${ROOT}/logs"
@@ -116,15 +116,7 @@ docker run --rm \
   --volume "${SECRETS}/autoseo_webhook:/run/secrets/autoseo_webhook:ro" \
   --volume "${DATA}:/data" \
   "${ADMIN_IMAGE}" -euc '
-    for secret in
-      /run/secrets/database_url
-      /run/secrets/session_pepper
-      /run/secrets/iam_field_key
-      /run/secrets/owner_email
-      /run/secrets/admin_bootstrap_password
-      /run/secrets/admin_redis_password
-      /run/secrets/autoseo_webhook
-    do
+    for secret in /run/secrets/database_url /run/secrets/session_pepper /run/secrets/iam_field_key /run/secrets/owner_email /run/secrets/admin_bootstrap_password /run/secrets/admin_redis_password /run/secrets/autoseo_webhook; do
       test -r "$secret"
       test -s "$secret"
     done
