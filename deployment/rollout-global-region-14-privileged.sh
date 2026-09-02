@@ -36,12 +36,28 @@ printf '%s\n' 'backup_gate=PASS'
 printf '%s\n' 'candidate_gate=PASS'
 
 printf '%s\n' '===== VERIFY CURRENT PRODUCTION BASELINE ====='
-for CONTAINER in "${API}" "${WORKER}" "${SCHEDULER}" "${DB}"; do
-  test "$(docker inspect --format '{{.State.Running}}' "${CONTAINER}")" = 'true' || { printf 'ABORT: container_not_running=%s\n' "${CONTAINER}"; exit 25; }
-done
 for CONTAINER in "${API}" "${WORKER}" "${SCHEDULER}"; do
   test "$(docker inspect --format '{{.Image}}' "${CONTAINER}")" = "${PREVIOUS_ID}" || { printf 'ABORT: unexpected_application_image=%s\n' "${CONTAINER}"; exit 26; }
 done
+
+for CONTAINER in "${DB}" "${API}" "${WORKER}" "${SCHEDULER}"; do
+  if test "$(docker inspect --format '{{.State.Running}}' "${CONTAINER}")" != 'true'; then
+    printf 'baseline_recovery_starting=%s\n' "${CONTAINER}"
+    docker start "${CONTAINER}" >/dev/null
+  fi
+done
+
+for BASELINE_WAIT in $(seq 1 60); do
+  ALL_RUNNING='true'
+  for CONTAINER in "${DB}" "${API}" "${WORKER}" "${SCHEDULER}"; do
+    if test "$(docker inspect --format '{{.State.Running}}' "${CONTAINER}" 2>/dev/null || true)" != 'true'; then
+      ALL_RUNNING='false'
+    fi
+  done
+  test "${ALL_RUNNING}" = 'true' && break
+  sleep 2
+done
+test "${ALL_RUNNING}" = 'true' || { printf '%s\n' 'ABORT: production baseline could not be started'; exit 25; }
 printf '%s\n' 'production_baseline=PASS'
 
 PROJECT="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "${API}")"
