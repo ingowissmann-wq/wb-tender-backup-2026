@@ -43,7 +43,7 @@ test("duplicate records with incomplete classification are retried",()=>{assert.
 test("download failure is reviewable and does not become not relevant",()=>assert.equal(documentPipelineStatus([{fetch_status:"DOWNLOAD_FEHLGESCHLAGEN"}]),"DOWNLOAD_FAILED_REVIEWABLE"));
 test("inbox materialization is idempotent",()=>assert.match(pipeline,/ON CONFLICT\(event_fingerprint\) DO NOTHING/));
 test("identical completed region batches are reused idempotently",()=>{assert.match(pipeline,/SELECT id FROM tender\.region_evaluation_batches WHERE algorithm_version=.*status='COMPLETED'/);assert.match(pipeline,/batchId=completedBatch\?\.id\|\|/)});
-test("canonical lot rematerialization has a new authoritative pipeline identity",()=>{assert.match(pipeline,/wb-daily-inbox-pipeline\\/2\\.3\\.0-selected-lot-direct-binding/);assert.match(pipeline,/pipelineFingerprint:fingerprint/)});
+test("canonical lot rematerialization has a new authoritative pipeline identity",()=>{assert.match(pipeline,/wb-daily-inbox-pipeline\/2\.3\.0-selected-lot-direct-binding/);assert.match(pipeline,/pipelineFingerprint:fingerprint/)});
 test("region materialization preserves one context per company and canonical lot",()=>{
   assert.match(pipeline,/DISTINCT ON\(t\.id,r\.company_id,eligible_lot\.lot_key\)/);
   assert.match(pipeline,/FROM tender\.current_participation_eligible_lots eligible/);
