@@ -15,7 +15,7 @@ BACKUP_DIR='/srv/wb-tender-production/rollback/global-region-14-20260902T141327Z
 BACKUP="${BACKUP_DIR}/wb_platform_restore.dump"
 BACKUP_SHA256='e72de7f38e6ceffccf031d7229ee18763f879d20b3bdeab79fb778564d3898eaf'
 
-ROOT='/srv/wb-tender-recovery/admin-runtime-rehearsal-1'
+ROOT='/srv/wb-tender-recovery/admin-runtime-rehearsal-2'
 SECRETS="${ROOT}/secrets"
 DATA="${ROOT}/data"
 LOGS="${ROOT}/logs"
@@ -96,11 +96,41 @@ unset AUTOSEO_TOKEN
 DB_PASSWORD="$(cat "${SECRETS}/db_password")"
 printf 'postgresql://admin_rehearsal:%s@%s:5432/wb_platform\n'   "${DB_PASSWORD}" "${DB_CONTAINER}" > "${SECRETS}/database_url"
 unset DB_PASSWORD
-chmod 0400 "${SECRETS}"/*
-
 ADMIN_UID="$(docker run --rm --network none --entrypoint id "${ADMIN_IMAGE}" -u)"
 ADMIN_GID="$(docker run --rm --network none --entrypoint id "${ADMIN_IMAGE}" -g)"
+
+chown root:"${ADMIN_GID}" "${SECRETS}"/*
+chmod 0440 "${SECRETS}"/*
 chown -R "${ADMIN_UID}:${ADMIN_GID}" "${DATA}"
+
+printf '%s\n' '===== VERIFY ADMIN SECRET ACCESS BEFORE RESTORE ====='
+docker run --rm \
+  --network none \
+  --entrypoint sh \
+  --volume "${SECRETS}/database_url:/run/secrets/database_url:ro" \
+  --volume "${SECRETS}/session_pepper:/run/secrets/session_pepper:ro" \
+  --volume "${SECRETS}/iam_field_key:/run/secrets/iam_field_key:ro" \
+  --volume "${SECRETS}/owner_email:/run/secrets/owner_email:ro" \
+  --volume "${SECRETS}/admin_bootstrap_password:/run/secrets/admin_bootstrap_password:ro" \
+  --volume "${SECRETS}/admin_redis_password:/run/secrets/admin_redis_password:ro" \
+  --volume "${SECRETS}/autoseo_webhook:/run/secrets/autoseo_webhook:ro" \
+  --volume "${DATA}:/data" \
+  "${ADMIN_IMAGE}" -euc '
+    for secret in
+      /run/secrets/database_url
+      /run/secrets/session_pepper
+      /run/secrets/iam_field_key
+      /run/secrets/owner_email
+      /run/secrets/admin_bootstrap_password
+      /run/secrets/admin_redis_password
+      /run/secrets/autoseo_webhook
+    do
+      test -r "$secret"
+      test -s "$secret"
+    done
+    test -w /data
+  '
+printf 'admin_secret_access=PASS uid=%s gid=%s\n' "${ADMIN_UID}" "${ADMIN_GID}"
 
 cleanup_on_error() {
   STATUS="$?"
