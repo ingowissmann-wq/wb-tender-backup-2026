@@ -97,6 +97,26 @@ PY
 nginx -t
 systemctl reload nginx
 
+printf '%s\n' '===== WAIT FOR RELOADED NGINX WORKERS ====='
+
+ROUTE_READY='false'
+for ATTEMPT in $(seq 1 30); do
+  ROUTE_CODE="$(
+    curl --max-time 5 --silent --show-error --insecure \
+      --resolve 'www.enwi.online:443:127.0.0.1' \
+      --output /dev/null --write-out '%{http_code}' \
+      https://www.enwi.online/admin/ 2>/dev/null || true
+  )"
+  if test "${ROUTE_CODE}" = '200'; then
+    ROUTE_READY='true'
+    printf 'nginx_reload_ready=true attempt=%s\n' "${ATTEMPT}"
+    break
+  fi
+  printf 'nginx_reload_wait=%s/30 http=%s\n' "${ATTEMPT}" "${ROUTE_CODE}"
+  sleep 1
+done
+test "${ROUTE_READY}" = 'true'
+
 printf '%s\n' '===== PUBLIC CANARY CONTRACT ====='
 
 check() {
