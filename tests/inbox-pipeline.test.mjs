@@ -43,7 +43,7 @@ test("duplicate records with incomplete classification are retried",()=>{assert.
 test("download failure is reviewable and does not become not relevant",()=>assert.equal(documentPipelineStatus([{fetch_status:"DOWNLOAD_FEHLGESCHLAGEN"}]),"DOWNLOAD_FAILED_REVIEWABLE"));
 test("inbox materialization is idempotent",()=>assert.match(pipeline,/ON CONFLICT\(event_fingerprint\) DO NOTHING/));
 test("identical completed region batches are reused idempotently",()=>{assert.match(pipeline,/SELECT id FROM tender\.region_evaluation_batches WHERE algorithm_version=.*status='COMPLETED'/);assert.match(pipeline,/batchId=completedBatch\?\.id\|\|/)});
-test("canonical lot rematerialization has a new authoritative pipeline identity",()=>{assert.match(pipeline,/wb-daily-inbox-pipeline\/2\.1\.0-canonical-lot-context/);assert.match(pipeline,/pipelineFingerprint:fingerprint/)});
+test("canonical lot rematerialization has a new authoritative pipeline identity",()=>{assert.match(pipeline,/wb-daily-inbox-pipeline\/2\.2\.0-selected-lot-invariant/);assert.match(pipeline,/pipelineFingerprint:fingerprint/)});
 test("region materialization preserves one context per company and canonical lot",()=>{
   assert.match(pipeline,/DISTINCT ON\(t\.id,r\.company_id,eligible_lot\.lot_key\)/);
   assert.match(pipeline,/FROM tender\.current_participation_eligible_lots eligible/);
@@ -67,3 +67,8 @@ test("expired and tombstoned tenders are excluded",()=>{assert.match(pipeline,/s
 test("tenant isolation remains based on accessible companies",()=>{assert.match(routes,/const companies = await accessibleCompanies\(req\.identity\)/);assert.match(routes,/r\.company_id=ANY\(\$1::uuid\[\]\)/)});
 test("inbox visibility no longer depends on portal credentials while portal fields remain scoped",()=>{assert.match(routes,/LEFT JOIN tender\.current_registered_tender_company_portals registered/);assert.match(routes,/registered\.tender_id=r\.tender_id AND registered\.company_id=r\.company_id/)});
 test("API and UI use the same management inbox endpoint",()=>{const ui=readFileSync(new URL("../platform/assets/inbox-regions.js",import.meta.url),"utf8");assert.match(ui,/\/management-inbox\?/);assert.match(routes,/"\/api\/management-inbox"/)});
+
+test("explicit selected-lot repair is independent of discovery lifecycle gates",()=>{
+  assert.match(pipeline,/\$6::jsonb IS NOT NULL OR \(t\.data_class='PUBLIC_REAL'/);
+  assert.match(pipeline,/\$6::jsonb IS NOT NULL OR NOT EXISTS\(SELECT 1 FROM tender\.tender_tombstones/);
+});
