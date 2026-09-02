@@ -14,6 +14,18 @@ WHERE idempotency_key LIKE
    OR idempotency_key LIKE
         'selected-lot-region-v2:%';
 
+ALTER TABLE tender.inbox_pipeline_runs
+  DROP CONSTRAINT IF EXISTS inbox_pipeline_runs_run_kind_check;
+ALTER TABLE tender.inbox_pipeline_runs
+  ADD CONSTRAINT inbox_pipeline_runs_run_kind_check
+  CHECK(run_kind IN(
+    'SCHEDULED',
+    'BACKFILL',
+    'MANUAL',
+    'TEST',
+    'REGION_CONFIGURATION'
+  ));
+
 ALTER TABLE tender.region_recalculation_jobs
   ALTER COLUMN configuration_version_id SET NOT NULL,
   ALTER COLUMN region_profile_version_id SET NOT NULL;
