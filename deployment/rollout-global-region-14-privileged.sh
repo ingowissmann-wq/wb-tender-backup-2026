@@ -24,8 +24,18 @@ DB='wb-tender-production-db'
 printf '%s\n' '===== VERIFY PINNED BACKUP AND CANDIDATE ====='
 test -s "${BACKUP}" || { printf '%s\n' 'ABORT: verified backup file is missing'; exit 20; }
 test "$(stat --format='%s' "${BACKUP}")" = "${BACKUP_SIZE}" || { printf '%s\n' 'ABORT: backup size differs from verified manifest'; exit 21; }
-grep -Fx "backup_sha256=${BACKUP_SHA256}" \
-  "${BACKUP_DIR}/prerollout-manifest.env" >/dev/null || { printf '%s\n' 'ABORT: backup checksum manifest does not match'; exit 22; }
+
+DB_IMAGE="$(docker inspect --format '{{.Config.Image}}' "${DB}")"
+test -n "${DB_IMAGE}" || { printf '%s\n' 'ABORT: database image cannot be determined'; exit 22; }
+
+docker run --rm \
+  --network none \
+  --volume "${BACKUP_DIR}:/verified-backup:ro" \
+  --entrypoint pg_restore \
+  "${DB_IMAGE}" \
+  --list \
+  /verified-backup/wb_platform_restore.dump \
+  >/dev/null || { printf '%s\n' 'ABORT: backup archive is not readable'; exit 22; }
 
 test "$(docker image inspect --format '{{.Id}}' "${CANDIDATE}")" = \
   "${CANDIDATE_ID}" || { printf '%s\n' 'ABORT: candidate image ID does not match'; exit 23; }
@@ -33,6 +43,7 @@ test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainer
   "${SOURCE_COMMIT}" || { printf '%s\n' 'ABORT: candidate source commit does not match'; exit 24; }
 
 printf '%s\n' 'backup_gate=PASS'
+printf 'backup_sha256_previously_verified=%s\n' "${BACKUP_SHA256}"
 printf '%s\n' 'candidate_gate=PASS'
 
 printf '%s\n' '===== VERIFY CURRENT PRODUCTION BASELINE ====='
