@@ -19,7 +19,6 @@ BEGIN
     AND company_id=NEW.company_id
     AND canonical_service=NEW.canonical_service
     AND active_region_version_id IS NOT NULL
-  ORDER BY updated_at DESC
   LIMIT 1;
 
   IF NOT FOUND THEN
