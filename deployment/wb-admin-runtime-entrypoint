@@ -1,0 +1,54 @@
+#!/bin/sh
+set -eu
+
+read_required_secret() {
+  secret_path="$1"
+  secret_name="$2"
+
+  if [ ! -r "$secret_path" ]; then
+    printf '%s\n' "missing_required_secret_file:$secret_name" >&2
+    exit 78
+  fi
+
+  secret_value="$(cat "$secret_path")"
+
+  if [ -z "$secret_value" ]; then
+    printf '%s\n' "empty_required_secret_file:$secret_name" >&2
+    exit 78
+  fi
+
+  printf '%s' "$secret_value"
+}
+
+: "${DATABASE_URL_FILE:=/run/secrets/database_url}"
+: "${SESSION_PEPPER_FILE:=/run/secrets/session_pepper}"
+: "${FIELD_ENCRYPTION_KEY_FILE:=/run/secrets/iam_field_key}"
+: "${BOOTSTRAP_ADMIN_EMAIL_FILE:=/run/secrets/owner_email}"
+: "${BOOTSTRAP_ADMIN_PASSWORD_FILE:=/run/secrets/admin_bootstrap_password}"
+: "${REDIS_PASSWORD_FILE:=/run/secrets/admin_redis_password}"
+
+export DATABASE_URL
+DATABASE_URL="$(read_required_secret "$DATABASE_URL_FILE" DATABASE_URL_FILE)"
+
+export SESSION_PEPPER
+SESSION_PEPPER="$(read_required_secret "$SESSION_PEPPER_FILE" SESSION_PEPPER_FILE)"
+
+export FIELD_ENCRYPTION_KEY
+FIELD_ENCRYPTION_KEY="$(read_required_secret "$FIELD_ENCRYPTION_KEY_FILE" FIELD_ENCRYPTION_KEY_FILE)"
+
+export BOOTSTRAP_ADMIN_EMAIL
+BOOTSTRAP_ADMIN_EMAIL="$(read_required_secret "$BOOTSTRAP_ADMIN_EMAIL_FILE" BOOTSTRAP_ADMIN_EMAIL_FILE)"
+
+export BOOTSTRAP_ADMIN_PASSWORD
+BOOTSTRAP_ADMIN_PASSWORD="$(read_required_secret "$BOOTSTRAP_ADMIN_PASSWORD_FILE" BOOTSTRAP_ADMIN_PASSWORD_FILE)"
+
+export REDIS_PASSWORD
+REDIS_PASSWORD="$(read_required_secret "$REDIS_PASSWORD_FILE" REDIS_PASSWORD_FILE)"
+
+export EXTERNAL_SUBMISSION_ENABLED=false
+export WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false
+export WB_ADMIN_SAAS_ENABLED=false
+export WB_ADMIN_TENANCY_ENFORCED=false
+export WB_ADMIN_TENANT_FILE_STORAGE_ENABLED=false
+
+exec node /app/apps/api/dist/server.js
