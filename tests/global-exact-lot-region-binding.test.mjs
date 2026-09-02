@@ -41,3 +41,13 @@ test("durability migration installs indexes and automatically queues future scop
  assert.match(durable,/CREATE TRIGGER configuration_scope_region_recalculation/);
  assert.match(durable,/AFTER INSERT OR UPDATE OF active_region_version_id/);
 });
+
+test("persisted selections bypass discovery gates and future selections enqueue repair",()=>{
+ const selectedMigration=readFileSync(new URL("../migrations/162_selected_lot_region_invariant.sql",import.meta.url),"utf8");
+ assert.match(inbox,/\$6::jsonb IS NOT NULL OR \(t\.data_class='PUBLIC_REAL'/);
+ assert.match(inbox,/\$6::jsonb IS NOT NULL OR NOT EXISTS\(SELECT 1 FROM tender\.tender_tombstones/);
+ assert.match(selectedMigration,/CREATE TRIGGER tender_lot_selection_region_recalculation/);
+ assert.match(selectedMigration,/AFTER INSERT OR UPDATE OF company_id,canonical_service,lot_id,source_lot_id/);
+ assert.match(selectedMigration,/migration-0162-selected-lot-region:/);
+ assert.match(selectedMigration,/evaluation\.id IS NULL/);
+});
