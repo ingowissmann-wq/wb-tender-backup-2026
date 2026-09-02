@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import {classifyRegion} from "./region-gate.mjs";
 
-export const INBOX_PIPELINE_VERSION="wb-daily-inbox-pipeline/2.1.0-canonical-lot-context";
+export const INBOX_PIPELINE_VERSION="wb-daily-inbox-pipeline/2.2.0-selected-lot-invariant";
 const json=value=>JSON.stringify(value??null);
 const hash=value=>crypto.createHash("sha256").update(json(value)).digest("hex");
 const unique=values=>[...new Set((values||[]).flat().filter(value=>value!==null&&value!==undefined&&String(value).trim()).map(value=>String(value).trim()))];
@@ -92,13 +92,13 @@ async function targetRows(client,tenderIds,scope={},contextBindings=[]){
         AND (r.lot_key IS NULL OR selection.source_lot_id=r.lot_key)
     ) eligible_lot ON true
     JOIN tender.lots canonical_lot ON canonical_lot.tender_id=t.id AND canonical_lot.external_id=eligible_lot.lot_key
-    WHERE t.id=ANY($1::uuid[]) AND t.data_class='PUBLIC_REAL' AND t.source_lifecycle_status='ACTIVE' AND t.participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE')
+    WHERE t.id=ANY($1::uuid[]) AND ($6::jsonb IS NOT NULL OR (t.data_class='PUBLIC_REAL' AND t.source_lifecycle_status='ACTIVE' AND t.participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE')))
       AND ($2::uuid IS NULL OR r.company_id=$2) AND ($3='' OR configuration_scope.canonical_service=$3)
       AND ($4::uuid IS NULL OR configuration_scope.tenant_id=$4) AND ($5::uuid IS NULL OR configuration_scope.profile_id=$5)
       AND ($6::jsonb IS NULL OR EXISTS(SELECT 1 FROM jsonb_to_recordset($6::jsonb) binding(tender_id uuid,company_id uuid,lot_key text)
         WHERE binding.tender_id=t.id AND binding.company_id=r.company_id AND binding.lot_key=eligible_lot.lot_key))
       AND NOT EXISTS(SELECT 1 FROM tender.service_relevance_evaluations newer WHERE newer.tender_id=r.tender_id AND newer.company_id=r.company_id AND newer.lot_key IS NOT DISTINCT FROM r.lot_key AND newer.evaluation_version>r.evaluation_version)
-      AND NOT EXISTS(SELECT 1 FROM tender.tender_tombstones tomb WHERE tomb.source_code=t.source_code AND tomb.external_id=t.external_id AND tomb.tombstone_status='DELETED')
+      AND ($6::jsonb IS NOT NULL OR NOT EXISTS(SELECT 1 FROM tender.tender_tombstones tomb WHERE tomb.source_code=t.source_code AND tomb.external_id=t.external_id AND tomb.tombstone_status='DELETED'))
     ORDER BY t.id,r.company_id,eligible_lot.lot_key,r.evaluation_version DESC`,[tenderIds,scope.companyId||null,scope.canonicalService||"",scope.tenantId||null,scope.profileId||null,contextBindings.length?json(contextBindings):null])).rows;
 }
 
