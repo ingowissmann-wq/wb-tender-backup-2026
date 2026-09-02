@@ -4,7 +4,7 @@ export GIT_PAGER=cat PAGER=cat GIT_TERMINAL_PROMPT=0
 
 REPO='/srv/wb-tender-recovery/canonical-source/f862ceb69ee2ee73d3ba3af82c9bad5b7bbf73fc'
 BRANCH='repair/global-exact-lot-region-binding'
-SOURCE_COMMIT='c66eb107bbfa8ea898e4439663fec50f1a2fea2d'
+SOURCE_COMMIT='07fe6806452dfe2c856b51f3fdbb1bced838fec8'
 BASE_IMAGE='wb-tender:global-selected-lot-region-candidate.16'
 BASE_ID='sha256:c8d0c93c27ee5fe59781e360fa915656de7e624f48999ce4c86ed5b3416072a2'
 CANDIDATE='wb-tender:global-selected-lot-region-candidate.17'
@@ -76,7 +76,7 @@ printf '%s\n' 'WB_GLOBAL_REGION_ROLLOUT_17=STARTED'
 
 CANDIDATE='wb-tender:global-selected-lot-region-candidate.17'
 CANDIDATE_ID="$(docker image inspect --format '{{.Id}}' "${CANDIDATE}")"
-SOURCE_COMMIT='c66eb107bbfa8ea898e4439663fec50f1a2fea2d'
+SOURCE_COMMIT='07fe6806452dfe2c856b51f3fdbb1bced838fec8'
 PREVIOUS_ID='sha256:b2eb0fc53af146ed6df2c675ecf3dbf084196d539f01c47406fec441699cd21f'
 
 BACKUP_DIR='/srv/wb-tender-production/rollback/global-region-14-20260902T141327Z'
