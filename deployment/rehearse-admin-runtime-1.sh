@@ -44,9 +44,36 @@ if docker volume inspect "${DB_VOLUME}" >/dev/null 2>&1; then
 fi
 
 test ! -e "${ROOT}"
+printf '%s\n' 'WB_REHEARSE_ADMIN_RUNTIME_1=STARTED'
 test -s "${BACKUP}"
 test -s "${BACKUP_DIR}/globals-no-passwords.sql"
-test "$(sha256sum "${BACKUP}" | awk '{print $1}')" = "${BACKUP_SHA256}"
+
+printf '%s\n' '===== VERIFY 25.6 GB BACKUP CHECKSUM ====='
+CHECKSUM_RESULT="$(mktemp /tmp/wb-admin-backup-checksum.XXXXXXXX)"
+checksum_cleanup() {
+  rm -f "${CHECKSUM_RESULT}"
+}
+trap checksum_cleanup EXIT INT TERM
+
+sha256sum "${BACKUP}" > "${CHECKSUM_RESULT}" &
+CHECKSUM_PID="$!"
+CHECKSUM_STARTED="$(date +%s)"
+
+while kill -0 "${CHECKSUM_PID}" 2>/dev/null; do
+  sleep 20
+  if kill -0 "${CHECKSUM_PID}" 2>/dev/null; then
+    printf 'backup_checksum=running elapsed_seconds=%s\n' \
+      "$(( $(date +%s) - CHECKSUM_STARTED ))"
+  fi
+done
+
+wait "${CHECKSUM_PID}"
+ACTUAL_BACKUP_SHA256="$(awk '{print $1}' "${CHECKSUM_RESULT}")"
+test "${ACTUAL_BACKUP_SHA256}" = "${BACKUP_SHA256}"
+rm -f "${CHECKSUM_RESULT}"
+trap - EXIT INT TERM
+printf 'backup_checksum=PASS sha256=%s\n' "${ACTUAL_BACKUP_SHA256}"
+
 test "$(docker image inspect --format '{{.Id}}' "${ADMIN_IMAGE}")" = "${ADMIN_IMAGE_ID}"
 test "$(docker inspect --format '{{.State.Running}}' "${PRODUCTION_API}")" = 'true'
 test "$(docker inspect --format '{{.State.Running}}' "${PRODUCTION_DB}")" = 'true'
