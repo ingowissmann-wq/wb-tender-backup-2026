@@ -3,16 +3,15 @@ set -Eeuo pipefail
 
 CONTAINER="wb-admin-rehearsal-auth-1"
 EXPECTED_IMAGE="sha256:871f89c205b68d43043fa06c25a5e3a5a7083f550ab7d41e2b8cd950b11efe86"
-BASE_IMAGE="wb-phase4-platform:20260816-iam-mfa-network-roaming.1"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 NEW_IMAGE="wb-admin:isolated-canary-mfa-qr-${STAMP}"
 ROLLBACK_IMAGE="wb-admin:isolated-canary-before-mfa-qr-${STAMP}"
+BUILD_BASE_IMAGE="wb-admin:isolated-canary-mfa-qr-base-${STAMP}"
 AUDIT_DIR="/srv/wb-tender-recovery/admin-runtime-rehearsal-4/qr-release-${STAMP}"
 
 test "$(id -u)" -eq 0
 test "$(docker inspect "$CONTAINER" --format '{{.Image}}')" = "$EXPECTED_IMAGE"
 test "$(docker inspect "$CONTAINER" --format '{{.State.Running}}')" = "true"
-docker image inspect "$BASE_IMAGE" >/dev/null
 command -v docker >/dev/null
 docker compose version >/dev/null
 
@@ -29,6 +28,7 @@ test -n "$CONFIG_FILES"
 mkdir -p "$AUDIT_DIR"
 docker inspect "$CONTAINER" >"${AUDIT_DIR}/container-before.json"
 docker tag "$EXPECTED_IMAGE" "$ROLLBACK_IMAGE"
+docker tag "$EXPECTED_IMAGE" "$BUILD_BASE_IMAGE"
 
 COMPOSE_ARGS=(-p "$PROJECT")
 IFS=',' read -r -a CONFIG_PATHS <<<"$CONFIG_FILES"
@@ -55,9 +55,10 @@ YAML
 docker compose "${COMPOSE_ARGS[@]}" -f "${AUDIT_DIR}/compose-new.yml" config >/dev/null
 docker compose "${COMPOSE_ARGS[@]}" -f "${AUDIT_DIR}/compose-rollback.yml" config >/dev/null
 
-node --test tests/admin-login-mfa-contract.test.mjs
+node --test tests/admin-mfa-qr-patch.test.mjs
 docker build --pull=false \
-  --file deployment/Dockerfile.admin-login-mfa-enrollment \
+  --build-arg "BASE_IMAGE=${BUILD_BASE_IMAGE}" \
+  --file deployment/Dockerfile.admin-mfa-qr-canary \
   --tag "$NEW_IMAGE" .
 
 docker run --rm --network none --entrypoint node "$NEW_IMAGE" \
