@@ -23,12 +23,27 @@ function candidateFileIds(data) {
 try {
   await client.query("BEGIN");
 
-  const tenantResult = await client.query(
-    "SELECT tenant_id FROM iam.users WHERE lower(email)=lower($1) AND tenant_id IS NOT NULL LIMIT 1",
-    ["admin@wb-holding.ag"]
-  );
-  const tenantId = tenantResult.rows[0]?.tenant_id;
-  if (!tenantId) throw new Error("isolated_canary_tenant_missing");
+  const userHasTenant = (await client.query(`SELECT EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='iam' AND table_name='users' AND column_name='tenant_id'
+  ) AS present`)).rows[0].present;
+
+  let tenantId = null;
+  if (userHasTenant) {
+    tenantId = (await client.query(
+      "SELECT tenant_id FROM iam.users WHERE lower(email)=lower($1) AND tenant_id IS NOT NULL LIMIT 1",
+      ["admin@wb-holding.ag"]
+    )).rows[0]?.tenant_id || null;
+  }
+  if (!tenantId) {
+    const tenants = (await client.query(`SELECT tenant_id,count(*)::int AS total
+      FROM files.objects
+      WHERE tenant_id IS NOT NULL
+      GROUP BY tenant_id
+      ORDER BY total DESC`)).rows;
+    if (tenants.length !== 1) throw new Error(`isolated_canary_tenant_not_unique:${tenants.length}`);
+    tenantId = tenants[0].tenant_id;
+  }
   await client.query("SELECT set_config('app.tenant_id',$1,true)", [tenantId]);
 
   const blogs = (await client.query(`
