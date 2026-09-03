@@ -12,7 +12,7 @@ test -s "$SECRET"
 test -n "$IMAGE"
 docker image inspect "$IMAGE" >/dev/null
 
-docker run --rm --network host --user 0:0 \
+docker run --rm -i --network host --user 0:0 \
   -v "$SECRET:/run/secrets/ionos-smtp-password:ro" \
   --entrypoint node "$IMAGE" --input-type=module - <<'NODE'
 import fs from "node:fs";
