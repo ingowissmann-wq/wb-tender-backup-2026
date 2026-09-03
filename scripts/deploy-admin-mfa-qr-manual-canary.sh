@@ -31,12 +31,12 @@ docker build --pull=false \
   --file deployment/Dockerfile.admin-mfa-qr-canary \
   --tag "$NEW_IMAGE" .
 
-docker run --rm --network none --entrypoint node "$NEW_IMAGE" \
+docker run --rm --network none --user 0 --entrypoint node "$NEW_IMAGE" \
   --input-type=module -e 'await import("qrcode")'
-docker run --rm --network none --entrypoint sh "$NEW_IMAGE" -c \
+docker run --rm --network none --user 0 --entrypoint sh "$NEW_IMAGE" -c \
   'grep -Rql "src:R.qrDataUrl" /app/apps/admin/dist/assets/index-*.js && grep -Fq "QRCode.toDataURL" /app/apps/api/dist/server.js'
 
-docker create --name "$STAGING_CONTAINER" "$NEW_IMAGE" >/dev/null
+docker create --user 0 --name "$STAGING_CONTAINER" "$NEW_IMAGE" >/dev/null
 docker cp "${STAGING_CONTAINER}:/app/apps/api/dist/server.js" "${PATCHED_DIR}/server.js"
 docker cp "${STAGING_CONTAINER}:/app/apps/admin/dist" "${PATCHED_DIR}/admin-dist"
 docker rm "$STAGING_CONTAINER" >/dev/null
