@@ -21,9 +21,21 @@ REDIS_NETS=$(docker inspect "$REDIS_C" --format '{{range $k,$v := .NetworkSettin
 comm -12 <(tr ' ' '\n' <<<"$AUTH_NETS" | sed '/^$/d' | sort) <(tr ' ' '\n' <<<"$DB_NETS" | sed '/^$/d' | sort) | grep -q .
 comm -12 <(tr ' ' '\n' <<<"$AUTH_NETS" | sed '/^$/d' | sort) <(tr ' ' '\n' <<<"$REDIS_NETS" | sed '/^$/d' | sort) | grep -q .
 
+DB_ENV=$(docker inspect "$DB_C" --format '{{range .Config.Env}}{{println .}}{{end}}')
+DB_USER=$(awk -F= '$1=="POSTGRES_USER"{sub(/^[^=]*=/,"");print;exit}' <<<"$DB_ENV")
+DB_PASS=$(awk -F= '$1=="POSTGRES_PASSWORD"{sub(/^[^=]*=/,"");print;exit}' <<<"$DB_ENV")
+DB_NAME=$(awk -F= '$1=="POSTGRES_DB"{sub(/^[^=]*=/,"");print;exit}' <<<"$DB_ENV")
+test -n "$DB_USER"
+test -n "$DB_PASS"
+DB_NAME=${DB_NAME:-$DB_USER}
+docker exec "$C" getent hosts "$DB_C" >/dev/null
+CANARY_DATABASE_URL=$(docker exec -e WB_DB_USER="$DB_USER" -e WB_DB_PASS="$DB_PASS" -e WB_DB_NAME="$DB_NAME" -e WB_DB_HOST="$DB_C" \
+  "$C" node --input-type=module -e 'process.stdout.write(`postgresql://${encodeURIComponent(process.env.WB_DB_USER)}:${encodeURIComponent(process.env.WB_DB_PASS)}@${process.env.WB_DB_HOST}:5432/${encodeURIComponent(process.env.WB_DB_NAME)}`)')
+test -n "$CANARY_DATABASE_URL"
+
 mkdir -p "$WORK"
 cp -a /srv/wb-tender-recovery/admin-runtime-rehearsal-4/data/career.db "$WORK/career.db.before"
-docker exec "$C" node --input-type=module -e '
+docker exec -e DATABASE_URL="$CANARY_DATABASE_URL" "$C" node --input-type=module -e '
   import fs from "node:fs/promises"; import pg from "pg";
   const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1});
   const result=await pool.query("SELECT * FROM app.resources WHERE resource_type=ANY($1) ORDER BY resource_type,id", [["services","blogposts"]]);
@@ -33,7 +45,7 @@ docker exec "$C" rm -f /data/app-resources.before.json
 
 docker cp "$ROOT/recovery/wix-admin-restore.json" "$C:/tmp/wix-admin-restore.json"
 docker cp "$ROOT/scripts/wix-admin-canary-import.mjs" "$C:/tmp/wix-admin-canary-import.mjs"
-docker exec "$C" node /tmp/wix-admin-canary-import.mjs /tmp/wix-admin-restore.json | tee "$WORK/import-result.json"
+docker exec -e DATABASE_URL="$CANARY_DATABASE_URL" "$C" node /tmp/wix-admin-canary-import.mjs /tmp/wix-admin-restore.json | tee "$WORK/import-result.json"
 grep -Fq '"ok":true' "$WORK/import-result.json"
 grep -Fq '"sqliteIntegrity":"ok"' "$WORK/import-result.json"
 
