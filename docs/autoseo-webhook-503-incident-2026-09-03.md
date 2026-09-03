@@ -192,6 +192,19 @@ This proves the path `AutoSEO raw source -> CMS resource -> files.objects ->
 resource_files -> guarded media endpoint -> blog index/detail` without an
 external hotlink or a shared fallback image.
 
+At `2026-09-03T23:25:24Z`, after the fix was live, AutoSEO delivered the new
+article `Sicherheitsdienst für Logistik in München & Augsburg` (external ID
+`2389028`). Without manual processing it created CMS article
+`8a5064e5-492b-4e43-bcb2-e74465759d98`, media resource
+`0aef530b-7ace-4e01-b995-4a850692adcc` and file
+`11b272d8-0c72-45a5-ab35-c1a0a4b79a0b`. Its persistent 124687-byte JPEG hash
+is `fa26df751a7005c5201ee320287f8d00fb6627b905644689cd0b635ae7dd8c47`.
+A second Chromium run showed this new image and the Winterdienst image as two
+distinct 1200 x 675 resources on `/blog`, with matching in-browser hashes,
+zero failed media requests, and the same correct image on each HTTP-200 detail
+page. This is the future-delivery proof; no article or media backfill was
+needed for the response-header repair.
+
 The deployed wb-holding frontend currently chooses the article title for the
 HTML `alt` attribute. This is its existing presentation rule; the original
 AutoSEO alt text remains intact and editable in the CMS and media relation.
