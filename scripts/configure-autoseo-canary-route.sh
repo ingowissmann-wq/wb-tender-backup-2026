@@ -9,28 +9,59 @@ BACKUP="$WORK/wb-tender-www.conf.before"
 INDEX=/app/apps/admin/dist/index.html
 TMP=$(mktemp)
 NEW_ASSET=
+MEDIA_ROOT=/var/lib/wb-admin-canary-media
+MEDIA_DIR="$MEDIA_ROOT/$STAMP"
+MEDIA_INCLUDE="/etc/nginx/snippets/wb-admin-canary-media-${STAMP}.conf"
 
 test "$(docker inspect "$C" --format '{{.State.Running}}')" = true
 test -f "$CFG"
 mkdir -p "$WORK"
 cp -a "$CFG" "$BACKUP"
 
-MEDIA_ID=$(docker exec -e NODE_NO_WARNINGS=1 "$C" node --input-type=module <<'NODE'
-import { DatabaseSync } from "node:sqlite";
-const db=new DatabaseSync("/data/career.db",{readOnly:true});
-const rows=db.prepare("SELECT payload FROM content_items WHERE collection IN ('jobangebote','teammembers') ORDER BY updated_at DESC").all();
-db.close();
-for(const row of rows){
-  const data=JSON.parse(row.payload);
-  const id=data.imageId||data.cardImageId||data.detailImageId;
-  if(id){process.stdout.write(id);process.exit(0);}
-}
-process.exit(2);
+CANARY_DATABASE_URL=$(docker exec "$C" node --input-type=module -e '
+  import fs from "node:fs";
+  const entry=fs.readFileSync("/proc/1/environ").toString("utf8").split("\0").find(value=>value.startsWith("DATABASE_URL="));
+  if(!entry) process.exit(2);
+  process.stdout.write(entry.slice("DATABASE_URL=".length));')
+test -n "$CANARY_DATABASE_URL"
+docker exec -e DATABASE_URL="$CANARY_DATABASE_URL" "$C" node --input-type=module <<'NODE'
+import fs from "node:fs"; import pg from "pg";
+const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1});
+const result=await pool.query(`SELECT id::text,storage_name,mime_type FROM files.objects
+  WHERE protection_class='public' AND verified=true AND deleted_at IS NULL ORDER BY id`);
+await pool.end();
+const allowed=new Set(["image/jpeg","image/png","image/webp"]);
+const rows=result.rows.filter(row=>allowed.has(row.mime_type)&&fs.existsSync(`/data/private/${row.storage_name}`));
+if(!rows.length) process.exit(3);
+fs.writeFileSync("/tmp/wb-public-media.tsv",rows.map(row=>`${row.id}\t${row.storage_name}\t${row.mime_type}`).join("\n")+"\n",{mode:0o600});
 NODE
-)
-test -n "$MEDIA_ID"
-test "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:4341/cms-media/${MEDIA_ID}")" = 200
-printf '%s\n' 'preflight=canary_media_ok'
+docker cp "$C:/tmp/wb-public-media.tsv" "$WORK/public-media.tsv"
+docker exec "$C" rm -f /tmp/wb-public-media.tsv
+
+install -d -m 0755 "$MEDIA_ROOT" "$MEDIA_DIR"
+: > "$MEDIA_INCLUDE"
+chmod 0644 "$MEDIA_INCLUDE"
+MEDIA_COUNT=0
+MEDIA_ID=
+while IFS=$'\t' read -r ID STORAGE MIME; do
+  [[ "$ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+  test "$STORAGE" = "$(basename -- "$STORAGE")"
+  case "$MIME" in
+    image/jpeg) EXT=jpg ;;
+    image/png) EXT=png ;;
+    image/webp) EXT=webp ;;
+    *) exit 44 ;;
+  esac
+  docker cp "$C:/data/private/$STORAGE" "$MEDIA_DIR/$ID.$EXT" >/dev/null
+  chmod 0644 "$MEDIA_DIR/$ID.$EXT"
+  printf '    location = /cms-media/%s { alias %s/%s.%s; default_type %s; add_header Cache-Control "public, max-age=3600"; }\n' \
+    "$ID" "$MEDIA_DIR" "$ID" "$EXT" "$MIME" >> "$MEDIA_INCLUDE"
+  MEDIA_COUNT=$((MEDIA_COUNT+1))
+  if test -z "$MEDIA_ID"; then MEDIA_ID=$ID; fi
+done < "$WORK/public-media.tsv"
+test "$MEDIA_COUNT" -gt 0
+printf '%s\n' '    location ^~ /cms-media/ { return 404; }' >> "$MEDIA_INCLUDE"
+printf 'preflight=public_media_copy_ok files=%s\n' "$MEDIA_COUNT"
 
 ASSET=$(docker exec "$C" node --input-type=module -e '
   import fs from "node:fs"; import path from "node:path";
@@ -77,23 +108,20 @@ fs.writeFileSync(indexPath,html.replace(oldName,newName));
 console.log(JSON.stringify({responsibilitiesEndpoint:"ok",cacheBustedAsset:newName}));
 NODE
 
-ADD_MEDIA=false
 ADD_AUTOSEO=false
-grep -Fqx '    location ^~ /cms-media/ {' "$CFG" || ADD_MEDIA=true
 grep -Fqx '    location = /api/integrations/autoseo/webhook {' "$CFG" || ADD_AUTOSEO=true
-
-if test "$ADD_MEDIA" = true || test "$ADD_AUTOSEO" = true; then
-  test "$(grep -Fxc '    location ^~ /api/admin/ {' "$CFG")" -eq 1
-  awk -v add_media="$ADD_MEDIA" -v add_autoseo="$ADD_AUTOSEO" '
+test "$(grep -Fxc '    location ^~ /api/admin/ {' "$CFG")" -eq 1
+awk -v media_include="    include ${MEDIA_INCLUDE};" -v add_autoseo="$ADD_AUTOSEO" '
+    /^[[:space:]]*include \/etc\/nginx\/snippets\/wb-admin-canary-media-.*[.]conf;[[:space:]]*$/ {
+      if (!media_inserted) print media_include
+      media_inserted=1
+      next
+    }
     !inserted && $0 == "    location ^~ /api/admin/ {" {
-      if (add_media == "true") {
-        print "    location ^~ /cms-media/ {"
-        print "        proxy_pass http://127.0.0.1:4341;"
-        print "        include /etc/nginx/proxy_params;"
-        print "        proxy_http_version 1.1;"
-        print "        proxy_read_timeout 60s;"
-        print "    }"
+      if (!media_inserted) {
+        print media_include
         print ""
+        media_inserted=1
       }
       if (add_autoseo == "true") {
         print "    location = /api/integrations/autoseo/webhook {"
@@ -109,10 +137,9 @@ if test "$ADD_MEDIA" = true || test "$ADD_AUTOSEO" = true; then
     { print }
     END { if (!inserted) exit 42 }
   ' "$CFG" > "$TMP"
-  cat "$TMP" > "$CFG"
-fi
+cat "$TMP" > "$CFG"
 
-test "$(grep -Fxc '    location ^~ /cms-media/ {' "$CFG")" -eq 1
+test "$(grep -Fxc "    include ${MEDIA_INCLUDE};" "$CFG")" -eq 1
 test "$(grep -Fxc '    location = /api/integrations/autoseo/webhook {' "$CFG")" -eq 1
 nginx -t
 systemctl reload nginx
