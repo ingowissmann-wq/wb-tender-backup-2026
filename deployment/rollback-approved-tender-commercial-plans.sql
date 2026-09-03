@@ -1,6 +1,16 @@
+\set ON_ERROR_STOP on
 BEGIN;
-UPDATE saas.plans SET active=true WHERE code='CORE';
-UPDATE saas.plans SET display_name='Normal',recommended_monthly_price_minor=NULL,price_status='PLACEHOLDER',metadata=metadata||'{"commercial_config_required":true}'::jsonb WHERE code='NORMAL';
-UPDATE saas.plans SET display_name='Professional',recommended_monthly_price_minor=NULL,price_status='PLACEHOLDER',metadata=metadata||'{"commercial_config_required":true}'::jsonb WHERE code='PROFESSIONAL';
-UPDATE saas.plans SET recommended_monthly_price_minor=NULL,price_status='PLACEHOLDER',metadata=metadata||'{"commercial_config_required":true,"custom_pricing":true}'::jsonb WHERE code='ENTERPRISE';
+DO $$
+DECLARE saved jsonb;
+BEGIN
+  SELECT rows INTO saved
+    FROM tender.release_plan_snapshots
+   WHERE release_id = current_setting('wb.release_id')
+   FOR UPDATE;
+  IF saved IS NULL THEN RAISE EXCEPTION 'no exact plan snapshot for release %', current_setting('wb.release_id'); END IF;
+  DELETE FROM saas.plans WHERE code IN ('CORE', 'NORMAL', 'PROFESSIONAL', 'ENTERPRISE');
+  INSERT INTO saas.plans
+  SELECT p.* FROM jsonb_populate_recordset(NULL::saas.plans, saved) AS p;
+  DELETE FROM tender.release_plan_snapshots WHERE release_id = current_setting('wb.release_id');
+END $$;
 COMMIT;

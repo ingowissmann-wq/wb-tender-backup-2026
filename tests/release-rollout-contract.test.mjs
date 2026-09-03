@@ -27,10 +27,10 @@ test("overview indexes are additive, online and reversible", () => {
 });
 
 test("production rollout is digest-pinned, rehearsed and fail-closed", () => {
-  assert.match(rollout, /CANDIDATE_IMAGE_ID=.*sha256/);
-  assert.match(rollout, /SOURCE_FINGERPRINT="\$commit"/);
+  assert.match(rollout, /RELEASE_IMAGE.*@sha256/);
+  assert.match(rollout, /COMMIT=\$commit/);
   assert.match(rollout, /pg_dump/);
-  assert.match(rollout, /pg_restore/);
+  assert.match(rollout, /REHEARSAL_EVIDENCE/);
   assert.match(rollout, /api worker scheduler/);
   assert.match(rollout, /EXTERNAL_SUBMISSION_ENABLED=false/);
   assert.match(rollout, /WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false/);
