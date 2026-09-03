@@ -28,8 +28,13 @@ test "$(docker inspect "$AUTH" --format '{{.HostConfig.ReadonlyRootfs}}')" = fal
 mkdir -p "$WORK"
 chmod 0700 "$WORK"
 
-DB_FACT=$(docker exec -i "$AUTH" node --input-type=module - <<'NODE'
-import { pool } from "/app/apps/api/dist/db.js";
+DB_FACT=$(docker exec -i --user 0:0 "$AUTH" node --input-type=module - <<'NODE'
+import fs from "node:fs";
+for (const entry of fs.readFileSync("/proc/1/environ", "utf8").split("\0")) {
+  const separator = entry.indexOf("=");
+  if (separator > 0) process.env[entry.slice(0, separator)] = entry.slice(separator + 1);
+}
+const { pool } = await import("/app/apps/api/dist/db.js");
 const connection = await pool.query("SELECT coalesce(inet_server_addr()::text,'') AS ip,current_database() AS db");
 const users = await pool.query("SELECT count(*)::int AS count FROM iam.users WHERE lower(email)=lower('admin@wb-holding.ag') AND active=true");
 console.log(`WBDB|${connection.rows[0].ip}|${connection.rows[0].db}|${users.rows[0].count}`);
