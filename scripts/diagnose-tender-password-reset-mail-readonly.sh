@@ -58,22 +58,20 @@ fi
 printf '%s\n' '===== BENUTZER UND RESET-TABELLEN ====='
 if test -n "${DB:-}" && docker inspect "$DB" >/dev/null 2>&1; then
   printf 'database_container=%s\n' "$DB"
-  docker exec "$DB" sh -lc '
-    psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" <<'"'"'SQL'"'"'
+  docker exec -i "$DB" sh -lc 'exec psql -X -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<'SQL' || printf '%s\n' 'database_read=failed'
 BEGIN READ ONLY;
-SELECT to_regclass('"'"'iam.users'"'"') AS iam_users;
+SELECT to_regclass('iam.users') AS iam_users;
 SELECT count(*) AS matching_users,
        count(*) FILTER (WHERE active IS TRUE) AS active_users
 FROM iam.users
-WHERE lower(email)=lower('"'"'admin@wb-holding.ag'"'"');
+WHERE lower(email)=lower('admin@wb-holding.ag');
 SELECT table_schema, table_name
 FROM information_schema.tables
-WHERE table_name ILIKE '"'"'%reset%'
-   OR table_name ILIKE '"'"'%password%token%'
+WHERE table_name ILIKE '%reset%'
+   OR table_name ILIKE '%password%token%'
 ORDER BY table_schema, table_name;
 COMMIT;
 SQL
-  ' || printf '%s\n' 'database_read=failed'
 else
   printf '%s\n' 'database_container=not_found'
 fi
