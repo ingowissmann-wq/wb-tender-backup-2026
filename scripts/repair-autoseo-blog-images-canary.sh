@@ -60,7 +60,7 @@ docker cp "$C:$REMOTE_BACKUP" "$WORK/blog-images.before.json"
 test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:4341/api/healthz)" = 200
 PUBLIC_JSON=$(curl -ksS 'https://www.enwi.online/api/public/v1/blogposts?page=1&pageSize=25')
 printf '%s' "$PUBLIC_JSON" >"$WORK/public-blogposts.after.json"
-printf '%s' "$PUBLIC_JSON" | grep -q '/cms-media/'
+grep -q '/cms-media/' "$WORK/public-blogposts.after.json"
 
 printf '%s\n' 'WB_AUTOSEO_BLOG_IMAGES_CANARY=SUCCESS'
 printf 'backup_directory=%s\n' "$WORK"
