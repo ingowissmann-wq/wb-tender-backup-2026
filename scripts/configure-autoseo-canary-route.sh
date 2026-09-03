@@ -24,7 +24,7 @@ CANARY_DATABASE_URL=$(docker exec "$C" node --input-type=module -e '
   if(!entry) process.exit(2);
   process.stdout.write(entry.slice("DATABASE_URL=".length));')
 test -n "$CANARY_DATABASE_URL"
-docker exec -e DATABASE_URL="$CANARY_DATABASE_URL" "$C" node --input-type=module <<'NODE'
+docker exec -i -e DATABASE_URL="$CANARY_DATABASE_URL" "$C" node --input-type=module - <<'NODE'
 import fs from "node:fs"; import pg from "pg";
 const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1});
 const result=await pool.query(`SELECT id::text,storage_name,mime_type FROM files.objects
@@ -92,7 +92,7 @@ rollback() {
 trap rollback EXIT
 
 NEW_ASSET="${ASSET%.js}-wbfix-${STAMP}.js"
-docker exec "$C" node --input-type=module - "$ASSET" "$NEW_ASSET" "$INDEX" <<'NODE'
+docker exec -i "$C" node --input-type=module - "$ASSET" "$NEW_ASSET" "$INDEX" <<'NODE'
 import fs from "node:fs"; import path from "node:path";
 const [, , sourcePath, targetPath, indexPath]=process.argv;
 const wrong="/api/admin/v1/resources/responsibilities";
@@ -153,7 +153,7 @@ done
 test "$MEDIA_OK" = true
 printf '%s\n' 'public_media=200'
 
-TEST_RESULT=$(docker exec "$C" node --input-type=module <<'NODE'
+TEST_RESULT=$(docker exec -i "$C" node --input-type=module - <<'NODE'
 import fs from "node:fs/promises";
 import crypto from "node:crypto";
 const secretPath=process.env.AUTOSEO_SECRET_FILE || "/run/secrets/autoseo_webhook";
