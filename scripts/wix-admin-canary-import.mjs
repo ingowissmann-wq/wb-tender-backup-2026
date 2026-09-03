@@ -18,6 +18,29 @@ const db = new DatabaseSync(careerPath);
 const createdFiles = [];
 const stats = { services: 0, jobs: 0, team: 0, blogImages: 0, mediaDownloaded: 0, mediaReused: 0 };
 
+async function resolveTenantId() {
+  const userHasTenant = (await client.query(`SELECT EXISTS(
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='iam' AND table_name='users' AND column_name='tenant_id'
+  ) AS present`)).rows[0].present;
+
+  if (userHasTenant) {
+    const owner = (await client.query(
+      "SELECT tenant_id FROM iam.users WHERE lower(email)=lower($1) AND tenant_id IS NOT NULL LIMIT 1",
+      ["admin@wb-holding.ag"]
+    )).rows[0];
+    if (owner?.tenant_id) return owner.tenant_id;
+  }
+
+  const existing = (await client.query(`SELECT tenant_id, count(*)::int AS total
+    FROM files.objects WHERE tenant_id IS NOT NULL
+    GROUP BY tenant_id ORDER BY total DESC`)).rows;
+  if (existing.length === 1) return existing[0].tenant_id;
+  throw new Error(`isolated_canary_tenant_not_unique:${existing.length}`);
+}
+
+const tenantId = await resolveTenantId();
+
 function sourceUrl(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -46,13 +69,13 @@ async function media(value, title) {
   if (bytes.length < 100 || bytes.length > 10_000_000) throw new Error(`invalid_media_size:${bytes.length}`);
   const [mime, extension] = detect(bytes);
   const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
-  let row = (await client.query("SELECT * FROM files.objects WHERE sha256=$1 AND size_bytes=$2 AND protection_class='public' ORDER BY deleted_at NULLS FIRST LIMIT 1", [sha256, bytes.length])).rows[0];
+  let row = (await client.query("SELECT * FROM files.objects WHERE tenant_id=$1 AND sha256=$2 AND size_bytes=$3 AND protection_class='public' ORDER BY deleted_at NULLS FIRST LIMIT 1", [tenantId, sha256, bytes.length])).rows[0];
   if (!row) {
     const id = crypto.randomUUID(), storageName = `${sha256}-${id}`;
     await fsp.writeFile(path.join(privateRoot, storageName), bytes, { mode: 0o600 });
     createdFiles.push(path.join(privateRoot, storageName));
-    row = (await client.query(`INSERT INTO files.objects(id,storage_name,original_name,mime_type,size_bytes,sha256,protection_class,verified)
-      VALUES($1,$2,$3,$4,$5,$6,'public',true) RETURNING *`, [id, storageName, `${String(title).slice(0,120)}${extension}`, mime, bytes.length, sha256])).rows[0];
+    row = (await client.query(`INSERT INTO files.objects(id,storage_name,original_name,mime_type,size_bytes,sha256,protection_class,verified,tenant_id)
+      VALUES($1,$2,$3,$4,$5,$6,'public',true,$7) RETURNING *`, [id, storageName, `${String(title).slice(0,120)}${extension}`, mime, bytes.length, sha256, tenantId])).rows[0];
     stats.mediaDownloaded++;
   } else {
     const target = path.join(privateRoot, row.storage_name);
