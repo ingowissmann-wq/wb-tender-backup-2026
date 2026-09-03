@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 C=wb-admin-rehearsal-auth-1
+EXPECTED_IMAGE='sha256:871f89c205b68d43043fa06c25a5e3a5a7083f550ab7d41e2b8cd950b11efe86'
 CFG=$(readlink -f /etc/nginx/sites-enabled/wb-tender-www.conf)
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 WORK="/srv/wb-tender-recovery/admin-runtime-rehearsal-4/final-routing-${STAMP}"
@@ -14,6 +15,7 @@ MEDIA_DIR="$MEDIA_ROOT/$STAMP"
 MEDIA_INCLUDE="/etc/nginx/snippets/wb-admin-canary-media-${STAMP}.conf"
 
 test "$(docker inspect "$C" --format '{{.State.Running}}')" = true
+test "$(docker inspect "$C" --format '{{.Image}}')" = "$EXPECTED_IMAGE"
 test -f "$CFG"
 mkdir -p "$WORK"
 cp -a "$CFG" "$BACKUP"
@@ -81,7 +83,7 @@ rollback() {
   if test "$ROLLBACK" = true; then
     cp -a "$BACKUP" "$CFG"
     docker cp "$WORK/index.before.html" "$C:$INDEX" >/dev/null 2>&1 || true
-    if test -n "$NEW_ASSET"; then docker exec "$C" rm -f "$NEW_ASSET" >/dev/null 2>&1 || true; fi
+    if test -n "$NEW_ASSET"; then docker exec -u 0:0 "$C" rm -f "$NEW_ASSET" >/dev/null 2>&1 || true; fi
     if nginx -t >/dev/null 2>&1; then
       systemctl reload nginx
       printf '%s\n' 'WB_FINAL_ROUTING_ROLLBACK=SUCCESS'
@@ -92,21 +94,26 @@ rollback() {
 trap rollback EXIT
 
 NEW_ASSET="${ASSET%.js}-wbfix-${STAMP}.js"
-docker exec -i "$C" node --input-type=module - "$ASSET" "$NEW_ASSET" "$INDEX" <<'NODE'
+docker run --rm --network none --user 0:0 -i \
+  -e WB_NEW_ASSET_NAME="$(basename -- "$NEW_ASSET")" \
+  -v "$WORK:/work" --entrypoint node "$EXPECTED_IMAGE" --input-type=module - <<'NODE'
 import fs from "node:fs"; import path from "node:path";
-const [, , sourcePath, targetPath, indexPath]=process.argv;
 const wrong="/api/admin/v1/resources/responsibilities";
 const right="/api/admin/v1/recruiting/responsibilities";
-const source=fs.readFileSync(sourcePath,"utf8").split(wrong).join(right);
+const source=fs.readFileSync("/work/admin-asset.before.js","utf8").split(wrong).join(right);
 if(source.includes(wrong)||!source.includes(right)) throw new Error("responsibilities_endpoint_verification_failed");
-fs.writeFileSync(targetPath,source);
-let html=fs.readFileSync(indexPath,"utf8");
-const oldName=path.basename(sourcePath), newName=path.basename(targetPath);
+fs.writeFileSync("/work/admin-asset.patched.js",source);
+let html=fs.readFileSync("/work/index.before.html","utf8");
+const match=html.match(/(?:src|href)="(?:\/admin\/)?(assets\/index-[^"]+[.]js)"/);
+if(!match) throw new Error("admin_asset_reference_missing");
+const oldName=path.basename(match[1]), newName=process.env.WB_NEW_ASSET_NAME;
 const count=html.split(oldName).length-1;
 if(count!==1) throw new Error(`admin_asset_reference_count:${count}`);
-fs.writeFileSync(indexPath,html.replace(oldName,newName));
+fs.writeFileSync("/work/index.patched.html",html.replace(oldName,newName));
 console.log(JSON.stringify({responsibilitiesEndpoint:"ok",cacheBustedAsset:newName}));
 NODE
+docker cp "$WORK/admin-asset.patched.js" "$C:$NEW_ASSET"
+docker cp "$WORK/index.patched.html" "$C:$INDEX"
 
 ADD_AUTOSEO=false
 grep -Fqx '    location = /api/integrations/autoseo/webhook {' "$CFG" || ADD_AUTOSEO=true
