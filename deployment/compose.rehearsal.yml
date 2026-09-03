@@ -70,8 +70,8 @@ services:
     image: ${RELEASE_IMAGE:?RELEASE_IMAGE must be digest pinned}
     command: ["node", "deployment/rehearsal/wikos-stub.mjs"]
 secrets:
-  database_url: { file: ${DATABASE_URL_FILE:?DATABASE_URL_FILE is required} }
-  session_pepper: { file: ${SESSION_PEPPER_FILE:?SESSION_PEPPER_FILE is required} }
-  e2e_auth: { file: ${E2E_AUTH_FILE:?E2E_AUTH_FILE is required} }
+  database_url: { file: "${DATABASE_URL_FILE:?DATABASE_URL_FILE is required}" }
+  session_pepper: { file: "${SESSION_PEPPER_FILE:?SESSION_PEPPER_FILE is required}" }
+  e2e_auth: { file: "${E2E_AUTH_FILE:?E2E_AUTH_FILE is required}" }
 volumes:
   rehearsal-db:
