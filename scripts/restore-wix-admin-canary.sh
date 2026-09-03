@@ -14,24 +14,31 @@ test "$(docker inspect "$C" --format '{{.State.Running}}')" = true
 test "$(docker inspect "$DB_C" --format '{{.State.Running}}')" = true
 test "$(docker inspect "$REDIS_C" --format '{{.State.Running}}')" = true
 docker port "$C" | grep -Eq '127[.]0[.]0[.]1:4341$|0[.]0[.]0[.]0:4341$|:::4341$'
+printf '%s\n' 'preflight=containers_and_port_ok'
 
 AUTH_NETS=$(docker inspect "$C" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}')
 DB_NETS=$(docker inspect "$DB_C" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}')
 REDIS_NETS=$(docker inspect "$REDIS_C" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}')
 comm -12 <(tr ' ' '\n' <<<"$AUTH_NETS" | sed '/^$/d' | sort) <(tr ' ' '\n' <<<"$DB_NETS" | sed '/^$/d' | sort) | grep -q .
 comm -12 <(tr ' ' '\n' <<<"$AUTH_NETS" | sed '/^$/d' | sort) <(tr ' ' '\n' <<<"$REDIS_NETS" | sed '/^$/d' | sort) | grep -q .
+printf '%s\n' 'preflight=isolated_networks_ok'
 
-DB_ENV=$(docker inspect "$DB_C" --format '{{range .Config.Env}}{{println .}}{{end}}')
-DB_USER=$(awk -F= '$1=="POSTGRES_USER"{sub(/^[^=]*=/,"");print;exit}' <<<"$DB_ENV")
-DB_PASS=$(awk -F= '$1=="POSTGRES_PASSWORD"{sub(/^[^=]*=/,"");print;exit}' <<<"$DB_ENV")
-DB_NAME=$(awk -F= '$1=="POSTGRES_DB"{sub(/^[^=]*=/,"");print;exit}' <<<"$DB_ENV")
-test -n "$DB_USER"
-test -n "$DB_PASS"
-DB_NAME=${DB_NAME:-$DB_USER}
-docker exec "$C" getent hosts "$DB_C" >/dev/null
-CANARY_DATABASE_URL=$(docker exec -e WB_DB_USER="$DB_USER" -e WB_DB_PASS="$DB_PASS" -e WB_DB_NAME="$DB_NAME" -e WB_DB_HOST="$DB_C" \
-  "$C" node --input-type=module -e 'process.stdout.write(`postgresql://${encodeURIComponent(process.env.WB_DB_USER)}:${encodeURIComponent(process.env.WB_DB_PASS)}@${process.env.WB_DB_HOST}:5432/${encodeURIComponent(process.env.WB_DB_NAME)}`)')
+CANARY_DATABASE_URL=$(docker exec "$C" node --input-type=module -e '
+  import fs from "node:fs";
+  const values=fs.readFileSync("/proc/1/environ").toString("utf8").split("\0");
+  const entry=values.find(value=>value.startsWith("DATABASE_URL="));
+  if(!entry) process.exit(2);
+  process.stdout.write(entry.slice("DATABASE_URL=".length));')
 test -n "$CANARY_DATABASE_URL"
+docker exec -e DATABASE_URL="$CANARY_DATABASE_URL" "$C" node --input-type=module -e '
+  import pg from "pg";
+  const url=new URL(process.env.DATABASE_URL);
+  if(["127.0.0.1","localhost","::1"].includes(url.hostname)) throw new Error("canary_database_loopback_rejected");
+  const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1,connectionTimeoutMillis:5000});
+  const result=await pool.query("SELECT 1 AS ok");
+  await pool.end();
+  if(result.rows[0]?.ok!==1) process.exit(3);'
+printf '%s\n' 'preflight=isolated_database_read_ok'
 
 mkdir -p "$WORK"
 cp -a /srv/wb-tender-recovery/admin-runtime-rehearsal-4/data/career.db "$WORK/career.db.before"
