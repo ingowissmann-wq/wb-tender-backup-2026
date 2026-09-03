@@ -595,7 +595,7 @@
         "linkedinUrl": "",
         "linkedInUrl": "",
         "status": "published",
-        "sortOrder": 0
+        "sortOrder": 1
       }
     },
     {
@@ -616,7 +616,7 @@
         "linkedinUrl": "",
         "linkedInUrl": "",
         "status": "published",
-        "sortOrder": 1
+        "sortOrder": 2
       }
     },
     {
@@ -637,7 +637,7 @@
         "linkedinUrl": "",
         "linkedInUrl": "",
         "status": "published",
-        "sortOrder": 2
+        "sortOrder": 3
       }
     },
     {
@@ -658,7 +658,7 @@
         "linkedinUrl": "",
         "linkedInUrl": "",
         "status": "published",
-        "sortOrder": 3
+        "sortOrder": 4
       }
     },
     {
@@ -679,7 +679,7 @@
         "linkedinUrl": "",
         "linkedInUrl": "",
         "status": "published",
-        "sortOrder": 4
+        "sortOrder": 5
       }
     },
     {
@@ -700,7 +700,7 @@
         "linkedinUrl": "http://www.linkedin.com/in/dr-ingo-w-456264144",
         "linkedInUrl": "http://www.linkedin.com/in/dr-ingo-w-456264144",
         "status": "published",
-        "sortOrder": 5
+        "sortOrder": 6
       }
     }
   ],
