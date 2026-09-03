@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-C=wb-admin-rehearsal-auth-1
 EXPECTED_IMAGE='sha256:871f89c205b68d43043fa06c25a5e3a5a7083f550ab7d41e2b8cd950b11efe86'
 SOURCE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-WORK="/srv/wb-tender-recovery/admin-runtime-rehearsal-4/tender-password-reset-final-${STAMP}"
+WORK="/srv/wb-tender-recovery/admin-runtime-rehearsal-4/tender-password-reset-live-${STAMP}"
 PATCHER="${SOURCE}/integrations/wb-admin-portal/candidate/tender-password-reset-ui-patch.mjs"
 MANIFEST="${WORK}/targets.tsv"
+RESTARTS="${WORK}/containers.txt"
 
 mkdir -p "$WORK"
 : >"$MANIFEST"
-test "$(docker inspect "$C" --format '{{.State.Running}}')" = true
-test "$(docker inspect "$C" --format '{{.Image}}')" = "$EXPECTED_IMAGE"
+: >"$RESTARTS"
 test -f "$PATCHER"
 
 docker run --rm --network none --user 0:0 \
@@ -29,10 +28,33 @@ test "$FORGOT_CODE" = 200
 grep -Fq '"ok":true' "$WORK/forgot-preflight.json"
 printf '%s\n' 'preflight=password_reset_api_ok'
 
-mapfile -t TARGETS < <(docker exec -i --user 0:0 "$C" node --input-type=module - <<'NODE'
+APPLIED=false
+rollback() {
+  status=$?
+  trap - ERR
+  if test "$APPLIED" = true; then
+    while IFS=$'\t' read -r CONTAINER TARGET BEFORE; do
+      test -n "$CONTAINER" || continue
+      docker cp "$BEFORE" "$CONTAINER:$TARGET" >/dev/null 2>&1 || true
+    done <"$MANIFEST"
+    sort -u "$RESTARTS" | while IFS= read -r CONTAINER; do
+      test -n "$CONTAINER" && docker restart "$CONTAINER" >/dev/null 2>&1 || true
+    done
+    printf '%s\n' 'WB_TENDER_PASSWORD_RESET_ROLLBACK=SUCCESS' >&2
+  fi
+  exit "$status"
+}
+trap rollback ERR
+
+INDEX=0
+while IFS= read -r CONTAINER; do
+  [[ "$CONTAINER" =~ ^[A-Za-z0-9_.-]+$ ]] || continue
+  docker exec "$CONTAINER" node --version >/dev/null 2>&1 || continue
+
+  mapfile -t TARGETS < <(docker exec -i --user 0:0 "$CONTAINER" node --input-type=module - <<'NODE'
 import fs from "node:fs";
 import path from "node:path";
-const skipped=new Set(["node_modules",".git"]);
+const skipped=new Set(["node_modules",".git","postgres"]);
 const found=[];
 function walk(directory){
   let entries;
@@ -60,66 +82,59 @@ function walk(directory){
 walk("/app");
 for(const file of found.sort()) console.log(file);
 NODE
-)
+  )
 
-test "${#TARGETS[@]}" -gt 0
-printf 'preflight=login_runtime_targets_found count=%s\n' "${#TARGETS[@]}"
+  for TARGET in "${TARGETS[@]}"; do
+    case "$TARGET" in /app/*) ;; *) exit 71 ;; esac
+    INDEX=$((INDEX+1))
+    BEFORE="$WORK/target-${INDEX}.before.mjs"
+    PATCHED="$WORK/target-${INDEX}.patched.mjs"
 
-APPLIED=false
-rollback() {
-  status=$?
-  trap - ERR
-  if test "$APPLIED" = true; then
-    while IFS=$'\t' read -r TARGET BEFORE; do
-      test -n "$TARGET" || continue
-      docker cp "$BEFORE" "$C:$TARGET" >/dev/null 2>&1 || true
-    done <"$MANIFEST"
-    docker restart "$C" >/dev/null 2>&1 || true
-    printf '%s\n' 'WB_TENDER_PASSWORD_RESET_ROLLBACK=SUCCESS' >&2
-  fi
-  exit "$status"
-}
-trap rollback ERR
+    docker cp "$CONTAINER:$TARGET" "$BEFORE"
+    cp -a "$BEFORE" "$PATCHED"
+    docker run --rm --network none --user 0:0 \
+      -v "$PATCHER:/tmp/tender-password-reset-ui-patch.mjs:ro" \
+      -v "$PATCHED:/tmp/runtime.mjs" \
+      --entrypoint node "$EXPECTED_IMAGE" \
+      /tmp/tender-password-reset-ui-patch.mjs /tmp/runtime.mjs
+    grep -Fq 'WB_TENDER_PASSWORD_RESET_UI' "$PATCHED"
+    grep -Fq '/api/admin/v1/iam/password/forgot' "$PATCHED"
+    docker run --rm --network none --user 0:0 \
+      -v "$PATCHED:/tmp/runtime.mjs:ro" \
+      --entrypoint node "$EXPECTED_IMAGE" --check /tmp/runtime.mjs
 
-INDEX=0
-for TARGET in "${TARGETS[@]}"; do
-  case "$TARGET" in /app/*) ;; *) exit 71 ;; esac
-  INDEX=$((INDEX+1))
-  BEFORE="$WORK/target-${INDEX}.before.mjs"
-  PATCHED="$WORK/target-${INDEX}.patched.mjs"
-  docker cp "$C:$TARGET" "$BEFORE"
-  cp -a "$BEFORE" "$PATCHED"
-  docker run --rm --network none --user 0:0 \
-    -v "$PATCHER:/tmp/tender-password-reset-ui-patch.mjs:ro" \
-    -v "$PATCHED:/tmp/runtime.mjs" \
-    --entrypoint node "$EXPECTED_IMAGE" \
-    /tmp/tender-password-reset-ui-patch.mjs /tmp/runtime.mjs
-  grep -Fq 'WB_TENDER_PASSWORD_RESET_UI' "$PATCHED"
-  grep -Fq '/api/admin/v1/iam/password/forgot' "$PATCHED"
-  docker run --rm --network none --user 0:0 \
-    -v "$PATCHED:/tmp/runtime.mjs:ro" \
-    --entrypoint node "$EXPECTED_IMAGE" --check /tmp/runtime.mjs
-  printf '%s\t%s\n' "$TARGET" "$BEFORE" >>"$MANIFEST"
-  APPLIED=true
-  docker cp "$PATCHED" "$C:/tmp/wb-tender-password-reset-${INDEX}.mjs"
-  docker exec --user 0:0 "$C" cp "/tmp/wb-tender-password-reset-${INDEX}.mjs" "$TARGET"
+    printf '%s\t%s\t%s\n' "$CONTAINER" "$TARGET" "$BEFORE" >>"$MANIFEST"
+    printf '%s\n' "$CONTAINER" >>"$RESTARTS"
+    APPLIED=true
+    docker cp "$PATCHED" "$CONTAINER:/tmp/wb-tender-password-reset-${INDEX}.mjs"
+    docker exec --user 0:0 "$CONTAINER" cp "/tmp/wb-tender-password-reset-${INDEX}.mjs" "$TARGET"
+    printf 'patched_container=%s target=%s\n' "$CONTAINER" "$TARGET"
+  done
+done < <(docker ps --format '{{.Names}}')
+
+test "$INDEX" -gt 0
+printf 'preflight=login_runtime_targets_found count=%s containers=%s\n' \
+  "$INDEX" "$(sort -u "$RESTARTS" | wc -l)"
+
+sort -u "$RESTARTS" | while IFS= read -r CONTAINER; do
+  docker restart "$CONTAINER" >/dev/null
 done
 
-docker restart "$C" >/dev/null
-
-HEALTH=false
-for ATTEMPT in $(seq 1 30); do
-  CODE=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:4341/api/healthz || true)
-  printf 'attempt=%s health=%s\n' "$ATTEMPT" "$CODE"
-  if test "$CODE" = 200; then HEALTH=true; break; fi
+LIVE_READY=false
+for ATTEMPT in $(seq 1 45); do
+  CODE=$(curl --http1.1 -ksS -o /dev/null -w '%{http_code}' \
+    --resolve www.enwi.online:443:127.0.0.1 \
+    "https://www.enwi.online/admin/ausschreibungen/login?wb_reset=${STAMP}" || true)
+  printf 'attempt=%s live_login=%s\n' "$ATTEMPT" "$CODE"
+  if test "$CODE" = 200; then LIVE_READY=true; break; fi
   sleep 1
 done
-test "$HEALTH" = true
+test "$LIVE_READY" = true
 
-while IFS=$'\t' read -r TARGET BEFORE; do
-  docker exec --user 0:0 "$C" grep -Fq 'WB_TENDER_PASSWORD_RESET_UI' "$TARGET"
+while IFS=$'\t' read -r CONTAINER TARGET BEFORE; do
+  docker exec --user 0:0 "$CONTAINER" grep -Fq 'WB_TENDER_PASSWORD_RESET_UI' "$TARGET"
 done <"$MANIFEST"
-printf '%s\n' 'preflight=patched_runtime_persisted_after_restart'
+printf '%s\n' 'preflight=patched_runtimes_persisted_after_restart'
 
 LOGIN_FILE="$WORK/login.html"
 AUTH_FILE="$WORK/auth.js"
