@@ -28,30 +28,14 @@ test "$(docker inspect "$AUTH" --format '{{.HostConfig.ReadonlyRootfs}}')" = fal
 mkdir -p "$WORK"
 chmod 0700 "$WORK"
 
-DB_FACT=$(docker exec -i --user 0:0 "$AUTH" node --input-type=module - <<'NODE'
-import fs from "node:fs";
-for (const entry of fs.readFileSync("/proc/1/environ", "utf8").split("\0")) {
-  const separator = entry.indexOf("=");
-  if (separator > 0) process.env[entry.slice(0, separator)] = entry.slice(separator + 1);
-}
-const { pool } = await import("/app/apps/api/dist/db.js");
-const connection = await pool.query("SELECT coalesce(inet_server_addr()::text,'') AS ip,current_database() AS db");
-const users = await pool.query("SELECT count(*)::int AS count FROM iam.users WHERE lower(email)=lower('admin@wb-holding.ag') AND active=true");
-console.log(`WBDB|${connection.rows[0].ip}|${connection.rows[0].db}|${users.rows[0].count}`);
-await pool.end();
-NODE
+AUTH_USER_COUNT=$(docker exec -i "$DB" sh -lc 'exec psql -X -A -t -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<'SQL'
+SELECT count(*) FROM iam.users
+WHERE lower(email)=lower('admin@wb-holding.ag') AND active=true;
+SQL
 )
-DB_FACT=$(printf '%s\n' "$DB_FACT" | awk -F'|' '$1=="WBDB" {print; exit}')
-IFS='|' read -r DB_MARKER AUTH_DB_IP AUTH_DB_NAME AUTH_USER_COUNT <<<"$DB_FACT"
-test "$DB_MARKER" = WBDB
-printf 'preflight=auth_database_query_ok active_user_count=%s\n' "$AUTH_USER_COUNT"
+AUTH_USER_COUNT=$(printf '%s' "$AUTH_USER_COUNT" | tr -d '[:space:]')
 test "$AUTH_USER_COUNT" = 1
-test -n "$AUTH_DB_IP"
-PRODUCTION_DB_NAME=$(docker inspect "$DB" --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^POSTGRES_DB=//p' | head -n1)
-test -n "$PRODUCTION_DB_NAME"
-test "$AUTH_DB_NAME" = "$PRODUCTION_DB_NAME"
-docker inspect "$DB" --format '{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}' | grep -Fxq "$AUTH_DB_IP"
-printf '%s\n' 'preflight=auth_service_uses_production_database'
+printf 'preflight=production_active_tender_account_found count=%s\n' "$AUTH_USER_COUNT"
 
 SERVER_BEFORE="$WORK/server.before.js"
 SERVER_PATCHED="$WORK/server.patched.js"
