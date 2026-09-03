@@ -25,6 +25,10 @@ test -s "$ASSET_SOURCE"
 test "$(docker inspect "$AUTH" --format '{{.State.Running}}')" = true
 test "$(docker inspect "$DB" --format '{{.State.Running}}')" = true
 test "$(docker inspect "$AUTH" --format '{{.HostConfig.ReadonlyRootfs}}')" = false
+APP_UID=$(docker exec --user 0:0 "$AUTH" sh -lc 'stat -c %u /proc/1')
+APP_GID=$(docker exec --user 0:0 "$AUTH" sh -lc 'stat -c %g /proc/1')
+case "$APP_UID:$APP_GID" in (*[!0-9:]*) false;; esac
+printf 'preflight=auth_runtime_identity uid=%s gid=%s\n' "$APP_UID" "$APP_GID"
 mkdir -p "$WORK"
 chmod 0700 "$WORK"
 
@@ -77,7 +81,7 @@ SQL
     docker exec --user 0:0 "$AUTH" cp /tmp/wb-reset-server-rollback.js /app/apps/api/dist/server.js >/dev/null 2>&1 || true
     if test "$CONTAINER_SECRET_EXISTED" = true; then
       docker cp "$WORK/container-secret.before" "$AUTH:/tmp/wb-reset-secret-rollback" >/dev/null 2>&1 || true
-      docker exec --user 0:0 "$AUTH" sh -c 'install -o node -g node -m 0400 /tmp/wb-reset-secret-rollback /run/secrets/ionos-smtp-password' >/dev/null 2>&1 || true
+      docker exec --user 0:0 "$AUTH" install -o "$APP_UID" -g "$APP_GID" -m 0400 /tmp/wb-reset-secret-rollback /run/secrets/ionos-smtp-password >/dev/null 2>&1 || true
     else
       docker exec --user 0:0 "$AUTH" rm -f /run/secrets/ionos-smtp-password >/dev/null 2>&1 || true
     fi
@@ -92,9 +96,9 @@ trap rollback EXIT
 APPLIED=true
 docker cp "$SERVER_PATCHED" "$AUTH:/tmp/wb-reset-server.js"
 docker exec --user 0:0 "$AUTH" cp /tmp/wb-reset-server.js /app/apps/api/dist/server.js
-docker exec --user 0:0 "$AUTH" install -d -o node -g node -m 0700 /run/secrets
+docker exec --user 0:0 "$AUTH" install -d -o "$APP_UID" -g "$APP_GID" -m 0700 /run/secrets
 docker cp "$SECRET" "$AUTH:/tmp/wb-reset-smtp-secret"
-docker exec --user 0:0 "$AUTH" install -o node -g node -m 0400 /tmp/wb-reset-smtp-secret /run/secrets/ionos-smtp-password
+docker exec --user 0:0 "$AUTH" install -o "$APP_UID" -g "$APP_GID" -m 0400 /tmp/wb-reset-smtp-secret /run/secrets/ionos-smtp-password
 install -d -m 0755 "$(dirname "$ASSET")"
 install -m 0644 "$ASSET_SOURCE" "$ASSET"
 docker restart "$AUTH" >/dev/null
@@ -108,7 +112,7 @@ for ATTEMPT in $(seq 1 45); do
 done
 test "$HEALTHY" = true
 docker exec "$AUTH" grep -Fq WB_TENDER_PASSWORD_RESET_MAIL_V1 /app/apps/api/dist/server.js
-docker exec --user node "$AUTH" test -r /run/secrets/ionos-smtp-password
+docker exec --user "$APP_UID:$APP_GID" "$AUTH" test -r /run/secrets/ionos-smtp-password
 
 FORGOT_CODE=$(curl --http1.1 -ksS -o "$WORK/forgot-nonexistent.json" -w '%{http_code}' \
   --resolve www.enwi.online:443:127.0.0.1 -H 'content-type: application/json' \
