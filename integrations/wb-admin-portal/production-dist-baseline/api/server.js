@@ -2167,7 +2167,7 @@ app.get("/api/public/v1/:type", async (req, reply) => {
         "team",
     ].includes(type))
         return reply.code(404).send({ error: "not_found" });
-    const r = await query("SELECT id,title,data,updated_at FROM app.resources WHERE resource_type=$1 AND status='published' AND deleted_at IS NULL ORDER BY created_at", [type]);
+    const r = await query("SELECT id,title,data,updated_at FROM app.resources WHERE resource_type=$1 AND status='published' AND deleted_at IS NULL ORDER BY CASE WHEN $1='blogposts' THEN created_at END DESC NULLS LAST, CASE WHEN $1<>'blogposts' THEN created_at END ASC, id", [type]);
     reply.header("cache-control", "public,max-age=60");
     return { items: r.rows };
 });
