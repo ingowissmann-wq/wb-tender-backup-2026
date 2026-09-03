@@ -20,22 +20,22 @@ export function patchPasswordResetMail(source) {
 }`;
   const transportAfter = `/* ${MARKER} */
 function systemMailTransport() {
-    const password = process.env.SMTP_PASSWORD || (process.env.SMTP_PASSWORD_FILE
-        ? fs.readFileSync(process.env.SMTP_PASSWORD_FILE, "utf8").trimEnd()
+    const passwordFile = process.env.SMTP_PASSWORD_FILE || "/run/secrets/ionos-smtp-password";
+    const password = process.env.SMTP_PASSWORD || (fs.existsSync(passwordFile)
+        ? fs.readFileSync(passwordFile, "utf8").trimEnd()
         : "");
-    for (const key of ["SMTP_HOST", "SMTP_PORT", "SMTP_USER"])
-        if (!process.env[key])
-            throw new Error("smtp_configuration_missing");
     if (!password)
         throw new Error("smtp_password_missing");
-    const port = Number(process.env.SMTP_PORT || 587);
+    const host = process.env.SMTP_HOST || "smtp.ionos.de";
+    const user = process.env.SMTP_USER || "admin@wb-holding.ag";
+    const port = Number(process.env.SMTP_PORT || 465);
     return nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
+        host,
         port,
         secure: port === 465 || String(process.env.SMTP_SECURE).toLowerCase() === "true",
-        auth: { user: process.env.SMTP_USER, pass: password },
+        auth: { user, pass: password },
         requireTLS: true,
-        tls: { minVersion: "TLSv1.2", servername: process.env.SMTP_HOST },
+        tls: { minVersion: "TLSv1.2", servername: host },
         connectionTimeout: 15000,
         greetingTimeout: 15000,
         socketTimeout: 30000,
@@ -44,8 +44,8 @@ function systemMailTransport() {
     });
 }`;
 
-  const linkBefore = 'url = `${origin}/admin/?reset=${encodeURIComponent(raw)}`;';
-  const linkAfter = 'url = `${origin}/admin/ausschreibungen/login?reset=${encodeURIComponent(raw)}`;';
+  const linkBefore = 'const origin = String(process.env.PUBLIC_ORIGIN || "https://admin.wb-holding.ag").replace(/\\/+$/, ""), url = `${origin}/admin/?reset=${encodeURIComponent(raw)}`;';
+  const linkAfter = 'const origin = String(process.env.PUBLIC_ORIGIN || "https://www.enwi.online").replace(/\\/+$/, ""), url = `${origin}/admin/ausschreibungen/login?reset=${encodeURIComponent(raw)}`;';
   const subjectBefore = 'subject: "Passwort für das WB Adminportal zurücksetzen",';
   const subjectAfter = 'subject: "Passwort für WB Tender zurücksetzen",';
 
