@@ -51,8 +51,9 @@ docker cp "$C:/data/app-resources.before.json" "$WORK/app-resources.before.json"
 docker exec "$C" rm -f /data/app-resources.before.json
 
 docker cp "$ROOT/recovery/wix-admin-restore.json" "$C:/tmp/wix-admin-restore.json"
-docker cp "$ROOT/scripts/wix-admin-canary-import.mjs" "$C:/tmp/wix-admin-canary-import.mjs"
-docker exec -e DATABASE_URL="$CANARY_DATABASE_URL" "$C" node /tmp/wix-admin-canary-import.mjs /tmp/wix-admin-restore.json | tee "$WORK/import-result.json"
+docker exec "$C" mkdir -p /app/runtime/wix-restore
+docker cp "$ROOT/scripts/wix-admin-canary-import.mjs" "$C:/app/runtime/wix-restore/wix-admin-canary-import.mjs"
+docker exec -e DATABASE_URL="$CANARY_DATABASE_URL" "$C" node /app/runtime/wix-restore/wix-admin-canary-import.mjs /tmp/wix-admin-restore.json | tee "$WORK/import-result.json"
 grep -Fq '"ok":true' "$WORK/import-result.json"
 grep -Fq '"sqliteIntegrity":"ok"' "$WORK/import-result.json"
 
