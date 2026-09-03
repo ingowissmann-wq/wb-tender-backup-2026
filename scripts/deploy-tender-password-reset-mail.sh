@@ -77,6 +77,7 @@ cat >"$WORK/compose-new.yml" <<YAML
 services:
   ${SERVICE}:
     image: ${NEW_IMAGE}
+    user: "0:0"
     environment:
       SMTP_HOST: smtp.ionos.de
       SMTP_PORT: "465"
@@ -141,10 +142,12 @@ done
 test "$HEALTHY" = true
 test "$(docker inspect "$AUTH" --format '{{.Image}}')" = "$(docker image inspect "$NEW_IMAGE" --format '{{.Id}}')"
 docker exec "$AUTH" sh -c 'test -s /run/secrets/ionos-smtp-password && grep -Fq WB_TENDER_PASSWORD_RESET_MAIL_V1 /app/apps/api/dist/server.js'
+docker exec "$AUTH" sh -c "awk '/^Uid:/{exit (\$2==0)}' /proc/1/status"
+printf '%s\n' 'preflight=runtime_dropped_root_privileges'
 
 install -d -m 0755 "$(dirname "$ASSET")"
-install -m 0644 "$ASSET_SOURCE" "$ASSET"
 ASSET_CHANGED=true
+install -m 0644 "$ASSET_SOURCE" "$ASSET"
 node --check "$ASSET"
 
 FORGOT_CODE=$(curl --http1.1 -ksS -o "$WORK/forgot-nonexistent.json" -w '%{http_code}' \
