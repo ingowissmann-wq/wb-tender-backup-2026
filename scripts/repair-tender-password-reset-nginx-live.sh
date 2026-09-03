@@ -81,9 +81,6 @@ import re
 import sys
 source, target, include = sys.argv[1:]
 text = open(source, encoding="utf-8").read()
-if include.strip() in text:
-    open(target, "w", encoding="utf-8").write(text)
-    raise SystemExit(0)
 lines = text.splitlines(keepends=True)
 depth = 0
 start = None
@@ -103,17 +100,23 @@ for begin, end in blocks:
     block = "".join(lines[begin:end + 1])
     if re.search(r"\blisten\s+[^;]*443\b", block) and re.search(r"\bserver_name\s+[^;]*\b(?:www\.)?enwi\.online\b", block):
         matches.append((begin, end))
-if len(matches) != 1:
-    raise SystemExit(f"expected_one_https_enwi_server_found_{len(matches)}")
-begin, end = matches[0]
-insert_at = None
-for index in range(begin, end + 1):
-    if re.search(r"^\s*server_name\s+", lines[index]):
-        insert_at = index + 1
-        break
-if insert_at is None:
-    raise SystemExit("enwi_server_name_line_missing")
-lines.insert(insert_at, include + "\n")
+if not matches:
+    raise SystemExit("https_enwi_server_missing")
+insertions = []
+for begin, end in matches:
+    block = "".join(lines[begin:end + 1])
+    if include.strip() in block:
+        continue
+    insert_at = None
+    for index in range(begin, end + 1):
+        if re.search(r"^\\s*server_name\\s+", lines[index]):
+            insert_at = index + 1
+            break
+    if insert_at is None:
+        raise SystemExit("enwi_server_name_line_missing")
+    insertions.append(insert_at)
+for insert_at in sorted(insertions, reverse=True):
+    lines.insert(insert_at, include + "\\n")
 open(target, "w", encoding="utf-8").writelines(lines)
 PY
 
