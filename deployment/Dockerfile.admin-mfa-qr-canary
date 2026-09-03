@@ -1,4 +1,4 @@
-ARG BASE_IMAGE
+ARG BASE_IMAGE=wb-admin:base-image-must-be-overridden
 FROM ${BASE_IMAGE}
 USER root
 COPY integrations/wb-admin-portal/candidate/admin-mfa-qr-patch.mjs /tmp/admin-mfa-qr-patch.mjs
