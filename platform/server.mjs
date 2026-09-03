@@ -126,8 +126,14 @@ async function auth(req, reply) {
     req.cookies.wb_session,
     secret("SESSION_PEPPER"),
   );
-  if (!identity)
+  if (!identity) {
+    const browserRequest = String(req.headers.accept || "").includes("text/html");
+    if (browserRequest) {
+      const target = req.url.startsWith("/admin/ausschreibungen") ? req.url : `${uiBase}/`;
+      return reply.redirect(`/admin/login?returnTo=${encodeURIComponent(target)}`, 303);
+    }
     return reply.code(401).send({ error: "authentication_required" });
+  }
   if (saasEnabled) {
     identity.saas = await loadSaasContext(pool, identity.userId);
     if (identity.saas) {
@@ -796,13 +802,20 @@ app.addHook("onSend",async(req,reply,payload)=>{
   if(req.url==="/"||req.url===uiBase||req.url===`${uiBase}/`){const type=reply.getHeader("content-type");reply.header("Cache-Control","no-store, max-age=0, must-revalidate");reply.header("Pragma","no-cache");if(String(type||"").startsWith("text/html"))return String(payload).replace("</head>",`<link rel="stylesheet" href="${uiBase}/assets/${version("inbox-regions.css")}/inbox-regions.css"><script src="${uiBase}/assets/${version("inbox-regions.js")}/inbox-regions.js" defer></script></head>`)}
   return payload;
 });
-app.get("/", uiAuth, async (_, r) =>
+const tenderPage = async (_, r) =>
   r
     .type("text/html")
     .send(
       `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="wb-tender-release" content="${TENDER_RELEASE}"><title>Ausschreibungen · WB Plattform</title><link rel="stylesheet" href="${uiBase}/ui.css"><link rel="stylesheet" href="${uiBase}/contrast.css"><script src="${uiBase}/assets/${version("ui.js")}/ui.js" defer></script></head><body data-api="${apiBase}"><header><span class="brand"><img src="${uiBase}/wb-holding-logo.png" alt="WB-Holding AG"><strong>WB Plattform · Ausschreibungen</strong></span><a href="/admin/">Adminportal</a></header><main><h1>Ausschreibungen</h1><p class="muted">Internes, geschütztes Enterprise-Modul mit geprüften öffentlichen Vergabedaten.</p><nav id="tabs" class="tabs" aria-label="Ausschreibungsbereiche"></nav><section class="toolbar"><label>Suche <input id="q" autocomplete="off"></label><label>Quelle <select id="source"><option value="">Alle</option><option>TED</option><option>DOE</option></select></label></section><section id="content" aria-live="polite"></section></main></body></html>`,
-    ),
+    );
+app.get("/", uiAuth, tenderPage);
+// Keep the browser contract correct even when a reverse proxy accidentally
+// forwards the public prefix without stripping it. APIs continue to use their
+// normal JSON authentication contract.
+app.get("/admin/ausschreibungen", async (_, reply) =>
+  reply.redirect("/admin/ausschreibungen/", 308),
 );
+app.get("/admin/ausschreibungen/", uiAuth, tenderPage);
 const autopilotPage=async (_, r) =>
   r
     .type("text/html")

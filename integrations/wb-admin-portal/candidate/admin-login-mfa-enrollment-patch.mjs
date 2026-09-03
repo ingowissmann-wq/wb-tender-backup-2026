@@ -82,6 +82,7 @@ export function patchAdminLoginMfa(root) {
     ["M(F.challenge),C(\"mfa\")", "M(F),C(\"mfa\")"],
     ["{challenge:R,code:X.get(\"code\")}", "{challenge:R.challenge,code:X.get(\"code\")}"],
     ["children:\"Zwei-Faktor-Authentifizierung\"}),i.jsx(\"p\",{children:\"Geben Sie den sechsstelligen Code Ihrer Authenticator-App oder einen gültigen Wiederherstellungscode ein.\"})", "children:\"Zwei-Faktor-Authentifizierung\"}),R.mfaSetupRequired&&i.jsxs(i.Fragment,{children:[i.jsx(\"p\",{className:\"notice\",children:\"Richten Sie jetzt die verpflichtende Zwei-Faktor-Authentifizierung in Ihrer Authenticator-App ein. Eine Sitzung wird erst nach erfolgreicher Codeprüfung erstellt.\"}),i.jsxs(\"label\",{children:[\"Manueller Schlüssel\",i.jsx(\"input\",{readOnly:!0,value:R.secret})]}),i.jsxs(\"label\",{children:[\"Konfigurations-URI\",i.jsx(\"textarea\",{readOnly:!0,value:R.uri})]})]}),i.jsx(\"p\",{children:R.mfaSetupRequired?\"Geben Sie zur Bestätigung den sechsstelligen Code Ihrer Authenticator-App ein.\":\"Geben Sie den sechsstelligen Code Ihrer Authenticator-App oder einen gültigen Wiederherstellungscode ein.\"})"],
+    ["x(F),q(F),H(\"\"),history.replaceState({},\"\",location.pathname)", "x(F),q(F),H(\"\");const Z=new URLSearchParams(location.search).get(\"returnTo\"),W=Z&&Z.startsWith(\"/admin/\")&&!Z.startsWith(\"//\")?Z:\"/admin/\";location.assign(W)"],
   ];
   for (const [before, after] of replacements) {
     if (!client.includes(before)) throw new Error(`Expected production client marker not found: ${before.slice(0, 48)}`);

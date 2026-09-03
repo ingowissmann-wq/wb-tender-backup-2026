@@ -1,0 +1,76 @@
+name: CI
+on:
+  pull_request:
+  push:
+permissions:
+  contents: read
+jobs:
+  unit-and-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 1 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm test
+      - run: npm run gate
+      - run: npm run verify:artifact
+      - run: bash -n deployment/production-rollout.sh deployment/rehearse-release.sh deployment/apply-release-migrations.sh deployment/rehearsal/rollback-probe.sh
+      - run: git diff --check
+
+  release-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 1 }
+      - name: Resolve and verify immutable build base
+        id: base
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker pull node:22-bookworm-slim
+          digest=$(docker image inspect node:22-bookworm-slim --format '{{index .RepoDigests 0}}')
+          [[ "$digest" == node@sha256:* ]]
+          echo "image=$digest" >> "$GITHUB_OUTPUT"
+      - name: Build exact checkout and verify OCI revision
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -z "$(git status --porcelain)"
+          commit=$(git rev-parse HEAD)
+          docker build --pull=false --build-arg RUNTIME_IMAGE='${{ steps.base.outputs.image }}' --build-arg RELEASE_VERSION="$GITHUB_RUN_ID" --build-arg SOURCE_FINGERPRINT="$commit" -t wb-tender-release:ci -f Dockerfile.release .
+          test "$(docker image inspect wb-tender-release:ci --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$commit"
+          image_id=$(docker image inspect wb-tender-release:ci --format '{{.Id}}')
+          for service in api worker scheduler; do
+            id=$(docker create --name "release-$service" wb-tender-release:ci true)
+            test "$(docker inspect "$id" --format '{{.Image}}')" = "$image_id"
+          done
+      - name: Prove excluded build context is absent
+        run: |
+          ! docker run --rm wb-tender-release:ci test -e /app/production-snapshot
+          ! docker run --rm wb-tender-release:ci test -e /app/.git
+
+  rehearsal-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve digest-pinned dependency references
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for ref in postgres:16-bookworm mcr.microsoft.com/playwright:v1.55.1-noble node:22-bookworm-slim; do docker pull "$ref"; done
+          export POSTGRES_IMAGE=$(docker image inspect postgres:16-bookworm --format '{{index .RepoDigests 0}}')
+          export BROWSER_IMAGE=$(docker image inspect mcr.microsoft.com/playwright:v1.55.1-noble --format '{{index .RepoDigests 0}}')
+          export RELEASE_IMAGE=$(docker image inspect node:22-bookworm-slim --format '{{index .RepoDigests 0}}')
+          export DATABASE_URL_FILE=/tmp/database_url E2E_AUTH_FILE=/tmp/e2e_auth SESSION_PEPPER_FILE=/tmp/session_pepper
+          touch "$DATABASE_URL_FILE" "$E2E_AUTH_FILE" "$SESSION_PEPPER_FILE"
+          docker compose -f deployment/compose.rehearsal.yml config --quiet
+      - name: Rehearsal remains fail-closed without an authorized MFA fixture and source dump
+        run: |
+          set +e
+          output=$(deployment/rehearse-release.sh 2>&1)
+          status=$?
+          set -e
+          test "$status" -eq 64
+          grep -q 'missing required environment' <<<"$output"

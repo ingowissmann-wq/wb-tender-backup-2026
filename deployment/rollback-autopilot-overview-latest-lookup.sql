@@ -1,0 +1,3 @@
+DROP INDEX CONCURRENTLY IF EXISTS tender.autopilot_results_overview_latest_idx;
+DROP INDEX CONCURRENTLY IF EXISTS tender.autopilot_queue_full_pipeline_latest_idx;
+DROP INDEX CONCURRENTLY IF EXISTS tender.enrichment_versions_overview_latest_idx;

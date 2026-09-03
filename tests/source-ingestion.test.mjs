@@ -36,6 +36,13 @@ test("DOE normalizer uses only supplied production notice evidence", () => {
   assert.equal(row.title, "Hausmeister- und Winterdienst");
   assert.deepEqual(row.cpvCodes, ["90620000"]);
   assert.deepEqual(row.regions, ["DE2"]);
+  assert.equal(row.deadlineStatus, "SOURCE_DEADLINE_UNBOUND");
+});
+
+test("DOE deadlines distinguish missing source evidence from malformed evidence", () => {
+  const base = { id: "doe-deadline", date: "2026-08-17T08:00:00Z", buyer: { name: "Landkreis" }, tender: { title: "Leistung", items: [], lots: [] } };
+  assert.equal(normalizeDoeRelease(base).deadlineStatus, "MISSING_AT_SOURCE");
+  assert.equal(normalizeDoeRelease({ ...base, tender: { ...base.tender, tenderPeriod: { endDate: "not-a-date" } } }).deadlineStatus, "SOURCE_DEADLINE_INVALID");
 });
 
 test("DOE normalizer derives only the documented public notice endpoint when exports omit uri", () => {

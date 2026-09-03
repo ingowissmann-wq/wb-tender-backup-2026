@@ -44,6 +44,8 @@ test("unconfigured accounts enroll MFA before a session can be created", () => {
     assert.ok(api.indexOf("mfa_self_enrollment") < api.indexOf("return createAdminSession", api.indexOf('app.post("/api/admin/v1/iam/mfa"')));
     assert.match(client, /challenge:R\.challenge/);
     assert.match(client, /Eine Sitzung wird erst nach erfolgreicher Codeprüfung erstellt/);
+    assert.match(client, /location\.assign\(W\)/);
+    assert.match(client, /Z\.startsWith\(\"\/admin\/\"\)/);
     assert.notEqual(asset, "index-2Yce_8u7.js");
     assert.match(html, new RegExp(`assets/${asset.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   } finally {

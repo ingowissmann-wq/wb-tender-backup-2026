@@ -1,0 +1,19 @@
+ARG ADMIN_AUTH_IMAGE
+ARG TENDER_BASE_IMAGE
+FROM ${ADMIN_AUTH_IMAGE} AS admin_auth
+
+FROM ${TENDER_BASE_IMAGE}
+
+# Both runtime images are the inspected Ubuntu 24.04 / Node 22.19.0 builds.
+# Copy only the already deployed verifier and its runtime dependencies; this
+# overlay performs no network install and leaves every non-login file intact.
+USER root
+COPY --from=admin_auth /app/node_modules/argon2 /app/node_modules/argon2
+COPY --from=admin_auth /app/node_modules/@phc/format /app/node_modules/@phc/format
+COPY --from=admin_auth /app/node_modules/node-addon-api /app/node_modules/node-addon-api
+COPY --from=admin_auth /app/node_modules/node-gyp-build /app/node_modules/node-gyp-build
+COPY integrations/wb-admin-portal/candidate/tender-owner-auth-argon2-compatibility-patch.mjs /tmp/patch.mjs
+RUN node /tmp/patch.mjs /app && rm /tmp/patch.mjs
+USER pwuser
+
+LABEL org.opencontainers.image.description="WB Tender owner-login Argon2id compatibility overlay"

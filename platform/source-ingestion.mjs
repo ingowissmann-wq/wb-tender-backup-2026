@@ -150,6 +150,13 @@ export function normalizeDoeRelease(raw) {
   const lotLifecycles = assessLotDeadlines({ classification: classification.classification, evidence: deadlineEvidence, sourceEnded: /(closed|complete|award|cancel|withdraw|terminated|unsuccessful)/i.test(sourceStatus), now: validDate(raw?.date) ? new Date(raw.date) : new Date() });
   const lifecycle = aggregateLotLifecycle(lotLifecycles);
   const offerDeadline = lifecycle.offerDeadline;
+  const deadlineStatus = offerDeadline
+    ? "EXACT"
+    : deadlineEvidence.some((item) => item.parsingStatus === "INVALID")
+      ? "SOURCE_DEADLINE_INVALID"
+      : deadlineEvidence.length
+        ? "SOURCE_DEADLINE_UNBOUND"
+        : "MISSING_AT_SOURCE";
   const normalized = {
     sourceCode: "DOE", externalId, noticeNumber: null, tedId: null, buyer, title,
     description: String(raw?.tender?.description || ""),
@@ -165,7 +172,7 @@ export function normalizeDoeRelease(raw) {
     participationBlockReason: lifecycle.participationBlockReason, sourceLifecycleStatus: lifecycle.sourceLifecycleStatus,
     noticeType: tags.join(",") || null, noticeSubtype: null, formType: null, procedureIdentifier, previousNoticeIds,
     noticeRelationships: noticeRelationships({ sourceCode: "DOE", externalId, procedureIdentifier, previousNoticeIds }), raw, lots,
-    deadlineEvidence, lotLifecycles,
+    deadlineEvidence, lotLifecycles, deadlineStatus,
   };
   normalized.rawSha256 = sha256(json(raw));
   return normalized;
