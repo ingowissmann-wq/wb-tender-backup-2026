@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { patchPasswordResetMail, MARKER } from "../integrations/wb-admin-portal/candidate/tender-password-reset-mail-patch.mjs";
+import { patchPasswordResetMail, MARKER } from "./tender-password-reset-mail-patch.mjs";
 
 const transport = `function systemMailTransport() {
     for (const key of ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD"])
@@ -15,13 +15,14 @@ const transport = `function systemMailTransport() {
     });
 }`;
 
-const fixture = `${transport}\nconst origin = String(process.env.PUBLIC_ORIGIN || "https://admin.wb-holding.ag").replace(/\\/+$/, ""), url = \`${'${origin}'}/admin/?reset=${'${encodeURIComponent(raw)}'}\`;\nsubject: "Passwort für das WB Adminportal zurücksetzen",`;
+const fixture = `${transport}\nconst origin = String(process.env.PUBLIC_ORIGIN || "https://admin.wb-holding.ag").replace(/\\/+$/, ""), url = \`${'${origin}'}/admin/?reset=${'${encodeURIComponent(raw)}'}\`;\nfrom: process.env.SYSTEM_MAIL_FROM || "bewerbung@wb-holding.ag",\nsubject: "Passwort für das WB Adminportal zurücksetzen",`;
 
 test("uses a secret file and the Tender reset URL", () => {
   const patched = patchPasswordResetMail(fixture);
   assert.match(patched, new RegExp(MARKER));
   assert.match(patched, /SMTP_PASSWORD_FILE/);
   assert.ok(patched.includes("/admin/ausschreibungen/login?reset="));
+  assert.ok(patched.includes('process.env.SMTP_USER || "admin@wb-holding.ag"'));
   assert.equal(patchPasswordResetMail(patched), patched);
 });
 
