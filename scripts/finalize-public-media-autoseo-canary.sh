@@ -6,7 +6,7 @@ EXPECTED_IMAGE='sha256:871f89c205b68d43043fa06c25a5e3a5a7083f550ab7d41e2b8cd950b
 CFG=$(readlink -f /etc/nginx/sites-enabled/wb-tender-www.conf)
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 WORK="/srv/wb-tender-recovery/admin-runtime-rehearsal-4/public-api-autoseo-${STAMP}"
-AUTOSEO_PATH=/app/apps/api/dist/api/autoseo.js
+AUTOSEO_PATH=/app/apps/api/dist/autoseo.js
 URL_FILE=/root/wb-autoseo-webhook-url.txt
 TMP_CFG=$(mktemp)
 
@@ -23,6 +23,7 @@ fi
 printf '%s\n' 'preflight=canary_identity_and_health_ok'
 
 test -f "$CFG"
+docker exec "$C" test -f "$AUTOSEO_PATH"
 test "$(grep -Fxc '    location ^~ /api/admin/ {' "$CFG")" -eq 1
 test "$(grep -Fxc '    location = /api/integrations/autoseo/webhook {' "$CFG")" -eq 1
 cp -a "$CFG" "$WORK/wb-tender-www.conf.before"
