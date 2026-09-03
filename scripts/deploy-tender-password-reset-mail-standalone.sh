@@ -9,7 +9,7 @@ trap 'failure_report "$LINENO"' ERR
 
 SOURCE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 AUTH=wb-admin-rehearsal-auth-1
-DB=wb-tender-production-db
+DB=wb-admin-rehearsal-db-1
 SECRET=/srv/wb-tender-production/secrets/ionos-smtp-password
 PATCHER="$SOURCE/integrations/wb-admin-portal/candidate/tender-password-reset-mail-patch.mjs"
 ASSET_SOURCE="$SOURCE/integrations/wb-admin-portal/candidate/tender-password-reset-ui.js"
@@ -39,7 +39,7 @@ SQL
 )
 AUTH_USER_COUNT=$(printf '%s' "$AUTH_USER_COUNT" | tr -d '[:space:]')
 test "$AUTH_USER_COUNT" = 1
-printf 'preflight=production_active_tender_account_found count=%s\n' "$AUTH_USER_COUNT"
+printf 'preflight=rehearsal_active_tender_account_found count=%s\n' "$AUTH_USER_COUNT"
 
 SERVER_BEFORE="$WORK/server.before.js"
 SERVER_PATCHED="$WORK/server.patched.js"
@@ -114,6 +114,41 @@ test "$HEALTHY" = true
 docker exec "$AUTH" grep -Fq WB_TENDER_PASSWORD_RESET_MAIL_V1 /app/apps/api/dist/server.js
 docker exec --user "$APP_UID:$APP_GID" "$AUTH" test -r /run/secrets/ionos-smtp-password
 
+printf '%s\n' 'preflight=smtp_verify_start'
+docker exec --user "$APP_UID:$APP_GID" "$AUTH" sh -lc 'cd /app && node --input-type=module' <<'NODE'
+import fs from "node:fs";
+import nodemailer from "nodemailer";
+const passwordFile = "/run/secrets/ionos-smtp-password";
+const password = fs.readFileSync(passwordFile, "utf8").trimEnd();
+const host = process.env.SMTP_HOST || "smtp.ionos.de";
+const user = process.env.SMTP_USER || "admin@wb-holding.ag";
+const port = Number(process.env.SMTP_PORT || 465);
+const transport = nodemailer.createTransport({
+  host,
+  port,
+  secure: port === 465 || String(process.env.SMTP_SECURE).toLowerCase() === "true",
+  auth: { user, pass: password },
+  requireTLS: true,
+  tls: { minVersion: "TLSv1.2", servername: host },
+  connectionTimeout: 15000,
+  greetingTimeout: 15000,
+  socketTimeout: 30000,
+  disableFileAccess: true,
+  disableUrlAccess: true,
+});
+try {
+  await transport.verify();
+  console.log(`smtp_verify=success host=${host} port=${port} user=${user}`);
+} catch (error) {
+  const safe = String(error?.response || error?.message || "smtp_verify_failed").replaceAll(password, "***");
+  console.error(`smtp_verify=failed code=${error?.code || ""} command=${error?.command || ""} response_code=${error?.responseCode || ""} detail=${safe}`);
+  process.exit(1);
+} finally {
+  transport.close();
+}
+NODE
+printf '%s\n' 'preflight=smtp_verify_ok'
+
 FORGOT_CODE=$(curl --http1.1 -ksS -o "$WORK/forgot-nonexistent.json" -w '%{http_code}' \
   --resolve www.enwi.online:443:127.0.0.1 -H 'content-type: application/json' \
   --data '{"email":"nonexistent-reset-check@invalid.example"}' \
@@ -140,7 +175,9 @@ SELECT count(*) FROM iam.password_reset_tokens t JOIN iam.users u ON u.id=t.user
 WHERE lower(u.email)=lower('admin@wb-holding.ag') AND t.used_at IS NULL AND t.expires_at>now();
 SQL
 )
-test "$(printf '%s' "$VALID_TOKEN_COUNT" | tr -d '[:space:]')" = 1
+VALID_TOKEN_COUNT=$(printf '%s' "$VALID_TOKEN_COUNT" | tr -d '[:space:]')
+printf 'valid_token_count=%s\n' "$VALID_TOKEN_COUNT"
+test "$VALID_TOKEN_COUNT" = 1
 
 APPLIED=false
 TOKEN_CREATED=false
@@ -151,5 +188,6 @@ printf '%s\n' 'valid_single_use_token=true'
 printf '%s\n' 'token_validity=30_minutes'
 printf '%s\n' 'smtp_secret_printed=false'
 printf '%s\n' 'production_tender_container_changed=false'
+printf '%s\n' 'production_database_changed=false'
 printf '%s\n' 'external_submission_changed=false'
 printf 'backup_directory=%s\n' "$WORK"
