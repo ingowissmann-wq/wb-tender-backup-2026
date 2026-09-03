@@ -34,8 +34,11 @@ commit/remote. Until then, release acceptance remains blocked.
 
 ## Canonicalization gate
 
-On the server, `deployment/production-rollout.sh` extracts the candidate image's
-OCI revision, requires it to equal the checked-out commit, builds one image from
-that exact commit, and requires API, worker and scheduler canaries to run the
-same image ID. It never prints secret values. Production switching additionally
-requires the operator to type the exact commit after browser and HTTP checks.
+The GitHub Actions release-image job resolves the configured base tag to an OCI
+digest, builds exactly the checked-out commit with that immutable reference and
+checks the resulting OCI revision label. It also creates API, worker and
+scheduler containers and compares their image IDs. The production script does
+not extract candidate revisions and does not accept interactive commit input.
+Instead it requires two files prepared before invocation: successful rehearsal
+evidence for the exact commit and a separate operator approval for that commit.
+Database credentials remain file-based throughout.

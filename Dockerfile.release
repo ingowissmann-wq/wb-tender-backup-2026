@@ -9,7 +9,6 @@ LABEL org.opencontainers.image.title="WB Tender release" \
 
 ENV EXTERNAL_SUBMISSION_ENABLED=false \
     WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false \
-    WB_TENDER_SAAS_ENABLED=false \
     WB_TENDER_SAAS_LEGACY_API_ENABLED=false
 
 WORKDIR /app

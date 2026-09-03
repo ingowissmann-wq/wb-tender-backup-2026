@@ -1,0 +1,77 @@
+name: wb-tender-rehearsal
+services:
+  db:
+    image: ${POSTGRES_IMAGE:?POSTGRES_IMAGE must be digest pinned}
+    environment:
+      POSTGRES_DB: wb_rehearsal
+      POSTGRES_HOST_AUTH_METHOD: trust
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wb_rehearsal"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - rehearsal-db:/var/lib/postgresql/data
+  tools:
+    image: ${RELEASE_IMAGE:?RELEASE_IMAGE must be digest pinned}
+    working_dir: /app
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+    secrets: [database_url]
+  api:
+    image: ${RELEASE_IMAGE:?RELEASE_IMAGE must be digest pinned}
+    command: ["node", "platform/server.mjs"]
+    depends_on:
+      db: { condition: service_healthy }
+    environment: &runtime
+      NODE_ENV: test
+      TENDER_ENABLED: "true"
+      DATABASE_URL_FILE: /run/secrets/database_url
+      SESSION_PEPPER_FILE: /run/secrets/session_pepper
+      CAREER_DATABASE_PATH: /app/deployment/rehearsal/career.db
+      EXTERNAL_SUBMISSION_ENABLED: "false"
+      WB_TENDER_ALLOW_EXTERNAL_SUBMISSION: "false"
+      WB_TENDER_SAAS_ENABLED: "true"
+      WIKOS_LOCAL_STUB: "true"
+    secrets: [database_url, session_pepper]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4240/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 3s
+      timeout: 2s
+      retries: 40
+  worker:
+    image: ${RELEASE_IMAGE:?RELEASE_IMAGE must be digest pinned}
+    command: ["node", "platform/autopilot-pipeline-worker.mjs"]
+    depends_on:
+      api: { condition: service_healthy }
+    environment: *runtime
+    secrets: [database_url, session_pepper]
+  scheduler:
+    image: ${RELEASE_IMAGE:?RELEASE_IMAGE must be digest pinned}
+    command: ["node", "platform/autopilot-pipeline-worker.mjs"]
+    depends_on:
+      api: { condition: service_healthy }
+    environment: *runtime
+    secrets: [database_url, session_pepper]
+  browser:
+    image: ${BROWSER_IMAGE:?BROWSER_IMAGE must be digest pinned}
+    working_dir: /app
+    depends_on:
+      api: { condition: service_healthy }
+    volumes:
+      - ..:/app:ro
+    environment:
+      E2E_BASE_URL: http://api:4240
+      E2E_AUTH_FILE: /run/secrets/e2e_auth
+    secrets: [e2e_auth]
+  wikOS-stub:
+    image: ${RELEASE_IMAGE:?RELEASE_IMAGE must be digest pinned}
+    command: ["node", "deployment/rehearsal/wikos-stub.mjs"]
+secrets:
+  database_url: { file: ${DATABASE_URL_FILE:?DATABASE_URL_FILE is required} }
+  session_pepper: { file: ${SESSION_PEPPER_FILE:?SESSION_PEPPER_FILE is required} }
+  e2e_auth: { file: ${E2E_AUTH_FILE:?E2E_AUTH_FILE is required} }
+volumes:
+  rehearsal-db:
