@@ -100,11 +100,11 @@ for TARGET in "${TARGETS[@]}"; do
     -v "$PATCHED:/tmp/runtime.mjs:ro" \
     --entrypoint node "$EXPECTED_IMAGE" --check /tmp/runtime.mjs
   printf '%s\t%s\n' "$TARGET" "$BEFORE" >>"$MANIFEST"
+  APPLIED=true
   docker cp "$PATCHED" "$C:/tmp/wb-tender-password-reset-${INDEX}.mjs"
   docker exec --user 0:0 "$C" cp "/tmp/wb-tender-password-reset-${INDEX}.mjs" "$TARGET"
 done
 
-APPLIED=true
 docker restart "$C" >/dev/null
 
 HEALTH=false
