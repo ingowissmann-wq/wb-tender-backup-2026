@@ -31,8 +31,17 @@ docker run --rm --network none --user 0:0 -i \
 import fs from "node:fs";
 const wrong="/api/admin/v1/resources/responsibilities";
 const right="/api/admin/v1/recruiting/responsibilities";
-const source=fs.readFileSync("/work/canonical.before.js","utf8").split(wrong).join(right);
-if(source.includes(wrong)||!source.includes(right)) throw new Error("responsibilities_endpoint_verification_failed");
+const genericWrong='L.useEffect(()=>{x||le()},[d,x,M,C]),d==="responsibilities"';
+const genericRight='L.useEffect(()=>{d!=="responsibilities"&&!x&&le()},[d,x,M,C]),d==="responsibilities"';
+let source=fs.readFileSync("/work/canonical.before.js","utf8").split(wrong).join(right);
+if(!source.includes(genericRight)) {
+  const occurrences=source.split(genericWrong).length-1;
+  if(occurrences!==1) throw new Error(`responsibilities_generic_loader_count:${occurrences}`);
+  source=source.replace(genericWrong,genericRight);
+}
+if(source.includes(wrong)||!source.includes(right)||source.includes(genericWrong)||!source.includes(genericRight)) {
+  throw new Error("responsibilities_endpoint_verification_failed");
+}
 fs.writeFileSync("/work/canonical.patched.js",source);
 
 const html=fs.readFileSync("/work/index.before.html","utf8");
@@ -65,7 +74,9 @@ docker exec -e WB_EXPECTED_REFERENCE="${CANONICAL_BASE}?v=${STAMP}" "$C" \
   const asset=fs.readFileSync(process.argv[1],"utf8");
   if(!html.includes(process.env.WB_EXPECTED_REFERENCE)) process.exit(2);
   if(asset.includes("/api/admin/v1/resources/responsibilities")) process.exit(3);
-  if(!asset.includes("/api/admin/v1/recruiting/responsibilities")) process.exit(4);' \
+  if(!asset.includes("/api/admin/v1/recruiting/responsibilities")) process.exit(4);
+  if(asset.includes(`L.useEffect(()=>{x||le()},[d,x,M,C]),d==="responsibilities"`)) process.exit(5);
+  if(!asset.includes(`L.useEffect(()=>{d!=="responsibilities"&&!x&&le()},[d,x,M,C]),d==="responsibilities"`)) process.exit(6);' \
   "$CANONICAL_ASSET"
 
 test "$(curl -ksS -o /dev/null -w '%{http_code}' "https://www.enwi.online/admin/assets/${CANONICAL_BASE}?v=${STAMP}")" = 200
