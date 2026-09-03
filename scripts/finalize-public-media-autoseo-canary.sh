@@ -73,7 +73,13 @@ import fs from "node:fs";
 const path = "/work/autoseo.patched.js";
 let source = fs.readFileSync(path, "utf8");
 const marker = "WB_AUTOSEO_URL_AUTH_CANARY";
-if (!source.includes(marker)) {
+const endpointContext = "autoseo-endpoint-v2";
+if (source.includes(marker)) {
+  const oldContext = "autoseo-endpoint-v1";
+  const occurrences = source.split(oldContext).length - 1;
+  if (occurrences !== 1) throw new Error("autoseo_endpoint_context_not_unique");
+  source = source.replace(oldContext, endpointContext);
+} else {
   const oldAuth = `        const rawBody = req.rawBody, authorization = text(req.headers.authorization), delivery = text(req.headers["x-autoseo-delivery"]), signatureHeader = text(req.headers["x-autoseo-signature"]);
         const credentials = await secret(), bearer = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
         const match = signaturePattern.exec(signatureHeader);
@@ -95,7 +101,7 @@ if (!source.includes(marker)) {
             return reply.code(400).send({ error: "invalid_request", correlationId: req.id });
         const expected = crypto.createHmac("sha256", credentials.token).update(rawBody).digest("hex");
         const signedRequest = Boolean(bearer && match && constantEqual(bearer, credentials.token) && constantEqual(match[1].toLowerCase(), expected));
-        const endpointKey = crypto.createHmac("sha256", credentials.token).update("autoseo-endpoint-v1").digest("hex");
+        const endpointKey = crypto.createHmac("sha256", credentials.token).update("autoseo-endpoint-v2").digest("hex");
         const urlRequest = constantEqual(text(req.query?.key), endpointKey);
         if (!signedRequest && !urlRequest)
             return reply.code(401).send({ error: "unauthorized", correlationId: req.id });
@@ -157,7 +163,7 @@ done
 
 TOKEN=$(docker exec "$C" node --input-type=module -e 'import fs from "node:fs"; const p=process.env.AUTOSEO_SECRET_FILE||"/run/secrets/autoseo_webhook"; const s=JSON.parse(fs.readFileSync(p,"utf8")); process.stdout.write(s.token);')
 test "${#TOKEN}" -ge 32
-KEY=$(printf '%s' 'autoseo-endpoint-v1' | openssl dgst -sha256 -hmac "$TOKEN" -hex | awk '{print $NF}')
+KEY=$(printf '%s' 'autoseo-endpoint-v2' | openssl dgst -sha256 -hmac "$TOKEN" -hex | awk '{print $NF}')
 test "${#KEY}" -eq 64
 printf 'https://www.enwi.online/api/integrations/autoseo/webhook?key=%s\n' "$KEY" > "$URL_FILE"
 chmod 0600 "$URL_FILE"
