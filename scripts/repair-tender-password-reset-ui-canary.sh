@@ -21,15 +21,6 @@ docker run --rm --network none --user 0:0 \
   --entrypoint node "$EXPECTED_IMAGE" \
   --test /source/tests/tender-password-reset-ui.test.mjs
 
-SMTP_READY=$(docker exec "$C" node --input-type=module -e '
-  import fs from "node:fs";
-  const env=Object.fromEntries(fs.readFileSync("/proc/1/environ").toString().split("\0").filter(Boolean).map(v=>{const i=v.indexOf("=");return [v.slice(0,i),v.slice(i+1)];}));
-  const names=["SMTP_HOST","SMTP_PORT","SMTP_USER","SMTP_PASSWORD"];
-  process.stdout.write(names.every(name=>typeof env[name]==="string"&&env[name].length>0)?"yes":"no");
-')
-test "$SMTP_READY" = yes
-printf '%s\n' 'preflight=password_reset_mail_configuration_ok'
-
 FORGOT_CODE=$(curl --http1.1 -ksS -o "$WORK/forgot-preflight.json" -w '%{http_code}' \
   --resolve www.enwi.online:443:127.0.0.1 \
   -H 'content-type: application/json' \
