@@ -29,7 +29,7 @@ test "$FORGOT_CODE" = 200
 grep -Fq '"ok":true' "$WORK/forgot-preflight.json"
 printf '%s\n' 'preflight=password_reset_api_ok'
 
-mapfile -t TARGETS < <(docker exec --user 0:0 "$C" node --input-type=module - <<'NODE'
+mapfile -t TARGETS < <(docker exec -i --user 0:0 "$C" node --input-type=module - <<'NODE'
 import fs from "node:fs";
 import path from "node:path";
 const skipped=new Set(["node_modules",".git"]);
