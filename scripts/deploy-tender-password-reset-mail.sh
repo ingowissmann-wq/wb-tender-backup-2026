@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+failure_report() {
+  local status=$?
+  printf 'WB_TENDER_PASSWORD_RESET_MAIL=STOPPED line=%s status=%s command=%q\n' "$1" "$status" "$BASH_COMMAND" >&2
+}
+trap 'failure_report "$LINENO"' ERR
+printf '%s\n' 'preflight=start'
 
 SOURCE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 AUTH=wb-admin-rehearsal-auth-1
@@ -37,6 +43,7 @@ test -n "$PROJECT"
 test -n "$SERVICE"
 test -d "$WORKING_DIR"
 test -n "$CONFIG_FILES"
+printf '%s\n' 'preflight=containers_secret_and_compose_metadata_ok'
 
 COMPOSE_ARGS=(-p "$PROJECT")
 IFS=',' read -r -a CONFIG_PATHS <<<"$CONFIG_FILES"
@@ -57,6 +64,7 @@ NODE
 DB_FACT=$(printf '%s\n' "$DB_FACT" | awk -F'|' '$1=="WBDB" {print; exit}')
 IFS='|' read -r DB_MARKER AUTH_DB_IP AUTH_DB_NAME AUTH_USER_COUNT <<<"$DB_FACT"
 test "$DB_MARKER" = WBDB
+printf 'preflight=auth_database_query_ok active_user_count=%s\n' "$AUTH_USER_COUNT"
 test "$AUTH_USER_COUNT" = 1
 test -n "$AUTH_DB_IP"
 PRODUCTION_DB_NAME=$(docker inspect "$DB" --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^POSTGRES_DB=//p' | head -n1)
@@ -182,6 +190,7 @@ SWAPPED=false
 ASSET_CHANGED=false
 TOKEN_CREATED=false
 trap - EXIT
+trap - ERR
 docker inspect "$AUTH" >"$WORK/auth-container.after.json"
 printf '%s\n' 'WB_TENDER_PASSWORD_RESET_MAIL=SUCCESS'
 printf '%s\n' 'reset_email_requested=true'
