@@ -62,11 +62,25 @@ if (!autoseo.includes("WB_AUTOSEO_BODY_COMPAT_CANARY")) {
     "autoseo_article_compat"
   );
 }
+if (!autoseo.includes("WB_AUTOSEO_TENANT_RESOLUTION_V2_CANARY")) {
+  autoseo = replaceOnce(
+    autoseo,
+    `const tenantResult = await query("SELECT tenant_id FROM iam.users WHERE lower(email)=lower($1) AND tenant_id IS NOT NULL LIMIT 1", ["admin@wb-holding.ag"]);
+        const tenantId = tenantResult.rows[0]?.tenant_id;
+        if (!tenantId)`,
+    `// WB_AUTOSEO_TENANT_RESOLUTION_V2_CANARY
+        const tenantResult = await query("SELECT tenant_id,count(*)::int AS total FROM files.objects WHERE tenant_id IS NOT NULL GROUP BY tenant_id ORDER BY total DESC");
+        const tenantId = tenantResult.rows.length === 1 ? tenantResult.rows[0].tenant_id : undefined;
+        if (!tenantId)`,
+    "autoseo_tenant_resolution_v2"
+  );
+}
 fs.writeFileSync(autoseoPath, autoseo);
 NODE
 
 grep -Fq 'WB_ZOD4_RESOURCE_RECORD_CANARY' "$WORK/server.patched.js"
 grep -Fq 'WB_AUTOSEO_BODY_COMPAT_CANARY' "$WORK/autoseo.patched.js"
+grep -Fq 'WB_AUTOSEO_TENANT_RESOLUTION_V2_CANARY' "$WORK/autoseo.patched.js"
 grep -Fq 'WB_AUTOSEO_TENANT_CONTEXT_CANARY' "$WORK/autoseo.patched.js"
 grep -Fq 'WB_AUTOSEO_URL_AUTH_CANARY' "$WORK/autoseo.patched.js"
 docker run --rm --network none --user 0:0 -v "$WORK:/work:ro" \
@@ -84,8 +98,9 @@ test -n "$CANARY_DATABASE_URL"
 docker exec -i -e DATABASE_URL="$CANARY_DATABASE_URL" "$C" node --input-type=module - <<'NODE' > "$WORK/services.before.json"
 import pg from "pg";
 const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1});
-const tenant=(await pool.query("SELECT tenant_id FROM iam.users WHERE lower(email)=lower($1) AND tenant_id IS NOT NULL LIMIT 1",["admin@wb-holding.ag"])).rows[0]?.tenant_id;
-if(!tenant) throw new Error("canary_tenant_missing");
+const tenants=(await pool.query("SELECT tenant_id,count(*)::int AS total FROM files.objects WHERE tenant_id IS NOT NULL GROUP BY tenant_id ORDER BY total DESC")).rows;
+if(tenants.length!==1) throw new Error(`isolated_canary_tenant_not_unique:${tenants.length}`);
+const tenant=tenants[0].tenant_id;
 const rows=(await pool.query("SELECT id,title,status,data,version FROM app.resources WHERE tenant_id=$1 AND resource_type='services' ORDER BY id",[tenant])).rows;
 if(rows.length!==8) throw new Error(`expected_8_services_found_${rows.length}`);
 process.stdout.write(JSON.stringify({tenant,rows}));
@@ -127,8 +142,9 @@ const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1});
 const client=await pool.connect();
 try {
   await client.query("BEGIN");
-  const tenant=(await client.query("SELECT tenant_id FROM iam.users WHERE lower(email)=lower($1) AND tenant_id IS NOT NULL LIMIT 1",["admin@wb-holding.ag"])).rows[0]?.tenant_id;
-  if(!tenant) throw new Error("canary_tenant_missing");
+  const tenants=(await client.query("SELECT tenant_id,count(*)::int AS total FROM files.objects WHERE tenant_id IS NOT NULL GROUP BY tenant_id ORDER BY total DESC")).rows;
+  if(tenants.length!==1) throw new Error(`isolated_canary_tenant_not_unique:${tenants.length}`);
+  const tenant=tenants[0].tenant_id;
   const result=await client.query(`UPDATE app.resources r
     SET data=(SELECT jsonb_object_agg(e.key,CASE WHEN jsonb_typeof(e.value)='string' THEN to_jsonb(replace(e.value #>> '{}','{city}','Augsburg')) ELSE e.value END) FROM jsonb_each(r.data) e),
         version=version+1,updated_at=now()
