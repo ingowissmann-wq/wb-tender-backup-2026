@@ -109,14 +109,14 @@ for begin, end in matches:
         continue
     insert_at = None
     for index in range(begin, end + 1):
-        if re.search(r"^\\s*server_name\\s+", lines[index]):
+        if re.search(r"^\s*server_name\s+", lines[index]):
             insert_at = index + 1
             break
     if insert_at is None:
         raise SystemExit("enwi_server_name_line_missing")
     insertions.append(insert_at)
 for insert_at in sorted(insertions, reverse=True):
-    lines.insert(insert_at, include + "\\n")
+    lines.insert(insert_at, include + "\n")
 open(target, "w", encoding="utf-8").writelines(lines)
 PY
 
