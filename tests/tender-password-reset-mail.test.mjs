@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { patchPasswordResetMail, MARKER } from "./tender-password-reset-mail-patch.mjs";
+import { patchPasswordResetMail, MARKER } from "../integrations/wb-admin-portal/candidate/tender-password-reset-mail-patch.mjs";
 
 const transport = `function systemMailTransport() {
     for (const key of ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD"])
