@@ -35,7 +35,7 @@ umask 077
 printf '%s' "$SMTP_PASSWORD" >"$TMP_SECRET"
 unset SMTP_PASSWORD SMTP_CONFIRM
 
-docker run --rm --network host --user 0:0   -v "$TMP_SECRET:/run/secrets/ionos-smtp-password:ro"   --entrypoint node "$IMAGE" --input-type=module - <<'NODE'
+docker run --rm -i --network host --user 0:0   -v "$TMP_SECRET:/run/secrets/ionos-smtp-password:ro"   --entrypoint node "$IMAGE" --input-type=module - <<'NODE'
 import fs from "node:fs";
 import nodemailer from "nodemailer";
 
