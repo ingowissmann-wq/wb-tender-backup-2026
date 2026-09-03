@@ -49,7 +49,7 @@ for raw_path in sys.argv[2:]:
         if start is not None and depth == block_depth:
             block = ''.join(lines[start:index + 1])
             if (re.search(r'\blisten\s+[^;]*443\b', block)
-                    and re.search(r'\bserver_name\s+[^;]*(?:^|\s)(?:www\.)?wb-holding\.ag(?:\s|;)', block, re.M)):
+                    and re.search(r'\bserver_name\s+[^;]*(?:^|\s)www\.wb-holding\.ag(?:\s|;)', block, re.M)):
                 matches.append((str(path), start, index))
             start = None
 
@@ -88,7 +88,7 @@ for index, line in enumerate(lines):
     if start is not None and depth == block_depth:
         block = ''.join(lines[start:index + 1])
         if (re.search(r'\blisten\s+[^;]*443\b', block)
-                and re.search(r'\bserver_name\s+[^;]*(?:^|\s)(?:www\.)?wb-holding\.ag(?:\s|;)', block, re.M)):
+                and re.search(r'\bserver_name\s+[^;]*(?:^|\s)www\.wb-holding\.ag(?:\s|;)', block, re.M)):
             matches.append((start, index))
         start = None
 
