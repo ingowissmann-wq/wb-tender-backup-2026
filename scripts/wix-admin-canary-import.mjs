@@ -16,7 +16,8 @@ const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 2 })
 const client = await pool.connect();
 const db = new DatabaseSync(careerPath);
 const createdFiles = [];
-const stats = { services: 0, jobs: 0, team: 0, blogImages: 0, mediaDownloaded: 0, mediaReused: 0 };
+const stats = { services: 0, jobs: 0, team: 0, blogImages: 0, mediaDownloaded: 0, mediaReused: 0, mediaUnavailable: 0 };
+const unavailableMedia = [];
 
 async function resolveTenantId() {
   const userHasTenant = (await client.query(`SELECT EXISTS(
@@ -64,6 +65,11 @@ async function media(value, title) {
   const url = sourceUrl(value);
   if (!url) return null;
   const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(30000) });
+  if ([404, 410].includes(response.status)) {
+    stats.mediaUnavailable++;
+    unavailableMedia.push({ title: String(title), status: response.status, url });
+    return null;
+  }
   if (!response.ok) throw new Error(`media_download_${response.status}:${url}`);
   const bytes = Buffer.from(await response.arrayBuffer());
   if (bytes.length < 100 || bytes.length > 10_000_000) throw new Error(`invalid_media_size:${bytes.length}`);
@@ -134,11 +140,10 @@ try {
     const cover = await media(item.media.cover, `${item.data.slug}-cover`);
     const logo = await media(item.media.logo, `${item.data.slug}-logo`);
     const og = await media(item.media.og, `${item.data.slug}-og`);
-    const additions = {
-      coverImageId: cover?.id || "", coverImage: cover?.url || "", coverImageUrl: cover?.url || "", coverImageAlt: item.title,
-      logoImageId: logo?.id || "", logo: logo?.url || "", logoImageUrl: logo?.url || "",
-      ogImageId: og?.id || "", ogImage: og?.url || "", ogImageUrl: og?.url || "", ogImageAlt: item.title
-    };
+    const additions = {};
+    if (cover) Object.assign(additions, { coverImageId: cover.id, coverImage: cover.url, coverImageUrl: cover.url, coverImageAlt: item.title });
+    if (logo) Object.assign(additions, { logoImageId: logo.id, logo: logo.url, logoImageUrl: logo.url });
+    if (og) Object.assign(additions, { ogImageId: og.id, ogImage: og.url, ogImageUrl: og.url, ogImageAlt: item.title });
     const resource = await upsertCms("services", item, additions);
     await link(resource.id, cover, "cover-image", item.title); await link(resource.id, logo, "logo", item.title); await link(resource.id, og, "og-image", item.title);
     stats.services++;
@@ -173,7 +178,7 @@ try {
 
   db.exec("COMMIT");
   await client.query("COMMIT");
-  console.log(JSON.stringify({ ok: true, stats, sqliteIntegrity: db.prepare("PRAGMA integrity_check").get().integrity_check }));
+  console.log(JSON.stringify({ ok: true, stats, unavailableMedia, sqliteIntegrity: db.prepare("PRAGMA integrity_check").get().integrity_check }));
 } catch (error) {
   try { db.exec("ROLLBACK"); } catch {}
   try { await client.query("ROLLBACK"); } catch {}
