@@ -33,3 +33,34 @@ Build arguments must resolve to the exact inspected production Tender image and
 Admin-auth image IDs. Rollback is the previous Tender image ID captured before
 the API container replacement. Both external-submission flags must remain
 `false`.
+
+## Final production runtime proof
+
+The corrected overlay was built from Tender image
+`sha256:30d64f6334519b095f4af837380ac7b56df6ff0c90fb3652a0c100f3528335e3`
+and Admin-auth image
+`sha256:871f89c205b68d43043fa06c25a5e3a5a7083f550ab7d41e2b8cd950b11efe86`.
+The resulting image is
+`sha256:a52bfdbb8cd90aeacd48b9978e018085a53d414e927f8b102d7d53bc438924af`.
+
+At `2026-09-03T22:19:43.277Z`, headless Chromium loaded the real public URL
+`https://www.enwi.online/admin/ausschreibungen/login`, submitted the existing
+password through the rendered form, and received HTTP 200 from exactly
+`/api/tender/auth/login`. The response required MFA, did not request MFA setup,
+and supplied a login challenge. The browser displayed the existing MFA code
+input, the `Sicher anmelden` action, and the message `Passwort bestätigt. Bitte
+den zweiten Faktor eingeben.` No MFA code was submitted.
+
+The 4240 service log independently recorded the corresponding proxied
+`POST /api/auth/login` as HTTP 200 in 184.85 ms. The production API container
+`11aaa72d64e69001c212030cf57d78e65deae515b3de01738358acf80273d175`
+was healthy on the candidate image after verification. Worker and scheduler
+retained their pre-rollout container and image IDs. Runtime values
+`EXTERNAL_SUBMISSION_ENABLED=false` and
+`WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false`, and the image label
+`wb.tender.external-submission=hard-disabled`, were re-verified after the
+browser test.
+
+The temporary verification password file was securely overwritten and removed
+immediately after the successful MFA-challenge proof. The password hash and MFA
+configuration were not changed.
