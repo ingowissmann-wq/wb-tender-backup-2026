@@ -48,14 +48,17 @@ function systemMailTransport() {
   const linkAfter = 'const origin = String(process.env.PUBLIC_ORIGIN || "https://www.enwi.online").replace(/\\/+$/, ""), url = `${origin}/admin/ausschreibungen/login?reset=${encodeURIComponent(raw)}`;';
   const subjectBefore = 'subject: "Passwort für das WB Adminportal zurücksetzen",';
   const subjectAfter = 'subject: "Passwort für WB Tender zurücksetzen",';
+  const fromBefore = 'from: process.env.SYSTEM_MAIL_FROM || "bewerbung@wb-holding.ag",';
+  const fromAfter = 'from: process.env.SYSTEM_MAIL_FROM || process.env.SMTP_USER || "admin@wb-holding.ag",';
 
-  for (const [name, before] of [["transport", transportBefore], ["link", linkBefore], ["subject", subjectBefore]]) {
+  for (const [name, before] of [["transport", transportBefore], ["link", linkBefore], ["subject", subjectBefore], ["from", fromBefore]]) {
     const count = source.split(before).length - 1;
     if (count !== 1) throw new Error(`${name}_marker_count_${count}`);
   }
   source = source.replace(transportBefore, transportAfter);
   source = source.replace(linkBefore, linkAfter);
   source = source.replace(subjectBefore, subjectAfter);
+  source = source.replace(fromBefore, fromAfter);
   if (!source.includes(MARKER) || !source.includes("SMTP_PASSWORD_FILE") || !source.includes("/admin/ausschreibungen/login?reset="))
     throw new Error("password_reset_mail_patch_verification_failed");
   return source;
