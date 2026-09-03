@@ -753,7 +753,24 @@ export function registerAutopilotRoutes(
         bool_or(r.primary_company) OVER(PARTITION BY r.tender_id,r.lot_key) has_primary
       FROM tender.current_service_relevance r
       JOIN tender.tenders t ON t.id=r.tender_id JOIN tender.enterprise_company_links c ON c.company_id=r.company_id
-      WHERE r.company_id=ANY($1::uuid[]) AND t.data_class='PUBLIC_REAL' AND t.source_lifecycle_status='ACTIVE' AND t.participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE') AND EXISTS(SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=t.id))
+      WHERE r.company_id=ANY($1::uuid[]) AND t.data_class='PUBLIC_REAL' AND t.source_lifecycle_status='ACTIVE' AND t.participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE') AND EXISTS(SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=t.id)),
+      selected AS MATERIALIZED (
+        SELECT * FROM candidates
+        WHERE ($2::text[] IS NULL OR relevance_status=ANY($2))
+          AND (primary_company OR ($3::boolean AND NOT has_primary AND canonical_rank=1))
+        ORDER BY offer_deadline NULLS LAST,tender_created_at DESC,tender_id,lot_key NULLS LAST
+        LIMIT 5000
+      ), latest_results AS (
+        SELECT DISTINCT ON (result.tender_id,result.company_id,result.lot_key)
+          result.tender_id,result.company_id,result.lot_key,result.result_version,result.enrichment_version_id,result.created_at,result.stage_status,result.review,result.prepared_tasks
+        FROM tender.autopilot_results result JOIN selected scope ON scope.tender_id=result.tender_id AND scope.company_id=result.company_id AND result.lot_key IS NOT DISTINCT FROM scope.lot_key
+        ORDER BY result.tender_id,result.company_id,result.lot_key,result.result_version DESC
+      ), latest_jobs AS (
+        SELECT DISTINCT ON (job.tender_id,job.company_id,job.lot_key) job.*
+        FROM tender.autopilot_queue job JOIN selected scope ON scope.tender_id=job.tender_id AND scope.company_id=job.company_id AND job.lot_key IS NOT DISTINCT FROM scope.lot_key
+        WHERE job.action_type='RUN_FULL_PIPELINE'
+        ORDER BY job.tender_id,job.company_id,job.lot_key,job.created_at DESC
+      )
       SELECT rm.tender_id,rm.title,rm.external_id,rm.notice_number,rm.procurement_number,rm.ted_id,rm.buyer,rm.cpv_codes,rm.source_code,rm.source_url,rm.portal_scope_registered,rm.company_id,CASE WHEN rm.primary_company THEN rm.legal_name ELSE 'Keine' END company,
         rm.lot_key,l.id lot_id,l.external_id lot_number,l.title lot_title,rm.regions,rm.offer_deadline,rm.evaluation_version relevance_version,rm.relevance_status,rm.service_scope_gate,
         rm.service_line,rm.reason relevance_reason,rm.recommendation relevance_recommendation,
@@ -761,13 +778,12 @@ export function registerAutopilotRoutes(
         q.id job_id,q.status job_status,q.current_step,q.progress_percent,q.last_successful_step,q.next_step,q.blocking_reason,
         q.missing_calculation_inputs,coalesce(q.calculation_status,ar.stage_status->>'calculation') calculation_status,q.heartbeat_at job_updated_at,q.document_portal,q.portal_access_status,
         q.documents_found,q.documents_downloaded,q.documents_analyzed,pc.fachlich_status pipeline_status,pc.current_step pipeline_step,pc.blocking_state pipeline_blocking_state,pc.completed_steps pipeline_completed_steps,pc.profile_snapshot_id
-      FROM candidates rm
+      FROM selected rm
       LEFT JOIN tender.lots l ON l.tender_id=rm.tender_id AND l.external_id IS NOT DISTINCT FROM rm.lot_key
-      LEFT JOIN LATERAL(SELECT r.result_version,r.enrichment_version_id,r.created_at,r.stage_status,r.review,r.prepared_tasks FROM tender.autopilot_results r WHERE r.tender_id=rm.tender_id AND r.company_id=rm.company_id AND r.lot_key IS NOT DISTINCT FROM rm.lot_key ORDER BY r.result_version DESC LIMIT 1)ar ON true
+      LEFT JOIN latest_results ar ON ar.tender_id=rm.tender_id AND ar.company_id=rm.company_id AND ar.lot_key IS NOT DISTINCT FROM rm.lot_key
       LEFT JOIN tender.enrichment_versions ev ON ev.id=ar.enrichment_version_id
       LEFT JOIN tender.pipeline_contexts pc ON pc.tender_id=rm.tender_id AND pc.company_id=rm.company_id AND pc.lot_key=coalesce(rm.lot_key,'') AND pc.pipeline_version='wb-tender-pipeline/5.0.0'
-      LEFT JOIN LATERAL(SELECT q.* FROM tender.autopilot_queue q WHERE q.tender_id=rm.tender_id AND q.company_id=rm.company_id AND q.lot_key IS NOT DISTINCT FROM rm.lot_key AND q.action_type='RUN_FULL_PIPELINE' ORDER BY q.created_at DESC LIMIT 1)q ON true
-      WHERE ($2::text[] IS NULL OR rm.relevance_status=ANY($2)) AND (rm.primary_company OR ($3::boolean AND NOT rm.has_primary AND rm.canonical_rank=1))
+      LEFT JOIN latest_jobs q ON q.tender_id=rm.tender_id AND q.company_id=rm.company_id AND q.lot_key IS NOT DISTINCT FROM rm.lot_key
       ORDER BY rm.offer_deadline NULLS LAST,rm.tender_created_at DESC,rm.tender_id,rm.lot_key NULLS LAST LIMIT 5000`,
           [companyIds, statuses, filter === "excluded" || filter === "all"],
         )
@@ -2274,13 +2290,23 @@ export function registerAutopilotRoutes(
           )
           .map((row) => {
             const capabilityReady = row.portal_support === "SUPPORTED" && row.autopilot_supported === true && row.actively_configured === true && row.production_tested === true && row.browser_acceptance_passed === true && row.adapter_validation_status === "PRODUCTION_VALIDATED" && submissionAdapters[row.portal_code]?.productionValidated === true;
+            const connectorReasons = [
+              row.adapter_validation_status !== "PRODUCTION_VALIDATED" && { code: "ADAPTER_NOT_PRODUCTION_VALIDATED", message: "Der registrierte Adapter ist nicht produktiv validiert." },
+              row.portal_support !== "SUPPORTED" && { code: "PORTAL_SUBMISSION_NOT_SUPPORTED", message: "Für das Portal ist keine Submissionfähigkeit belegt." },
+              row.autopilot_supported !== true && { code: "AUTOPILOT_CONNECTOR_NOT_IMPLEMENTED", message: "Der Autopilot-Connector ist nicht implementiert." },
+              row.actively_configured !== true && { code: "CONNECTOR_CONFIGURATION_REQUIRED", message: "Die Connector-Konfiguration ist eine offene Onboardingaufgabe." },
+              row.production_tested !== true && { code: "PRODUCTION_EVIDENCE_MISSING", message: "Ein produktionsnaher, nichtbindender Testnachweis fehlt." },
+              row.browser_acceptance_passed !== true && { code: "BROWSER_ACCEPTANCE_MISSING", message: "Die Browserabnahme ist noch nicht nachgewiesen." },
+            ].filter(Boolean);
             return {
             ...row, capabilityReady,
+            connectorStatus: capabilityReady ? "READY_NON_BINDING" : "BLOCKED_WITH_CAUSE",
+            connectorReasons,
             accountPresent: row.account_confirmed === true,
             credentialPresent: Boolean(row.credential_id),
             submissionGranted: Boolean(row.grant_id),
             permissionStatus: !capabilityReady
-              ? "Nicht verfügbar – Submission-Adapter nicht produktiv validiert"
+              ? connectorReasons[0].message
               : !row.account_confirmed
               ? "Registrierung erforderlich"
               : !row.credential_id
