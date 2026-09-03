@@ -1,0 +1,14 @@
+ARG BASE_IMAGE=wb-admin:base-image-must-be-overridden
+FROM ${BASE_IMAGE}
+USER root
+COPY integrations/wb-admin-portal/candidate/admin-mfa-qr-patch.mjs /tmp/admin-mfa-qr-patch.mjs
+RUN node --input-type=module -e 'await import("qrcode")' \
+ && node /tmp/admin-mfa-qr-patch.mjs /app \
+ && node --check /app/apps/api/dist/server.js \
+ && node --check /app/apps/admin/dist/assets/index-*.js \
+ && rm /tmp/admin-mfa-qr-patch.mjs
+ENV EXTERNAL_SUBMISSION_ENABLED=false \
+    WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false
+LABEL org.opencontainers.image.title="WB Admin isolated Canary MFA QR fix" \
+      wb.release.scope="isolated-admin-canary-mfa-qr-only"
+USER node

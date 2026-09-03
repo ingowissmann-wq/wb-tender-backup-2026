@@ -1,7 +1,8 @@
 FROM wb-phase4-platform:20260816-iam-mfa-network-roaming.1
 USER root
 COPY integrations/wb-admin-portal/candidate/admin-login-mfa-enrollment-patch.mjs /tmp/admin-login-mfa-enrollment-patch.mjs
-RUN node /tmp/admin-login-mfa-enrollment-patch.mjs /app \
+RUN node --input-type=module -e 'await import("qrcode")' \
+ && node /tmp/admin-login-mfa-enrollment-patch.mjs /app \
  && rm /tmp/admin-login-mfa-enrollment-patch.mjs
 ENV EXTERNAL_SUBMISSION_ENABLED=false \
     WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false

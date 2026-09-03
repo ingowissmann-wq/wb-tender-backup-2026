@@ -1,0 +1,1245 @@
+{
+  "version": 1,
+  "source": "Wix CMS export 2026-09-03",
+  "services": [
+    {
+      "externalId": "0b5cecc0-6da1-4ce6-971a-13fac9dea874",
+      "title": "Sicherheitsberatung",
+      "status": "published",
+      "createdAt": "2026-05-03T07:10:43Z",
+      "updatedAt": "2026-07-20T10:15:27Z",
+      "media": {
+        "cover": "https://static.wixstatic.com/media/41d685_2135ddb13b4249ecb03f9a514d9996d4~mv2.png?originWidth=640&originHeight=640",
+        "logo": "wix:image://v1/41d685_7e4535eb97764934b14f7d86be0b5879~mv2.png/Logo%20Consulting_edited.png#originWidth=2124&originHeight=328",
+        "og": "wix:image://v1/41d685_95a7986e6e2541e59fc099a17b8d03c6~mv2.jpg/Screenshot%202026-07-19%20211931.jpg#originWidth=412&originHeight=415"
+      },
+      "data": {
+        "title": "Sicherheitsberatung",
+        "shortDescription": "Ganzheitliche Analysen & Konzepte für Sicherheit, Reinigung und Objekte",
+        "description": "Unsere professionellen Analysen und maßgeschneiderten Konzepte unterstützen Unternehmen dabei, Sicherheitsstandards zu optimieren, Reinigungsprozesse effizient zu gestalten und Objekte nachhaltig zu verwalten. Durch eine ganzheitliche Betrachtung Ihrer betrieblichen Abläufe identifizieren wir Potenziale, minimieren Risiken und entwickeln individuelle Lösungen, die exakt auf Ihre Anforderungen abgestimmt sind.\nWir begleiten Sie von der Analyse über die Planung bis hin zur Umsetzung praxisorientierter Strategien in den Bereichen Sicherheitsmanagement, Reinigungskonzepte und Objektorganisation. So schaffen wir effiziente Prozesse, nachhaltige Strukturen und eine sichere, gepflegte sowie wirtschaftlich optimierte Umgebung für Ihr Unternehmen.",
+        "category": "Konzeption, Projektierung & Ausführung",
+        "keyBenefits": "Erhöhte Sicherheit, optimierte Betriebs- und Reinigungsprozesse, nachhaltige Kostenreduzierung, verbesserte Qualitätsstandards, langfristige Werterhaltung Ihrer Objekte sowie individuell abgestimmte und zukunftsorientierte Lösungen.",
+        "callToActionUrl": "",
+        "slug": "sicherheitsberatung",
+        "seoTitle": "Sicherheitsberatung {city}| Risikoanalysen & Sicherheitskonzepte",
+        "metaDescription": "Professionelle Sicherheitsberatung in {city}. Risikoanalysen, Sicherheitskonzepte und Präventionsmaßnahmen für Unternehmen.",
+        "heroHeading": "Professionelle Sicherheitsberatung in {city}",
+        "heroText": "Wir analysieren Risiken und entwickeln individuelle Sicherheitskonzepte für Unternehmen jeder Größe.",
+        "canonicalUrl": "https://www.wb-holding.ag/sicherheitsberatung-augsburg",
+        "faqQuestion1": "Was umfasst eine Sicherheitsberatung?",
+        "faqAnswer1": "Unsere Sicherheitsberatung umfasst die Analyse bestehender Sicherheitsstrukturen, die Identifikation von Schwachstellen sowie die Entwicklung individueller Sicherheitskonzepte. Wir beraten Unternehmen, Behörden und öffentliche Einrichtungen zu organisatorischen, personellen und technischen Sicherheitsmaßnahmen.",
+        "faqQuestion2": "Wie läuft eine Risikoanalyse ab?",
+        "faqAnswer2": "Im Rahmen einer Risikoanalyse besichtigen wir Ihr Objekt, bewerten potenzielle Gefährdungen und prüfen bestehende Sicherheitsmaßnahmen. Auf dieser Grundlage entwickeln wir konkrete Handlungsempfehlungen zur Erhöhung der Sicherheit und zur Reduzierung von Risiken.",
+        "faqQuestion3": "Erstellen Sie individuelle Sicherheitskonzepte?",
+        "faqAnswer3": "Ja. Jedes Sicherheitskonzept wird individuell auf Ihr Unternehmen, Ihre Branche und Ihre betrieblichen Abläufe abgestimmt. Dabei berücksichtigen wir personelle, organisatorische und technische Maßnahmen, um einen ganzheitlichen und wirtschaftlichen Schutz zu gewährleisten.",
+        "h1": "Sicherheitsberatung für Behörden, Unternehmen und Gewerbe",
+        "h2": "Individuelle Risikoanalysen und maßgeschneiderte Sicherheitskonzepte",
+        "keywords": "Sicherheitsberatung {city}, Risikoanalyse Unternehmen, Sicherheitskonzept {city}, Sicherheitsmanagement, Gefährdungsanalyse",
+        "ogTitle": "Sicherheitsberatung Augsburg | WB-Holding AG",
+        "ogDescription": "Professionelle Sicherheitsberatung für Unternehmen. Risikoanalysen, Sicherheitskonzepte und Präventionsmaßnahmen aus einer Hand.",
+        "robots": "index,follow",
+        "seoScore": 95,
+        "sitemapPriority": 0.8,
+        "changeFrequency": "monthly",
+        "focusKeyword": "Sicherheitsberatung {city}",
+        "city": "",
+        "localSlug": "sicherheitsberatung",
+        "localLandingPagesActive": true,
+        "sortOrder": 0
+      }
+    },
+    {
+      "externalId": "474e9838-5046-4298-8649-bd8883496ce3",
+      "title": "Betriebssanitäter",
+      "status": "published",
+      "createdAt": "2026-05-03T07:45:23Z",
+      "updatedAt": "2026-07-19T21:53:50Z",
+      "media": {
+        "cover": "wix:image://v1/41d685_e090f1422a3241a8b5730c952322235a~mv2.png/ChatGPT%20Image%203.%20Mai%202026,%2020_16_25.png#originWidth=1536&originHeight=1024",
+        "logo": "wix:image://v1/41d685_8f0c8ee26f064f1cb44ecdfbd765cd88~mv2.png/Screenshot%202026-05-03%20213224_edited.png#originWidth=2869&originHeight=451",
+        "og": "wix:image://v1/41d685_dd382dec97cf4df4beb58bf0cf205c31~mv2.jpg/Screenshot%202026-07-19%20211735.jpg#originWidth=415&originHeight=430"
+      },
+      "data": {
+        "title": "Betriebssanitäter",
+        "shortDescription": "Kompetente Vermittlung für eine sichere und zukunftsorientierte Notfallversorgung.",
+        "description": "Unsere spezialisierte Plattform für Notfallsanitäter verbindet qualifizierte Fachkräfte mit Rettungsdiensten, Kliniken und Organisationen im Gesundheitswesen. Wir unterstützen sowohl Arbeitgeber als auch Bewerber dabei, passgenaue Lösungen für personelle Herausforderungen zu finden, Einsatzpläne effizient zu gestalten und langfristige Zusammenarbeit zu fördern.\n\nMit einem klaren Fokus auf Qualität, Verlässlichkeit und Schnelligkeit bieten wir maßgeschneiderte Vermittlungsmodelle – von kurzfristigen Einsätzen bis hin zu dauerhaften Positionen – und tragen so zu einer stabilen und leistungsfähigen Notfallversorgung bei.",
+        "category": "Notfallsanitäter Börse",
+        "keyBenefits": "Optimierte Personalbesetzung, reduzierte Ausfallzeiten, flexible Einsatzmöglichkeiten, Zugang zu qualifizierten Fachkräften sowie nachhaltige Sicherstellung der Versorgungsqualität im Rettungsdienst.",
+        "callToActionUrl": "",
+        "slug": "betriebssanitaeter",
+        "seoTitle": "Betriebssanitäter {city}| Medizinische Absicherung für Unternehmen",
+        "metaDescription": "Notfallsanitätervermittlung & Betriebssanitäter für Unternehmen, Industrie und Veranstaltungen in {city}. Professionelle medizinische Erstversorgung.",
+        "heroHeading": "Notfallsanitätervermittlung  & Betriebssanitäter für Unternehmen in Augsburg",
+        "heroText": "Wir übernehmen die medizinische Absicherung Ihres Unternehmens und Ihrer Veranstaltungen durch qualifizierte Betriebssanitäter.",
+        "canonicalUrl": "https://www.wb-holding.ag/betriebssanitaeter-augsburg",
+        "faqQuestion1": "Wann wird ein Betriebssanitäter benötigt?",
+        "faqAnswer1": "Betriebssanitäter werden insbesondere in Unternehmen mit erhöhtem Unfallrisiko oder einer größeren Anzahl von Beschäftigten eingesetzt. Darüber hinaus übernehmen wir die medizinische Absicherung von Baustellen, Industrieanlagen, Veranstaltungen und betrieblichen Großprojekten.",
+        "faqQuestion2": "Welche Qualifikation besitzen Ihre Betriebssanitäter?",
+        "faqAnswer2": "Unsere Betriebssanitäter verfügen über eine anerkannte Ausbildung nach den geltenden berufsgenossenschaftlichen Vorgaben und nehmen regelmäßig an Fort- und Weiterbildungen teil. Dadurch gewährleisten wir eine professionelle medizinische Erstversorgung auf höchstem Niveau.",
+        "faqQuestion3": "Sind auch Veranstaltungen möglich?",
+        "faqAnswer3": "Ja. Wir übernehmen die sanitätsdienstliche Absicherung von Firmenveranstaltungen, Konzerten, Sportveranstaltungen, Messen, Stadtfesten und weiteren Events jeder Größe. Gemeinsam mit Ihnen erstellen wir ein individuelles Einsatzkonzept entsprechend der Besucherzahl und des Gefährdungspotenzials.",
+        "h1": "Notfallsanitätervermittlung  & Betriebssanitäter für Unternehmen und Veranstaltungen",
+        "h2": "Professionelle medizinische Absicherung für Betriebe und Events",
+        "keywords": "Betriebssanitäter {city}, Sanitätsdienst {city}, medizinische Erstversorgung Unternehmen, Sanitätsdienst Veranstaltungen {city}, Betriebssanitäter Industrie",
+        "ogTitle": "Betriebssanitäter Augsburg | WB-Holding AG",
+        "ogDescription": "Professionelle Betriebssanitäter für Unternehmen, Industrie, Baustellen und Veranstaltungen in Augsburg. Medizinische Erstversorgung durch qualifiziertes Fachpersonal.",
+        "robots": "index,follow",
+        "seoScore": 95,
+        "sitemapPriority": 0.8,
+        "changeFrequency": "monthly",
+        "focusKeyword": "Betriebssanitäter {city}",
+        "city": "",
+        "localSlug": "betriebssanitaeter",
+        "localLandingPagesActive": true,
+        "sortOrder": 1
+      }
+    },
+    {
+      "externalId": "55180b74-37ff-4156-9ef2-135c0246d31f",
+      "title": "Facility-Management",
+      "status": "published",
+      "createdAt": "2026-05-03T07:10:43Z",
+      "updatedAt": "2026-07-20T10:15:43Z",
+      "media": {
+        "cover": "wix:image://v1/41d685_0f89bc6997d144078398ffb0f24c1f9c~mv2.jpg/Screenshot%202026-07-19%20211556.jpg#originWidth=846&originHeight=415",
+        "logo": "wix:image://v1/41d685_0f888fa76702409f8ca52da2ec431218~mv2.png/Screenshot%202026-05-03%20215509_edited.png#originWidth=2683&originHeight=520",
+        "og": "wix:image://v1/41d685_0f89bc6997d144078398ffb0f24c1f9c~mv2.jpg/Screenshot%202026-07-19%20211556.jpg#originWidth=846&originHeight=415"
+      },
+      "data": {
+        "title": "Facility-Management",
+        "shortDescription": "Effiziente Facility-Management-Lösungen für einen reibungslosen und nachhaltigen Gebäudebetrieb.",
+        "description": "Unsere professionellen Facility-Management-Dienstleistungen unterstützen Unternehmen dabei, Immobilien, Anlagen und betriebliche Prozesse effizient, wirtschaftlich und nachhaltig zu organisieren. Wir entwickeln individuelle Konzepte für die Betreuung, Instandhaltung und Optimierung Ihrer Objekte, um einen störungsfreien Betriebsablauf sicherzustellen.\nVon technischen und infrastrukturellen Leistungen über die Koordination operativer Abläufe bis hin zur strategischen Objektorganisation schaffen wir maßgeschneiderte Lösungen, die den Werterhalt Ihrer Immobilien langfristig sichern. Durch strukturierte Prozesse, hohe Servicequalität und eine zuverlässige Betreuung ermöglichen wir ein professionelles Arbeitsumfeld, damit Sie sich vollständig auf Ihr Kerngeschäft konzentrieren können.",
+        "category": "Facility auf hohem Standard",
+        "keyBenefits": "Optimierte Betriebsabläufe, nachhaltige Kostenkontrolle, langfristige Werterhaltung von Immobilien und Anlagen, erhöhte Effizienz im Gebäudemanagement, zuverlässige Betreuung sämtlicher Facility-Prozesse sowie individuell abgestimmte und zukunftsorientierte Lösungen.",
+        "callToActionUrl": "",
+        "slug": "facility-management",
+        "seoTitle": "Facility Management für Unternehmen in {city} | WB-Holding AG",
+        "metaDescription": "Professionelles Facility Management für Unternehmen, Gewerbeimmobilien und öffentliche Einrichtungen in {city}. Technische, infrastrukturelle und organisatorische Gebäudedienstleistungen aus einer Hand.",
+        "heroHeading": "Professionelles Facility Management aus einer Hand",
+        "heroText": "Wir koordinieren technische, infrastrukturelle und organisatorische Gebäudedienstleistungen für einen wirtschaftlichen, sicheren und reibungslosen Betrieb Ihrer Immobilie.",
+        "canonicalUrl": "https://www.wb-holding.ag/facility-management-augsburg",
+        "faqQuestion1": "Welche Leistungen umfasst das Facility Management?",
+        "faqAnswer1": "Unser Facility Management umfasst je nach Bedarf unter anderem Hausmeisterservice, technische Objektbetreuung, Grünanlagenpflege, Winterdienst, Gebäudereinigung, Kontrollgänge und die Koordination weiterer Gebäudedienstleistungen.",
+        "faqQuestion2": "Können mehrere Gebäudedienstleistungen gebündelt werden?",
+        "faqAnswer2": "Ja. Die WB-Holding AG bündelt unterschiedliche Leistungen in einem abgestimmten Gesamtkonzept. Dadurch reduzieren sich Schnittstellen, Abstimmungsaufwand und organisatorische Kosten.",
+        "faqQuestion3": "Wird das Facility-Management-Konzept individuell erstellt?",
+        "faqAnswer3": "Ja. Leistungsumfang, Intervalle, Verantwortlichkeiten und Dokumentation werden auf die Immobilie, ihre Nutzung und die betrieblichen Anforderungen abgestimmt.",
+        "h1": "Facility Management für Behörden, Unternehmen und Gewerbeimmobilien",
+        "h2": "Ganzheitliche Gebäudedienstleistungen für effiziente Betriebsabläufe",
+        "keywords": "Facility Management, Gebäudemanagement, technisches Gebäudemanagement, infrastrukturelles Facility Management, Hausmeisterservice in {city}",
+        "ogTitle": "Facility Management für Unternehmen | WB-Holding AG",
+        "ogDescription": "Ganzheitliches Facility Management mit persönlicher Betreuung und gebündelten Gebäudedienstleistungen aus einer Hand.",
+        "robots": "index,follow",
+        "seoScore": 95,
+        "sitemapPriority": 0.8,
+        "changeFrequency": "monthly",
+        "focusKeyword": "Facility Management {city}",
+        "city": "",
+        "localSlug": "facility-management",
+        "localLandingPagesActive": true,
+        "sortOrder": 2
+      }
+    },
+    {
+      "externalId": "64491b9b-f504-40bd-af1a-956c97f3ac79",
+      "title": "Sicherheitsdienst",
+      "status": "published",
+      "createdAt": "2026-05-03T07:10:43Z",
+      "updatedAt": "2026-07-20T10:15:34Z",
+      "media": {
+        "cover": "wix:image://v1/41d685_23eb16f632bf42c0b2c555a345365102~mv2.jpg/Screenshot%202026-07-19%20211147.jpg#originWidth=1276&originHeight=424",
+        "logo": "wix:image://v1/41d685_d7dac12ab40b49cfa0fafc80f9f2a40e~mv2.png/Screenshot%202026-05-03%20215421_edited.png#originWidth=2754&originHeight=475",
+        "og": "wix:image://v1/41d685_23eb16f632bf42c0b2c555a345365102~mv2.jpg/Screenshot%202026-07-19%20211147.jpg#originWidth=1276&originHeight=424"
+      },
+      "data": {
+        "title": "Sicherheitsdienst",
+        "shortDescription": "Ganzheitliche Sicherheitslösungen für Unternehmen, Mitarbeiter und sensible Werte.",
+        "description": "Wir bieten professionelle Sicherheitsdienstleistungen, die auf den Einsatz hochqualifizierten und geschulten Sicherheitspersonals ausgerichtet sind. Durch fundierte Sicherheitsanalysen und individuell entwickelte Sicherheitskonzepte schaffen wir zuverlässige Lösungen zum Schutz von Personen, Immobilien, Veranstaltungen und betrieblichen Abläufen.\nUnser erfahrenes Sicherheitspersonal übernimmt Aufgaben im Objektschutz, Empfangs- und Kontrolldienst, bei Revierfahrten sowie in der Veranstaltungs- und Zugangssicherheit. Dabei stehen Professionalität, Diskretion, souveränes Auftreten und ein verantwortungsbewusstes Handeln jederzeit im Mittelpunkt. Durch regelmäßige Schulungen und hohe Qualitätsstandards gewährleisten wir eine professionelle Sicherheitspräsenz und ein sicheres Umfeld für Mitarbeiter, Kunden, Besucher und Unternehmenswerte.",
+        "category": "Security Dienstleistungen",
+        "keyBenefits": "Einsatz hochqualifizierter Sicherheitskräfte, professionelle und sichtbare Sicherheitspräsenz, zuverlässiger Schutz von Personen und Sachwerten, frühzeitige Risikoerkennung, strukturierte Sicherheitsabläufe sowie individuell abgestimmte Sicherheitslösungen für maximale Sicherheit und nachhaltiges Vertrauen.",
+        "callToActionUrl": "",
+        "slug": "sicherheitsdienst",
+        "seoTitle": "Sicherheitsdienst Augsburg | WB-Holding AG",
+        "metaDescription": "Professioneller Sicherheitsdienst in {city} für Unternehmen, Gewerbe, Veranstaltungen und Objekte. Individuelle Sicherheitskonzepte der WB-Holding AG.",
+        "heroHeading": "Professioneller Sicherheitsdienst in Augsburg",
+        "heroText": "Zuverlässige Sicherheitslösungen für Unternehmen, Gewerbeobjekte, Baustellen, Veranstaltungen und öffentliche Einrichtungen.",
+        "canonicalUrl": "https://www.wb-holding.ag/sicherheitsdienst-augsburg",
+        "faqQuestion1": "Welche Leistungen bietet der Sicherheitsdienst?",
+        "faqAnswer1": "Unsere Sicherheitsleistungen umfassen unter anderem Objektschutz, Revierdienst, Baustellenbewachung, Empfangsdienst, Veranstaltungsschutz, Doorman-Leistungen und individuell geplante Sicherheitskonzepte.",
+        "faqQuestion2": "Ist der Sicherheitsdienst auch nachts und am Wochenende verfügbar?",
+        "faqAnswer2": "Ja. Je nach Auftrag und Sicherheitsbedarf können unsere Leistungen rund um die Uhr sowie an Wochenenden und Feiertagen erbracht werden.",
+        "faqQuestion3": "Erstellt die WB-Holding AG ein individuelles Sicherheitskonzept?",
+        "faqAnswer3": "Ja. Nach einer Risiko- und Bedarfsermittlung entwickeln wir ein auf das Objekt, die Betriebsabläufe und die konkrete Gefährdungslage abgestimmtes Sicherheitskonzept.",
+        "h1": "Sicherheitsdienst für Behörden, Unternehmen und Gewerbe",
+        "h2": "Individuelle Sicherheitskonzepte für zuverlässigen Schutz",
+        "keywords": "Sicherheitsdienst {city}, Security {city}, Objektschutz {city}, Baustellenbewachung {city}, Revierdienst {city}",
+        "ogTitle": "Sicherheitsdienst Augsburg | WB-Holding AG",
+        "ogDescription": "Professionelle Sicherheitslösungen für Unternehmen, Objekte, Baustellen und Veranstaltungen in Augsburg.",
+        "robots": "index,follow",
+        "seoScore": 95,
+        "sitemapPriority": 0.8,
+        "changeFrequency": "monthly",
+        "focusKeyword": "Sicherheitsdienst {city}",
+        "city": "",
+        "localSlug": "sicherheitsdienst",
+        "localLandingPagesActive": true,
+        "sortOrder": 3
+      }
+    },
+    {
+      "externalId": "6a5f7f4e-604c-431c-9982-6b39a464d10d",
+      "title": "Objektschutz",
+      "status": "published",
+      "createdAt": "2026-05-03T07:44:27Z",
+      "updatedAt": "2026-07-20T10:15:19Z",
+      "media": {
+        "cover": "https://static.wixstatic.com/media/41d685_3f13c370af92495ab5b1dbce77d7fee4~mv2.png",
+        "logo": "wix:image://v1/41d685_4cc47f20862f4af29e6a5eddf1a166ed~mv2.png/Screenshot%202026-05-03%20215224_edited.png#originWidth=2712&originHeight=463",
+        "og": "wix:image://v1/41d685_91c9aa1134694f0eb3709c8e8be0a92e~mv2.jpg/Screenshot%202026-07-19%20211816.jpg#originWidth=415&originHeight=424"
+      },
+      "data": {
+        "title": "Objektschutz",
+        "shortDescription": "Zuverlässiger Schutz für Ihre Werte, Daten und Infrastruktur.",
+        "description": "Unsere Protect- und Security-Services unterstützen Unternehmen dabei, Risiken frühzeitig zu erkennen, Sicherheitslücken zu schließen und eine stabile, widerstandsfähige Organisation aufzubauen. In einer zunehmend vernetzten und dynamischen Umgebung sorgen wir dafür, dass Ihre physischen und digitalen Assets jederzeit geschützt sind.\n\nWir bieten maßgeschneiderte Sicherheitslösungen in den Bereichen Risikoanalyse, IT-Sicherheit, Datenschutz sowie Notfall- und Krisenmanagement. Durch präventive Maßnahmen und kontinuierliche Überwachung gewährleisten wir, dass Bedrohungen effektiv abgewehrt und Betriebsunterbrechungen minimiert werden.",
+        "category": "technische und personelle SECURITYLEISTUNGEN",
+        "keyBenefits": "Erhöhte Sicherheitsstandards, reduzierte Risiken, Schutz sensibler Daten, stabile Geschäftsprozesse und langfristige Resilienz gegenüber internen und externen Bedrohungen.",
+        "callToActionUrl": "",
+        "slug": "objektschutz",
+        "seoTitle": "Objektschutz {city} | Professioneller Werkschutz & Objektsicherung | WB-Holding AG",
+        "metaDescription": "Professioneller Objektschutz in {city}für Unternehmen, Industrie, Logistik, Baustellen und öffentliche Einrichtungen. Individuelle Sicherheitskonzepte und 24/7 Bewachung durch die WB-Holding AG.",
+        "heroHeading": "Professioneller Objektschutz in {city}",
+        "heroText": "Wir schützen Ihr Unternehmen, Ihre Gebäude und Betriebsgelände mit individuell abgestimmten Sicherheitskonzepten. Unsere erfahrenen Sicherheitsmitarbeiter sorgen rund um die Uhr für Sicherheit, kontrollieren Zugänge und verhindern unbefugtes Betreten Ihrer Objekte.",
+        "canonicalUrl": "https://www.wb-holding.ag/objektschutz-augsburg",
+        "faqQuestion1": "Welche Objekte sichern Sie?",
+        "faqAnswer1": "Wir übernehmen den professionellen Schutz von Bürogebäuden, Industrieanlagen, Produktionsbetrieben, Logistikzentren, Baustellen, Lagerhallen, Wohnanlagen sowie öffentlichen Einrichtungen. Jedes Sicherheitskonzept wird individuell auf die Anforderungen des jeweiligen Objekts abgestimmt.",
+        "faqQuestion2": "Ist eine 24-Stunden-Bewachung möglich?",
+        "faqAnswer2": "Ja. Unsere Sicherheitsmitarbeiter übernehmen auf Wunsch die Bewachung Ihres Objekts rund um die Uhr – an 365 Tagen im Jahr. Durch regelmäßige Kontrollgänge, Zugangskontrollen und schnelle Reaktionszeiten gewährleisten wir einen zuverlässigen Schutz Ihrer Werte.",
+        "faqQuestion3": "Erstellen Sie individuelle Sicherheitskonzepte?",
+        "faqAnswer3": "Ja. Vor Beginn eines Einsatzes analysieren wir Ihr Objekt, bewerten potenzielle Risiken und entwickeln ein maßgeschneidertes Sicherheitskonzept. Dabei berücksichtigen wir bauliche Gegebenheiten, Betriebsabläufe, Gefährdungspotenziale und individuelle Kundenanforderungen.",
+        "h1": "Objektschutz für Behörden, Unternehmen und Gewerbe",
+        "h2": "Individuelle Sicherheitskonzepte für den Schutz Ihrer Immobilien",
+        "keywords": "Objektschutz {city}, Werkschutz {city}, Objektsicherung {city}, Sicherheitsdienst {city}, Objektbewachung {city}, Werkschutz Unternehmen",
+        "ogTitle": "Objektschutz Augsburg | WB-Holding AG",
+        "ogDescription": "Professioneller Objektschutz für Unternehmen, Industrie, Gewerbe und öffentliche Einrichtungen in Augsburg – zuverlässig, flexibel und rund um die Uhr.",
+        "robots": "index,follow",
+        "seoScore": 95,
+        "sitemapPriority": 0.8,
+        "changeFrequency": "monthly",
+        "focusKeyword": "Objektschutz {city}",
+        "city": "",
+        "localSlug": "objektschutz",
+        "localLandingPagesActive": true,
+        "sortOrder": 4
+      }
+    },
+    {
+      "externalId": "a8ecf564-ec1d-4030-99ff-e313789fca10",
+      "title": "Sicherheitstechnik",
+      "status": "published",
+      "createdAt": "2026-05-03T07:50:16Z",
+      "updatedAt": "2026-07-20T10:16:43Z",
+      "media": {
+        "cover": "wix:image://v1/41d685_4b640c695944440c9048b207ba2ba509~mv2.png/Screenshot%202026-05-03%20101520.png#originWidth=762&originHeight=760",
+        "logo": "wix:image://v1/41d685_a8c8f9caf7f34bef89bfcf96d90eea67~mv2.png/Screenshot%202026-05-03%20205148_edited.png#originWidth=3000&originHeight=328",
+        "og": "wix:image://v1/41d685_50b23f3a92ba468f9e6e198ac6630b70~mv2.jpg/Screenshot%202026-07-19%20211816.jpg#originWidth=415&originHeight=424"
+      },
+      "data": {
+        "title": "Sicherheitstechnik",
+        "shortDescription": "Fachkundige Beratung für ganzheitliche Sicherheitstechnik und zuverlässigen Schutz",
+        "description": "Unsere Dienstleistungen im Bereich Sicherheitstechnik unterstützen Unternehmen dabei, Risiken frühzeitig zu erkennen, Sicherheitslücken zu schließen und nachhaltige Schutzmaßnahmen zu etablieren. Wir analysieren bestehende Infrastrukturen, entwickeln maßgeschneiderte Sicherheitsstrategien und begleiten Sie bei der Umsetzung moderner Lösungen – von Zutrittskontrollen über Videoüberwachung bis hin zu IT- und Netzwerksicherheit. Dabei stellen wir sicher, dass Ihr Unternehmen optimal gegen interne und externe Bedrohungen abgesichert ist und gleichzeitig gesetzliche Anforderungen erfüllt.",
+        "category": "Security Technicals",
+        "keyBenefits": "Erhöhte Betriebssicherheit, minimierte Risiken, Schutz sensibler Daten und Werte, verbesserte Kontrolle über Zugänge und Prozesse, langfristige Stabilität und Vertrauen bei Kunden und Partnern.",
+        "callToActionUrl": "",
+        "slug": "sicherheitstechnik",
+        "seoTitle": "Sicherheitstechnik {city}| Alarmanlagen, Videoüberwachung & Zutrittskontrolle",
+        "metaDescription": "Moderne Sicherheitstechnik in {city}. Alarmanlagen, Videoüberwachung, Zutrittskontrolle und individuelle Sicherheitslösungen für Unternehmen.",
+        "heroHeading": "Moderne Sicherheitstechnik für Unternehmen in {city}",
+        "heroText": "Schützen Sie Ihr Unternehmen mit intelligenten Alarmanlagen, Videoüberwachung und professionellen Zutrittskontrollsystemen.",
+        "canonicalUrl": "https://www.wb-holding.ag/sicherheitstechnik-augsburg",
+        "faqQuestion1": "Welche Sicherheitstechnik bieten Sie an?",
+        "faqAnswer1": "Wir planen und installieren Alarmanlagen, Videoüberwachung, Zutrittskontrollen sowie weitere Sicherheitslösungen für Unternehmen.",
+        "faqQuestion2": "Sind individuelle Sicherheitskonzepte möglich?",
+        "faqAnswer2": "Ja. Jede Anlage wird individuell auf Objektgröße, Nutzung und Sicherheitsbedarf abgestimmt.",
+        "faqQuestion3": "Betreuen Sie bestehende Anlagen?",
+        "faqAnswer3": "Ja. Wir übernehmen Wartung, Erweiterung und Betreuung bestehender Sicherheitssysteme.",
+        "h1": "Sicherheitstechnik für Behörden, Unternehmen und Gewerbe",
+        "h2": "Intelligente Sicherheitslösungen für Unternehmen & Behörden",
+        "keywords": "Sicherheitstechnik {city}, Alarmanlage {city}, Videoüberwachung {city}, Zutrittskontrolle {city}",
+        "ogTitle": "Sicherheitstechnik Augsburg | WB-Holding AG",
+        "ogDescription": "Professionelle Sicherheitstechnik für Unternehmen in Augsburg.",
+        "robots": "index,follow",
+        "seoScore": 95,
+        "sitemapPriority": 0.8,
+        "changeFrequency": "monthly",
+        "focusKeyword": "Sicherheitstechnik {city}",
+        "city": "",
+        "localSlug": "sicherheitstechnik",
+        "localLandingPagesActive": true,
+        "sortOrder": 5
+      }
+    },
+    {
+      "externalId": "ab8821ec-bd33-447b-9d7d-0ef911e3b564",
+      "title": "Notruf- und Serviceleitstelle",
+      "status": "published",
+      "createdAt": "2026-05-03T07:10:43Z",
+      "updatedAt": "2026-07-20T10:15:52Z",
+      "media": {
+        "cover": "wix:image://v1/41d685_926bd0023a7f4e419c154ee10ad06917~mv2.png/Screenshot%202026-05-03%20202026.png#originWidth=435&originHeight=367",
+        "logo": "wix:image://v1/41d685_413028b806364a29b41b2069f5d23296~mv2.png/Screenshot%202026-05-03%20215553_edited.png#originWidth=2940&originHeight=421",
+        "og": "wix:image://v1/41d685_24716310a52743709f336fcd7cb49537~mv2.jpg/Screenshot%202026-07-19%20211130.jpg#originWidth=1278&originHeight=421"
+      },
+      "data": {
+        "title": "Notruf- und Serviceleitstelle",
+        "shortDescription": "Modernste Überwachungstechnologie für verbesserte Überwachung und Sicherheit.",
+        "description": "Unsere 24/7 Notruf- und Serviceleitstelle ist Ihr zuverlässiger Partner für Sicherheit und schnelle Hilfe – rund um die Uhr, an 365 Tagen im Jahr. Modernste Technik, geschulte Fachkräfte und klare Prozesse garantieren eine sofortige Reaktion auf jede Situation. Ob Alarmverfolgung, Störungsmanagement oder Notfallkoordination: Wir behalten den Überblick, damit Sie sich auf das Wesentliche konzentrieren können. Vertrauen Sie auf maximale Erreichbarkeit, kurze Reaktionszeiten und höchste Professionalität – jederzeit.\n",
+        "category": "24/7 Notruf- und Serviceleitstelle",
+        "keyBenefits": "Kontinuierliche Überwachung rund um die Uhr, effektive Verbrechensverhütung, zuverlässige Beweissicherung, sichere Fernzugriffsmöglichkeiten.",
+        "callToActionUrl": "",
+        "slug": "notruf-serviceleitstelle",
+        "seoTitle": "Notruf- und Serviceleitstelle Augsburg | 24/7 Leitstelle",
+        "metaDescription": "24/7 Notruf- und Serviceleitstelle für Unternehmen. Alarmverfolgung, Intervention und Fernüberwachung aus {city}.",
+        "heroHeading": "24/7 Notruf- und Serviceleitstelle",
+        "heroText": "Unsere Leitstelle überwacht Ihre Sicherheitssysteme rund um die Uhr und koordiniert bei Bedarf sofortige Interventionsmaßnahmen.",
+        "canonicalUrl": "https://www.wb-holding.ag/notruf-serviceleitstelle-augsburg",
+        "faqQuestion1": "Welche Systeme werden überwacht?",
+        "faqAnswer1": "Unsere Notruf- und Serviceleitstelle überwacht Einbruchmeldeanlagen, Brandmeldeanlagen, Videoüberwachungssysteme, Zutrittskontrollsysteme sowie technische Gebäude- und Störmeldesysteme. Sämtliche Ereignisse werden rund um die Uhr durch geschulte Mitarbeiter bewertet und nach festgelegten Interventionsplänen bearbeitet.",
+        "faqQuestion2": "Ist eine 24-Stunden-Überwachung möglich?",
+        "faqAnswer2": "Ja. Unsere Leitstelle ist 24 Stunden täglich und 365 Tage im Jahr besetzt. Dadurch stellen wir sicher, dass Alarme und Störungen jederzeit entgegengenommen, geprüft und unverzüglich bearbeitet werden.",
+        "faqQuestion3": "Wie schnell erfolgt eine Intervention?",
+        "faqAnswer3": "Nach Eingang eines Alarms erfolgt sofort eine qualifizierte Alarmprüfung durch unsere Leitstelle. Je nach Ereignis und Interventionsplan werden unverzüglich unsere Interventionskräfte, der Sicherheitsdienst oder – falls erforderlich – Polizei, Feuerwehr oder Rettungsdienst verständigt.",
+        "h1": "Notruf- und Serviceleitstelle für Behörden & Unternehmen",
+        "h2": "Rund-um-die-Uhr Alarmmanagement und professionelle Intervention",
+        "keywords": "Notruf- und Serviceleitstelle {city}, NSL {city}, Alarmaufschaltung {city}, Alarmverfolgung {city}, Videofernüberwachung {city}, Interventionsdienst {city}",
+        "ogTitle": "Notruf- und Serviceleitstelle Augsburg | WB-Holding AG",
+        "ogDescription": "24/7 Notruf- und Serviceleitstelle für Unternehmen. Alarmaufschaltung, Videofernüberwachung und professionelle Interventionssteuerung aus einer Hand.",
+        "robots": "index,follow",
+        "seoScore": 95,
+        "sitemapPriority": 0.8,
+        "changeFrequency": "monthly",
+        "focusKeyword": "Notruf- und Serviceleitstelle Augsburg",
+        "city": "",
+        "localSlug": "notruf-serviceleitstelle",
+        "localLandingPagesActive": true,
+        "sortOrder": 6
+      }
+    },
+    {
+      "externalId": "c125e9bf-33c8-49b6-927f-6a286e3d9a7b",
+      "title": "Gebäudereinigung",
+      "status": "published",
+      "createdAt": "2026-05-03T07:10:43Z",
+      "updatedAt": "2026-07-20T10:15:59Z",
+      "media": {
+        "cover": "https://static.wixstatic.com/media/41d685_ba53c3aa58594619b512e41a27bc6c9d~mv2.png?originWidth=640&originHeight=640",
+        "logo": "wix:image://v1/41d685_639e9c61e7e141a89a27b44ca71e7899~mv2.png/Screenshot%202026-05-03%20215636_edited.png#originWidth=2826&originHeight=507",
+        "og": "wix:image://v1/41d685_52b8e7fd798b42b0bd97bc32099e5e8c~mv2.jpg/professionelle-reinigungsleistungen-in-augsburg-m.jpg#originWidth=1200&originHeight=1200"
+      },
+      "data": {
+        "title": "Gebäudereinigung",
+        "shortDescription": "Makellose Sauberkeit für ein gesundes und produktives Arbeitsumfeld.",
+        "description": "Unsere Premium-Gewerbereinigungsdienste garantieren, dass Ihre Räumlichkeiten jederzeit makellos sauber, hygienisch und repräsentativ sind. Wir verwenden umweltfreundliche Reinigungsmittel und setzen modernste Techniken ein, um in Büros, Verkaufsflächen, Industrieanlagen und speziellen Umgebungen optimale Reinigungsergebnisse zu erzielen.",
+        "category": "industrielle & private Reinigungsservics",
+        "keyBenefits": "Fördert ein gesundes und sicheres Arbeitsumfeld, vermittelt einen positiven professionellen Eindruck, steigert die Mitarbeiterproduktivität und bietet flexible und individuell anpassbare Arbeitszeiten.",
+        "callToActionUrl": "",
+        "slug": "gebaeudereinigung",
+        "seoTitle": "Gebäudereinigung {city} | WB-Holding AG",
+        "metaDescription": "Professionelle Gebäudereinigung in {city} für Büros, Gewerbe, Praxen und Industrie. Individuelle Reinigungskonzepte der WB-Holding AG.",
+        "heroHeading": "Professionelle Gebäudereinigung in {city}",
+        "heroText": "Zuverlässige Reinigungslösungen für Unternehmen, Praxen, Gewerbeobjekte, Industrieflächen und öffentliche Einrichtungen.",
+        "canonicalUrl": "https://www.wb-holding.ag/services/gebaeudereinigung-augsburg",
+        "faqQuestion1": "Welche Leistungen umfasst die Gebäudereinigung?",
+        "faqAnswer1": "Unsere Gebäudereinigung umfasst unter anderem Unterhaltsreinigung, Büroreinigung, Glasreinigung, Grundreinigung, Sanitärreinigung sowie individuell abgestimmte Sonderreinigungen.",
+        "faqQuestion2": "Wie häufig kann die Reinigung durchgeführt werden?",
+        "faqAnswer2": "Die Reinigung kann täglich, mehrmals wöchentlich, wöchentlich oder nach einem individuell vereinbarten Reinigungsplan durchgeführt werden.",
+        "faqQuestion3": "Erstellt die WB-Holding AG ein individuelles Angebot?",
+        "faqAnswer3": "Ja. Nach einer Bedarfsermittlung oder Objektbesichtigung erstellen wir ein individuelles und transparentes Angebot, das auf die Flächen, Reinigungsintervalle und Anforderungen abgestimmt ist.",
+        "h1": "Gebäudereinigung in für Behörden, Unternehmen und Gewerbe",
+        "h2": "Individuelle Reinigungskonzepte für höchste Qualitätsansprüche",
+        "keywords": "Gebäudereinigung {city}, Reinigungsfirma {city}, Büroreinigung {city}, Unterhaltsreinigung {city}, Gewerbereinigung {city}, Fensterreinigung {city}",
+        "ogTitle": "Gebäudereinigung Augsburg | WB-Holding AG",
+        "ogDescription": "Professionelle Gebäudereinigung für Unternehmen und Gewerbeobjekte in Augsburg. Jetzt unverbindlich beraten lassen.",
+        "robots": "index,follow",
+        "seoScore": 90,
+        "sitemapPriority": 0.8,
+        "changeFrequency": "monthly",
+        "focusKeyword": "Gebäudereinigung {city}",
+        "city": "",
+        "localSlug": "gebaeudereinigung",
+        "localLandingPagesActive": true,
+        "sortOrder": 7
+      }
+    }
+  ],
+  "jobs": [
+    {
+      "externalId": "26d19785-eb55-44ec-8198-5d8465979d9c",
+      "createdAt": "2026-07-03T09:29:36Z",
+      "updatedAt": "2026-07-13T13:40:28Z",
+      "media": {
+        "image": "wix:image://v1/41d685_80397f95e728416e9dade7b196f3eb71~mv2.png/ChatGPT%20Image%2013.%20Juli%202026,%2015_39_48.png#originWidth=1536&originHeight=1024"
+      },
+      "data": {
+        "_id": "26d19785-eb55-44ec-8198-5d8465979d9c",
+        "title": "Sicherheitsmitarbeiter §34a (m/w/d)",
+        "area": "Security",
+        "sector": "Security",
+        "location": "Aichach",
+        "employmentType": "Vollzeit/Teilzeit/Aushilfe",
+        "workingTime": "Vollzeit/Teilzeit/Aushilfe",
+        "shortDescription": "Sorgen Sie für Sicherheit und Ordnung bei renommierten Unternehmen. Werden Sie Teil unseres professionellen Security-Teams und übernehmen Sie verantwortungsvolle Aufgaben im Objekt-, Werks- und Empfangsschutz.",
+        "description": "Sorgen Sie für Sicherheit und Ordnung bei renommierten Unternehmen. Werden Sie Teil unseres professionellen Security-Teams und übernehmen Sie verantwortungsvolle Aufgaben im Objekt-, Werks- und Empfangsschutz.",
+        "fullDescription": "Sorgen Sie für Sicherheit und Ordnung bei renommierten Unternehmen. Werden Sie Teil unseres professionellen Security-Teams und übernehmen Sie verantwortungsvolle Aufgaben im Objekt-, Werks- und Empfangsschutz.",
+        "tasks": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Du übernimmst den Pforten- und Empfangsdienst, während Du auch die Verantwortung für den Objektschutz trägst und dabei stets ein wachsames Auge behältst</p></li>\n  <li><p class=\"font_8\">Kontrollgänge und Zutrittskontrollen gehören zu Deinen täglichen Aufgaben, wobei Dir die Sicherheit des Objekts besonders am Herzen liegt</p></li>\n  <li><p class=\"font_8\">Deine Aufmerksamkeit gilt der Überwachung der Sicherheits- und Meldetechnik, um jederzeit auf mögliche Vorfälle reagieren zu können</p></li>\n</ul>",
+        "responsibilities": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Du übernimmst den Pforten- und Empfangsdienst, während Du auch die Verantwortung für den Objektschutz trägst und dabei stets ein wachsames Auge behältst</p></li>\n  <li><p class=\"font_8\">Kontrollgänge und Zutrittskontrollen gehören zu Deinen täglichen Aufgaben, wobei Dir die Sicherheit des Objekts besonders am Herzen liegt</p></li>\n  <li><p class=\"font_8\">Deine Aufmerksamkeit gilt der Überwachung der Sicherheits- und Meldetechnik, um jederzeit auf mögliche Vorfälle reagieren zu können</p></li>\n</ul>",
+        "requirements": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Unterrichtung oder Sachkundeprüfung nach § 34a GewO (wünschenswert)</p></li>\n  <li><p class=\"font_8\">Quereinsteiger sind herzlich willkommen</p></li>\n  <li><p class=\"font_8\">Einwandfreies Führungszeugnis</p></li>\n  <li><p class=\"font_8\">Gute Deutschkenntnisse in Wort und Schrift</p></li>\n  <li><p class=\"font_8\">Gepflegtes Erscheinungsbild</p></li>\n  <li><p class=\"font_8\">Freundliches und sicheres Auftreten</p></li>\n  <li><p class=\"font_8\">Verantwortungsbewusstsein und Zuverlässigkeit</p></li>\n  <li><p class=\"font_8\">Bereitschaft zur Schicht-, Wochenend- und Feiertagsarbeit</p></li>\n  <li><p class=\"font_8\">Teamfähigkeit sowie selbstständige Arbeitsweise</p></li>\n  <li><p class=\"font_8\">Führerschein Klasse B von Vorteil</p></li>\n</ul>",
+        "benefits": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Flache Hierarchien</p></li>\n  <li><p class=\"font_8\">Mitarbeiterrabatte</p></li>\n  <li><p class=\"font_8\">Sabbatical</p></li>\n  <li><p class=\"font_8\">Unbefristeter Arbeitsvertrag</p></li>\n  <li><p class=\"font_8\">Zusätzliche Urlaubstage</p></li>\n  <li><p class=\"font_8\">Sportliche Aktivitäten</p></li>\n  <li><p class=\"font_8\">Weiterbildungen</p></li>\n  <li><p class=\"font_8\">Schulungsmöglichkeiten</p></li>\n  <li><p class=\"font_8\">JobRadUnbefristeter Arbeitsvertrag</p></li>\n  <li><p class=\"font_8\">Übertarifliche und pünktliche Bezahlung</p></li>\n  <li><p class=\"font_8\">Zuschläge für Nacht-, Sonn- und Feiertagsarbeit</p></li>\n  <li><p class=\"font_8\">Umfangreiche Einarbeitung</p></li>\n  <li><p class=\"font_8\">Hochwertige Dienstkleidung</p></li>\n  <li><p class=\"font_8\">Moderne Kommunikations- und Einsatztechnik</p></li>\n  <li><p class=\"font_8\">Individuelle Weiterbildungsmöglichkeiten</p></li>\n  <li><p class=\"font_8\">Aufstiegschancen innerhalb der WB-Unternehmensgruppe</p></li>\n  <li><p class=\"font_8\">Flache Hierarchien und kurze Entscheidungswege</p></li>\n  <li><p class=\"font_8\">Sicherer Arbeitsplatz in einem wachsenden Unternehmen</p></li>\n</ul>",
+        "salary": "16,00 € – 20,00 € pro Stunde zzgl. Nacht-, Sonn- und Feiertagszuschlägen (je nach Qualifikation und Einsatzbereich)",
+        "active": true,
+        "status": "published",
+        "sortOrder": 1,
+        "applicationFormAssignment": "career-standard"
+      }
+    },
+    {
+      "externalId": "5dc5bfd4-94a7-4c83-a507-a0af071d4325",
+      "createdAt": "2026-07-13T13:15:51Z",
+      "updatedAt": "2026-07-24T21:02:35Z",
+      "media": {
+        "image": "wix:image://v1/41d685_edc77e3c20e34d5f9b96516893b085a6~mv2.png/ChatGPT%20Image%2013.%20Juli%202026,%2015_20_31.png#originWidth=1536&originHeight=1024"
+      },
+      "data": {
+        "_id": "5dc5bfd4-94a7-4c83-a507-a0af071d4325",
+        "title": "Finanzbuchhalter / Buchhalter (m/w/d) – Vollzeit oder Teilzeit – Friedberg bei Augsburg",
+        "area": "Verwaltung",
+        "sector": "Verwaltung",
+        "location": "Friedberg",
+        "employmentType": "Vollzeit/Teilzeit/Minijob",
+        "workingTime": "Vollzeit/Teilzeit/Minijob",
+        "shortDescription": "Du möchtest Verantwortung übernehmen und Teil einer erfolgreichen Unternehmensgruppe werden? Zur Verstärkung unserer Verwaltung suchen wir einen engagierten Buchhalter (m/w/d), der unsere Finanzprozesse zuverlässig betreut und aktiv zum Unternehmenserfolg beiträgt.",
+        "description": "Du möchtest Verantwortung übernehmen und Teil einer erfolgreichen Unternehmensgruppe werden? Zur Verstärkung unserer Verwaltung suchen wir einen engagierten Buchhalter (m/w/d), der unsere Finanzprozesse zuverlässig betreut und aktiv zum Unternehmenserfolg beiträgt.",
+        "fullDescription": "Du möchtest Verantwortung übernehmen und Teil einer erfolgreichen Unternehmensgruppe werden? Zur Verstärkung unserer Verwaltung suchen wir einen engagierten Buchhalter (m/w/d), der unsere Finanzprozesse zuverlässig betreut und aktiv zum Unternehmenserfolg beiträgt.",
+        "tasks": "<p class=\"font_8\">• Bearbeitung der laufenden Finanzbuchhaltung</p>\n<p class=\"font_8\">• Debitoren-, Kreditoren- und Sachkontenbuchhaltung</p>\n<p class=\"font_8\">• Prüfung, Kontierung und Buchung von Ein- und Ausgangsrechnungen</p>\n<p class=\"font_8\">• Durchführung des Zahlungsverkehrs</p>\n<p class=\"font_8\">• Mahnwesen und Überwachung offener Posten</p>\n<p class=\"font_8\">• Kontenabstimmung und Klärung von Differenzen</p>\n<p class=\"font_8\">• Unterstützung bei Monats-, Quartals- und Jahresabschlüssen</p>\n<p class=\"font_8\">• Vorbereitung von Unterlagen für Steuerberater und Wirtschaftsprüfer</p>\n<p class=\"font_8\">• Erstellung von Auswertungen und Statistiken</p>\n<p class=\"font_8\">• Allgemeine kaufmännische Verwaltungsaufgaben</p>",
+        "responsibilities": "<p class=\"font_8\">• Bearbeitung der laufenden Finanzbuchhaltung</p>\n<p class=\"font_8\">• Debitoren-, Kreditoren- und Sachkontenbuchhaltung</p>\n<p class=\"font_8\">• Prüfung, Kontierung und Buchung von Ein- und Ausgangsrechnungen</p>\n<p class=\"font_8\">• Durchführung des Zahlungsverkehrs</p>\n<p class=\"font_8\">• Mahnwesen und Überwachung offener Posten</p>\n<p class=\"font_8\">• Kontenabstimmung und Klärung von Differenzen</p>\n<p class=\"font_8\">• Unterstützung bei Monats-, Quartals- und Jahresabschlüssen</p>\n<p class=\"font_8\">• Vorbereitung von Unterlagen für Steuerberater und Wirtschaftsprüfer</p>\n<p class=\"font_8\">• Erstellung von Auswertungen und Statistiken</p>\n<p class=\"font_8\">• Allgemeine kaufmännische Verwaltungsaufgaben</p>",
+        "requirements": "<p class=\"font_8\">• Abgeschlossene kaufmännische Ausbildung, idealerweise im Bereich Finanzbuchhaltung</p>\n<p class=\"font_8\">• Berufserfahrung in der Buchhaltung von Vorteil</p>\n<p class=\"font_8\">• Sicherer Umgang mit MS Office, insbesondere Excel</p>\n<p class=\"font_8\">• Erfahrung mit Buchhaltungssoftware wünschenswert</p>\n<p class=\"font_8\">• Selbstständige und strukturierte Arbeitsweise</p>\n<p class=\"font_8\">• Hohe Zahlenaffinität</p>\n<p class=\"font_8\">• Teamfähigkeit und Verantwortungsbewusstsein</p>\n<p class=\"font_8\">• Zuverlässigkeit sowie Diskretion</p>\n<p class=\"font_8\">• Sehr gute Deutschkenntnisse in Wort und Schrift</p>",
+        "benefits": "<p class=\"font_8\">• Unbefristeter Arbeitsvertrag</p>\n<p class=\"font_8\">• Home Office</p>\n<p class=\"font_8\">• Attraktive und leistungsgerechte Vergütung</p>\n<p class=\"font_8\">• Flexible Arbeitszeitmodelle</p>\n<p class=\"font_8\">• Moderne digitale Arbeitsplätze</p>\n<p class=\"font_8\">• Individuelle Weiterbildungs- und Entwicklungsmöglichkeiten</p>\n<p class=\"font_8\">• Flache Hierarchien und kurze Entscheidungswege</p>\n<p class=\"font_8\">• Sicherer Arbeitsplatz in einer wachsenden Unternehmensgruppe</p>\n<p class=\"font_8\">• Angenehmes Betriebsklima mit wertschätzendem Team</p>\n<p class=\"font_8\">• Kostenlose Getränke</p>\n<p class=\"font_8\">• Langfristige Entwicklungsperspektiven innerhalb der WB-Unternehmensgruppe</p>",
+        "salary": "Je nach Qualifikation und Berufserfahrung, attraktive leistungsgerechte Vergütung\n\noder alternativ\n\n3.200 € bis 4.500 € brutto pro Monat\n\n(je nach Qualifikation und Berufserfahrung)",
+        "active": false,
+        "status": "draft",
+        "sortOrder": 1,
+        "applicationFormAssignment": "career-standard"
+      }
+    },
+    {
+      "externalId": "7112b765-6810-4239-bce6-93fbbad757ac",
+      "createdAt": "2026-07-03T09:27:36Z",
+      "updatedAt": "2026-07-13T13:34:27Z",
+      "media": {
+        "image": "wix:image://v1/41d685_fd33e7ee4a394e5c8d277889d275b711~mv2.png/Glasreiniger.png#originWidth=1536&originHeight=1024"
+      },
+      "data": {
+        "_id": "7112b765-6810-4239-bce6-93fbbad757ac",
+        "title": "Glasreiniger (m/w/d) in Schrobenhausen gesucht! Attraktive Vergütung, moderne Arbeitsmittel, unbefristeter Arbeitsvertrag und abwechslungsreiche Einsätze.",
+        "area": "Cleaning",
+        "sector": "Cleaning",
+        "location": "Schrobenhausen",
+        "employmentType": "Teilzeit / Minijob",
+        "workingTime": "Teilzeit / Minijob",
+        "shortDescription": "Werden Sie Teil unseres Teams!\n\nDie WB-Holding AG zählt zu den führenden Dienstleistungsunternehmen in den Bereichen Gebäudereinigung, Sicherheitsdienstleistungen und Facility Management. Zur Verstärkung unseres Teams suchen wir engagierte Glasreiniger (m/w/d), die mit Sorgfalt, Präzision und Motivation unsere Kunden begeistern.\n\nBei uns erwarten Sie moderne Arbeitsmittel, abwechslungsreiche Projekte und ein sicherer Arbeitsplatz mit langfristiger Perspektive.",
+        "description": "Werden Sie Teil unseres Teams!\n\nDie WB-Holding AG zählt zu den führenden Dienstleistungsunternehmen in den Bereichen Gebäudereinigung, Sicherheitsdienstleistungen und Facility Management. Zur Verstärkung unseres Teams suchen wir engagierte Glasreiniger (m/w/d), die mit Sorgfalt, Präzision und Motivation unsere Kunden begeistern.\n\nBei uns erwarten Sie moderne Arbeitsmittel, abwechslungsreiche Projekte und ein sicherer Arbeitsplatz mit langfristiger Perspektive.",
+        "fullDescription": "Werden Sie Teil unseres Teams!\n\nDie WB-Holding AG zählt zu den führenden Dienstleistungsunternehmen in den Bereichen Gebäudereinigung, Sicherheitsdienstleistungen und Facility Management. Zur Verstärkung unseres Teams suchen wir engagierte Glasreiniger (m/w/d), die mit Sorgfalt, Präzision und Motivation unsere Kunden begeistern.\n\nBei uns erwarten Sie moderne Arbeitsmittel, abwechslungsreiche Projekte und ein sicherer Arbeitsplatz mit langfristiger Perspektive.",
+        "tasks": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Reinigung von Glasflächen, Fensteranlagen, Fassaden und Wintergärten in gewerblichen und öffentlichen Objekten</p></li>\n  <li><p class=\"font_8\">Durchführung von Innen- und Außenreinigungen mit modernen Reinigungstechniken (z. B. Osmose- und Steigertechnik)</p></li>\n  <li><p class=\"font_8\">Fachgerechte Reinigung von Rahmen, Fensterbänken und Glasfassaden</p></li>\n  <li><p class=\"font_8\">Selbstständige Planung und Durchführung der zugewiesenen Reinigungsaufträge</p></li>\n  <li><p class=\"font_8\">Sorgfältiger Umgang mit Arbeitsmitteln, Maschinen und Sicherheitsausrüstung</p></li>\n  <li><p class=\"font_8\">Einhaltung aller Arbeitsschutz-, Sicherheits- und Qualitätsstandards</p></li>\n  <li><p class=\"font_8\">Freundliches und professionelles Auftreten gegenüber unseren Kunden</p></li>\n</ul>",
+        "responsibilities": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Reinigung von Glasflächen, Fensteranlagen, Fassaden und Wintergärten in gewerblichen und öffentlichen Objekten</p></li>\n  <li><p class=\"font_8\">Durchführung von Innen- und Außenreinigungen mit modernen Reinigungstechniken (z. B. Osmose- und Steigertechnik)</p></li>\n  <li><p class=\"font_8\">Fachgerechte Reinigung von Rahmen, Fensterbänken und Glasfassaden</p></li>\n  <li><p class=\"font_8\">Selbstständige Planung und Durchführung der zugewiesenen Reinigungsaufträge</p></li>\n  <li><p class=\"font_8\">Sorgfältiger Umgang mit Arbeitsmitteln, Maschinen und Sicherheitsausrüstung</p></li>\n  <li><p class=\"font_8\">Einhaltung aller Arbeitsschutz-, Sicherheits- und Qualitätsstandards</p></li>\n  <li><p class=\"font_8\">Freundliches und professionelles Auftreten gegenüber unseren Kunden</p></li>\n</ul>",
+        "requirements": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Idealerweise Berufserfahrung in der Glas- oder Gebäudereinigung (Quereinsteiger sind ebenfalls willkommen)</p></li>\n  <li><p class=\"font_8\">Selbstständige, zuverlässige und sorgfältige Arbeitsweise</p></li>\n  <li><p class=\"font_8\">Körperliche Belastbarkeit sowie Schwindelfreiheit bei Arbeiten in der Höhe</p></li>\n  <li><p class=\"font_8\">Teamfähigkeit, Verantwortungsbewusstsein und ein gepflegtes Erscheinungsbild</p></li>\n  <li><p class=\"font_8\">Gute Deutschkenntnisse zur Verständigung im Arbeitsalltag</p></li>\n  <li><p class=\"font_8\">Führerschein der Klasse B ist wünschenswert, jedoch nicht zwingend erforderlich</p></li>\n</ul>",
+        "benefits": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Einen sicheren Arbeitsplatz in einem wachsenden Unternehmen</p></li>\n  <li><p class=\"font_8\">Übertarifliche und pünktliche Vergütung</p></li>\n  <li><p class=\"font_8\">Hochwertige Arbeitskleidung sowie moderne Reinigungsgeräte</p></li>\n  <li><p class=\"font_8\">Umfassende Einarbeitung und regelmäßige Schulungen</p></li>\n  <li><p class=\"font_8\">Angenehmes Betriebsklima und ein motiviertes Team</p></li>\n  <li><p class=\"font_8\">Kurze Entscheidungswege und persönliche Ansprechpartner</p></li>\n  <li><p class=\"font_8\">Individuelle Weiterbildungs- und Entwicklungsmöglichkeiten innerhalb der WB Holding AG</p></li>\n  <li><p class=\"font_8\">Langfristige Perspektiven mit Aufstiegsmöglichkeiten</p></li>\n</ul>",
+        "salary": "21,00 € die Stunde",
+        "active": true,
+        "status": "published",
+        "sortOrder": 1,
+        "applicationFormAssignment": "career-standard"
+      }
+    },
+    {
+      "externalId": "8f0f6739-417c-4550-8ce8-091a17e53042",
+      "createdAt": "2026-07-03T13:25:58Z",
+      "updatedAt": "2026-07-13T13:40:18Z",
+      "media": {
+        "image": "wix:image://v1/41d685_80397f95e728416e9dade7b196f3eb71~mv2.png/ChatGPT%20Image%2013.%20Juli%202026,%2015_39_48.png#originWidth=1536&originHeight=1024"
+      },
+      "data": {
+        "_id": "8f0f6739-417c-4550-8ce8-091a17e53042",
+        "title": "Sicherheitsmitarbeiter §34a (m/w/d)",
+        "area": "Security",
+        "sector": "Security",
+        "location": "München",
+        "employmentType": "Vollzeit/Teilzeit/Minijob",
+        "workingTime": "Vollzeit/Teilzeit/Minijob",
+        "shortDescription": "Sorgen Sie für Sicherheit und Ordnung bei renommierten Unternehmen. Werden Sie Teil unseres professionellen Security-Teams und übernehmen Sie verantwortungsvolle Aufgaben im Objekt-, Werks- und Empfangsschutz.",
+        "description": "Sorgen Sie für Sicherheit und Ordnung bei renommierten Unternehmen. Werden Sie Teil unseres professionellen Security-Teams und übernehmen Sie verantwortungsvolle Aufgaben im Objekt-, Werks- und Empfangsschutz.",
+        "fullDescription": "Sorgen Sie für Sicherheit und Ordnung bei renommierten Unternehmen. Werden Sie Teil unseres professionellen Security-Teams und übernehmen Sie verantwortungsvolle Aufgaben im Objekt-, Werks- und Empfangsschutz.",
+        "tasks": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Du überwachst den Zugang und führst dabei sowohl die Zutrittskontrolle als auch regelmäßige Kontrollgänge durch, um sicherzustellen, dass alles reibungslos abläuft</p></li>\n  <li><p class=\"font_8\">Deine Aufgabe ist es, die Hausordnung durchzusetzen und so für ein geordnetes Umfeld zu sorgen</p></li>\n  <li><p class=\"font_8\">Dabei kümmerst Du Dich auch um das Melde- und Berichtswesen, damit alle Informationen stets aktuell und nachvollziehbar sind</p></li>\n</ul>",
+        "responsibilities": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Du überwachst den Zugang und führst dabei sowohl die Zutrittskontrolle als auch regelmäßige Kontrollgänge durch, um sicherzustellen, dass alles reibungslos abläuft</p></li>\n  <li><p class=\"font_8\">Deine Aufgabe ist es, die Hausordnung durchzusetzen und so für ein geordnetes Umfeld zu sorgen</p></li>\n  <li><p class=\"font_8\">Dabei kümmerst Du Dich auch um das Melde- und Berichtswesen, damit alle Informationen stets aktuell und nachvollziehbar sind</p></li>\n</ul>",
+        "requirements": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Unterrichtung oder Sachkundeprüfung nach § 34a GewO (wünschenswert)</p></li>\n  <li><p class=\"font_8\">Quereinsteiger sind herzlich willkommen</p></li>\n  <li><p class=\"font_8\">Einwandfreies Führungszeugnis</p></li>\n  <li><p class=\"font_8\">Gute Deutschkenntnisse in Wort und Schrift</p></li>\n  <li><p class=\"font_8\">Gepflegtes Erscheinungsbild</p></li>\n  <li><p class=\"font_8\">Freundliches und sicheres Auftreten</p></li>\n  <li><p class=\"font_8\">Verantwortungsbewusstsein und Zuverlässigkeit</p></li>\n  <li><p class=\"font_8\">Bereitschaft zur Schicht-, Wochenend- und Feiertagsarbeit</p></li>\n  <li><p class=\"font_8\">Teamfähigkeit sowie selbstständige Arbeitsweise</p></li>\n  <li><p class=\"font_8\">Führerschein Klasse B von Vorteil</p></li>\n</ul>",
+        "benefits": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Unbefristeter Arbeitsvertrag</p></li>\n  <li><p class=\"font_8\">Übertarifliche und pünktliche Bezahlung</p></li>\n  <li><p class=\"font_8\">Zuschläge für Nacht-, Sonn- und Feiertagsarbeit</p></li>\n  <li><p class=\"font_8\">Umfangreiche Einarbeitung</p></li>\n  <li><p class=\"font_8\">Hochwertige Dienstkleidung</p></li>\n  <li><p class=\"font_8\">Moderne Kommunikations- und Einsatztechnik</p></li>\n  <li><p class=\"font_8\">Individuelle Weiterbildungsmöglichkeiten</p></li>\n  <li><p class=\"font_8\">Aufstiegschancen innerhalb der WB-Unternehmensgruppe</p></li>\n  <li><p class=\"font_8\">Flache Hierarchien und kurze Entscheidungswege</p></li>\n  <li><p class=\"font_8\">Sicherer Arbeitsplatz in einem wachsenden Unternehmen</p></li>\n</ul>",
+        "salary": "16,00 € – 20,00 € pro Stunde zzgl. Nacht-, Sonn- und Feiertagszuschlägen (je nach Qualifikation und Einsatzbereich)",
+        "active": true,
+        "status": "published",
+        "sortOrder": 1,
+        "applicationFormAssignment": "career-standard"
+      }
+    },
+    {
+      "externalId": "a46485cb-12c5-4ddf-aa8d-b068eb73dae6",
+      "createdAt": "2026-07-03T15:13:25Z",
+      "updatedAt": "2026-07-13T13:34:11Z",
+      "media": {
+        "image": "wix:image://v1/41d685_fd33e7ee4a394e5c8d277889d275b711~mv2.png/Glasreiniger.png#originWidth=1536&originHeight=1024"
+      },
+      "data": {
+        "_id": "a46485cb-12c5-4ddf-aa8d-b068eb73dae6",
+        "title": "Glasreiniger (m/w/d) in Aretsried gesucht! Attraktive Vergütung, moderne Arbeitsmittel, unbefristeter Arbeitsvertrag und abwechslungsreiche Einsätze.",
+        "area": "Cleaning",
+        "sector": "Cleaning",
+        "location": "Aretsried",
+        "employmentType": "Teilzeit/Minijob",
+        "workingTime": "Teilzeit/Minijob",
+        "shortDescription": "Werden Sie Teil unseres Teams!\n\nDie WB-Holding AG zählt zu den führenden Dienstleistungsunternehmen in den Bereichen Gebäudereinigung, Sicherheitsdienstleistungen und Facility Management. Zur Verstärkung unseres Teams suchen wir engagierte Glasreiniger (m/w/d), die mit Sorgfalt, Präzision und Motivation unsere Kunden begeistern.\n\nBei uns erwarten Sie moderne Arbeitsmittel, abwechslungsreiche Projekte und ein sicherer Arbeitsplatz mit langfristiger Perspektive.",
+        "description": "Werden Sie Teil unseres Teams!\n\nDie WB-Holding AG zählt zu den führenden Dienstleistungsunternehmen in den Bereichen Gebäudereinigung, Sicherheitsdienstleistungen und Facility Management. Zur Verstärkung unseres Teams suchen wir engagierte Glasreiniger (m/w/d), die mit Sorgfalt, Präzision und Motivation unsere Kunden begeistern.\n\nBei uns erwarten Sie moderne Arbeitsmittel, abwechslungsreiche Projekte und ein sicherer Arbeitsplatz mit langfristiger Perspektive.",
+        "fullDescription": "Werden Sie Teil unseres Teams!\n\nDie WB-Holding AG zählt zu den führenden Dienstleistungsunternehmen in den Bereichen Gebäudereinigung, Sicherheitsdienstleistungen und Facility Management. Zur Verstärkung unseres Teams suchen wir engagierte Glasreiniger (m/w/d), die mit Sorgfalt, Präzision und Motivation unsere Kunden begeistern.\n\nBei uns erwarten Sie moderne Arbeitsmittel, abwechslungsreiche Projekte und ein sicherer Arbeitsplatz mit langfristiger Perspektive.",
+        "tasks": "<ol class=\"font_8\">\n  <li><p class=\"font_8\">Reinigung von Glas-, Fenster- und Fassadenflächen</p></li>\n</ol>\n<ul class=\"font_8\">\n  <li><p class=\"font_8\">Reinigung von Schaufenstern, Wintergärten und Glasdächern</p></li>\n  <li><p class=\"font_8\">Durchführung von Rahmen- und Falzreinigungen</p></li>\n  <li><p class=\"font_8\">Arbeiten mit modernen Osmose- und Reinigungssystemen</p></li>\n  <li><p class=\"font_8\">Bedienung von Hebebühnen und Leitern (nach Einweisung)</p></li>\n  <li><p class=\"font_8\">Einhaltung unserer Qualitäts- und Sicherheitsstandards</p></li>\n  <li><p class=\"font_8\">Dokumentation der ausgeführten Arbeiten</p></li>\n  <li><p class=\"font_8\">Freundlicher Umgang mit unseren Kunden vor Ort</p></li>\n</ul>",
+        "responsibilities": "<ol class=\"font_8\">\n  <li><p class=\"font_8\">Reinigung von Glas-, Fenster- und Fassadenflächen</p></li>\n</ol>\n<ul class=\"font_8\">\n  <li><p class=\"font_8\">Reinigung von Schaufenstern, Wintergärten und Glasdächern</p></li>\n  <li><p class=\"font_8\">Durchführung von Rahmen- und Falzreinigungen</p></li>\n  <li><p class=\"font_8\">Arbeiten mit modernen Osmose- und Reinigungssystemen</p></li>\n  <li><p class=\"font_8\">Bedienung von Hebebühnen und Leitern (nach Einweisung)</p></li>\n  <li><p class=\"font_8\">Einhaltung unserer Qualitäts- und Sicherheitsstandards</p></li>\n  <li><p class=\"font_8\">Dokumentation der ausgeführten Arbeiten</p></li>\n  <li><p class=\"font_8\">Freundlicher Umgang mit unseren Kunden vor Ort</p></li>\n</ul>",
+        "requirements": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Idealerweise Berufserfahrung in der Glas- oder Gebäudereinigung (Quereinsteiger sind ebenfalls willkommen)</p></li>\n  <li><p class=\"font_8\">Selbstständige, zuverlässige und sorgfältige Arbeitsweise</p></li>\n  <li><p class=\"font_8\">Körperliche Belastbarkeit sowie Schwindelfreiheit bei Arbeiten in der Höhe</p></li>\n  <li><p class=\"font_8\">Teamfähigkeit, Verantwortungsbewusstsein und ein gepflegtes Erscheinungsbild</p></li>\n  <li><p class=\"font_8\">Gute Deutschkenntnisse zur Verständigung im Arbeitsalltag</p></li>\n  <li><p class=\"font_8\">Führerschein der Klasse B ist wünschenswert, jedoch nicht zwingend erforderlich</p></li>\n</ul>",
+        "benefits": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Einen sicheren Arbeitsplatz in einem wachsenden Unternehmen</p></li>\n  <li><p class=\"font_8\">Übertarifliche und pünktliche Vergütung</p></li>\n  <li><p class=\"font_8\">Hochwertige Arbeitskleidung sowie moderne Reinigungsgeräte</p></li>\n  <li><p class=\"font_8\">Umfassende Einarbeitung und regelmäßige Schulungen</p></li>\n  <li><p class=\"font_8\">Angenehmes Betriebsklima und ein motiviertes Team</p></li>\n  <li><p class=\"font_8\">Kurze Entscheidungswege und persönliche Ansprechpartner</p></li>\n  <li><p class=\"font_8\">Individuelle Weiterbildungs- und Entwicklungsmöglichkeiten innerhalb der WB Holding AG</p></li>\n  <li><p class=\"font_8\">Langfristige Perspektiven mit Aufstiegsmöglichkeiten</p></li>\n</ul>",
+        "salary": "21,00€ die Stunde",
+        "active": true,
+        "status": "published",
+        "sortOrder": 1,
+        "applicationFormAssignment": "career-standard"
+      }
+    },
+    {
+      "externalId": "ac0cf775-3af8-49fe-9cca-7afe1190d7da",
+      "createdAt": "2026-07-13T13:46:29Z",
+      "updatedAt": "2026-07-13T13:48:13Z",
+      "media": {
+        "image": "wix:image://v1/41d685_ff5e9096db3b42999f8912b16d56abdf~mv2.png/ChatGPT%20Image%2013.%20Juli%202026,%2015_45_21.png#originWidth=1536&originHeight=1024"
+      },
+      "data": {
+        "_id": "ac0cf775-3af8-49fe-9cca-7afe1190d7da",
+        "title": "Reinigungskraft (m/w/d)",
+        "area": "Cleaning",
+        "sector": "Cleaning",
+        "location": "Neusäß",
+        "employmentType": "Vollzeit/Teilzeit/Minijob",
+        "workingTime": "Vollzeit/Teilzeit/Minijob",
+        "shortDescription": "Sorgen Sie für Sauberkeit und Hygiene in modernen Bürogebäuden und gewerblichen Objekten. Werden Sie Teil unseres engagierten Reinigungsteams und profitieren Sie von einem sicheren Arbeitsplatz, attraktiver Vergütung und langfristigen Perspektiven.",
+        "description": "Sorgen Sie für Sauberkeit und Hygiene in modernen Bürogebäuden und gewerblichen Objekten. Werden Sie Teil unseres engagierten Reinigungsteams und profitieren Sie von einem sicheren Arbeitsplatz, attraktiver Vergütung und langfristigen Perspektiven.",
+        "fullDescription": "Sorgen Sie für Sauberkeit und Hygiene in modernen Bürogebäuden und gewerblichen Objekten. Werden Sie Teil unseres engagierten Reinigungsteams und profitieren Sie von einem sicheren Arbeitsplatz, attraktiver Vergütung und langfristigen Perspektiven.",
+        "tasks": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Unterhaltsreinigung von Büro- und Verwaltungsgebäuden</p></li>\n  <li><p class=\"font_8\">Reinigung von Sanitäranlagen, Küchen und Sozialräumen</p></li>\n  <li><p class=\"font_8\">Pflege von Böden, Glasflächen und Einrichtungsgegenständen</p></li>\n  <li><p class=\"font_8\">Entleerung von Abfallbehältern und fachgerechte Müllentsorgung</p></li>\n  <li><p class=\"font_8\">Auffüllen von Hygiene- und Verbrauchsmaterialien</p></li>\n  <li><p class=\"font_8\">Einhaltung der Reinigungs- und Hygienestandards</p></li>\n  <li><p class=\"font_8\">Sorgfältiger Umgang mit Reinigungsmitteln und Arbeitsgeräten</p></li>\n  <li><p class=\"font_8\">Selbstständige Durchführung der täglichen Reinigungsarbeiten</p></li>\n</ul>",
+        "responsibilities": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Unterhaltsreinigung von Büro- und Verwaltungsgebäuden</p></li>\n  <li><p class=\"font_8\">Reinigung von Sanitäranlagen, Küchen und Sozialräumen</p></li>\n  <li><p class=\"font_8\">Pflege von Böden, Glasflächen und Einrichtungsgegenständen</p></li>\n  <li><p class=\"font_8\">Entleerung von Abfallbehältern und fachgerechte Müllentsorgung</p></li>\n  <li><p class=\"font_8\">Auffüllen von Hygiene- und Verbrauchsmaterialien</p></li>\n  <li><p class=\"font_8\">Einhaltung der Reinigungs- und Hygienestandards</p></li>\n  <li><p class=\"font_8\">Sorgfältiger Umgang mit Reinigungsmitteln und Arbeitsgeräten</p></li>\n  <li><p class=\"font_8\">Selbstständige Durchführung der täglichen Reinigungsarbeiten</p></li>\n</ul>",
+        "requirements": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Idealerweise erste Erfahrung in der Gebäudereinigung</p></li>\n  <li><p class=\"font_8\">Quereinsteiger sind herzlich willkommen</p></li>\n  <li><p class=\"font_8\">Zuverlässige, sorgfältige und selbstständige Arbeitsweise</p></li>\n  <li><p class=\"font_8\">Freundliches und gepflegtes Auftreten</p></li>\n  <li><p class=\"font_8\">Teamfähigkeit und Verantwortungsbewusstsein</p></li>\n  <li><p class=\"font_8\">Gute Deutschkenntnisse von Vorteil</p></li>\n  <li><p class=\"font_8\">Körperliche Belastbarkeit</p></li>\n  <li><p class=\"font_8\">Führerschein Klasse B ist wünschenswert, aber keine Voraussetzung</p></li>\n</ul>",
+        "benefits": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Unbefristeter Arbeitsvertrag</p></li>\n  <li><p class=\"font_8\">Attraktive Vergütung von <strong>15,00 € bis 21,50 € pro Stunde</strong></p></li>\n  <li><p class=\"font_8\">Pünktliche Lohnzahlung</p></li>\n  <li><p class=\"font_8\">Flexible Arbeitszeitmodelle</p></li>\n  <li><p class=\"font_8\">Moderne Arbeitskleidung und hochwertige Arbeitsmittel</p></li>\n  <li><p class=\"font_8\">Umfassende Einarbeitung</p></li>\n  <li><p class=\"font_8\">Wertschätzendes Arbeitsklima</p></li>\n  <li><p class=\"font_8\">Flache Hierarchien und kurze Entscheidungswege</p></li>\n  <li><p class=\"font_8\">Weiterbildungs- und Entwicklungsmöglichkeiten innerhalb der WB-Unternehmensgruppe</p></li>\n  <li><p class=\"font_8\">Sicherer Arbeitsplatz in einem erfolgreichen Unternehmen</p></li>\n</ul>",
+        "salary": "15,00€ - 21,50€ Stundenlohn",
+        "active": true,
+        "status": "published",
+        "sortOrder": 1,
+        "applicationFormAssignment": "career-standard"
+      }
+    },
+    {
+      "externalId": "deb95ceb-6da5-45f9-9e0e-382733005572",
+      "createdAt": "2026-07-03T09:24:34Z",
+      "updatedAt": "2026-07-13T13:45:44Z",
+      "media": {
+        "image": "wix:image://v1/41d685_ff5e9096db3b42999f8912b16d56abdf~mv2.png/ChatGPT%20Image%2013.%20Juli%202026,%2015_45_21.png#originWidth=1536&originHeight=1024"
+      },
+      "data": {
+        "_id": "deb95ceb-6da5-45f9-9e0e-382733005572",
+        "title": "Reinigungskraft (m/w/d)",
+        "area": "Cleaning",
+        "sector": "Cleaning",
+        "location": "Aretsried",
+        "employmentType": "Teilzeit / Minijob",
+        "workingTime": "Teilzeit / Minijob",
+        "shortDescription": "Sorgen Sie für Sauberkeit und Hygiene in modernen Bürogebäuden und gewerblichen Objekten. Werden Sie Teil unseres engagierten Reinigungsteams und profitieren Sie von einem sicheren Arbeitsplatz, attraktiver Vergütung und langfristigen Perspektiven.",
+        "description": "Sorgen Sie für Sauberkeit und Hygiene in modernen Bürogebäuden und gewerblichen Objekten. Werden Sie Teil unseres engagierten Reinigungsteams und profitieren Sie von einem sicheren Arbeitsplatz, attraktiver Vergütung und langfristigen Perspektiven.",
+        "fullDescription": "Sorgen Sie für Sauberkeit und Hygiene in modernen Bürogebäuden und gewerblichen Objekten. Werden Sie Teil unseres engagierten Reinigungsteams und profitieren Sie von einem sicheren Arbeitsplatz, attraktiver Vergütung und langfristigen Perspektiven.",
+        "tasks": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Unterhaltsreinigung von Büro- und Verwaltungsgebäuden</p></li>\n  <li><p class=\"font_8\">Reinigung von Sanitäranlagen, Küchen und Sozialräumen</p></li>\n  <li><p class=\"font_8\">Pflege von Böden, Glasflächen und Einrichtungsgegenständen</p></li>\n  <li><p class=\"font_8\">Entleerung von Abfallbehältern und fachgerechte Müllentsorgung</p></li>\n  <li><p class=\"font_8\">Auffüllen von Hygiene- und Verbrauchsmaterialien</p></li>\n  <li><p class=\"font_8\">Einhaltung der Reinigungs- und Hygienestandards</p></li>\n  <li><p class=\"font_8\">Sorgfältiger Umgang mit Reinigungsmitteln und Arbeitsgeräten</p></li>\n  <li><p class=\"font_8\">Selbstständige Durchführung der täglichen Reinigungsarbeiten</p></li>\n</ul>",
+        "responsibilities": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Unterhaltsreinigung von Büro- und Verwaltungsgebäuden</p></li>\n  <li><p class=\"font_8\">Reinigung von Sanitäranlagen, Küchen und Sozialräumen</p></li>\n  <li><p class=\"font_8\">Pflege von Böden, Glasflächen und Einrichtungsgegenständen</p></li>\n  <li><p class=\"font_8\">Entleerung von Abfallbehältern und fachgerechte Müllentsorgung</p></li>\n  <li><p class=\"font_8\">Auffüllen von Hygiene- und Verbrauchsmaterialien</p></li>\n  <li><p class=\"font_8\">Einhaltung der Reinigungs- und Hygienestandards</p></li>\n  <li><p class=\"font_8\">Sorgfältiger Umgang mit Reinigungsmitteln und Arbeitsgeräten</p></li>\n  <li><p class=\"font_8\">Selbstständige Durchführung der täglichen Reinigungsarbeiten</p></li>\n</ul>",
+        "requirements": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Idealerweise erste Erfahrung in der Gebäudereinigung</p></li>\n  <li><p class=\"font_8\">Quereinsteiger sind herzlich willkommen</p></li>\n  <li><p class=\"font_8\">Zuverlässige, sorgfältige und selbstständige Arbeitsweise</p></li>\n  <li><p class=\"font_8\">Freundliches und gepflegtes Auftreten</p></li>\n  <li><p class=\"font_8\">Teamfähigkeit und Verantwortungsbewusstsein</p></li>\n  <li><p class=\"font_8\">Gute Deutschkenntnisse von Vorteil</p></li>\n  <li><p class=\"font_8\">Körperliche Belastbarkeit</p></li>\n  <li><p class=\"font_8\">Führerschein Klasse B ist wünschenswert, aber keine Voraussetzung</p></li>\n</ul>",
+        "benefits": "<ul class=\"font_8\">\n  <li><p class=\"font_8\">Unbefristeter Arbeitsvertrag</p></li>\n  <li><p class=\"font_8\">Attraktive Vergütung von <strong>15,00 € bis 21,50 € pro Stunde</strong></p></li>\n  <li><p class=\"font_8\">Pünktliche Lohnzahlung</p></li>\n  <li><p class=\"font_8\">Flexible Arbeitszeitmodelle</p></li>\n  <li><p class=\"font_8\">Moderne Arbeitskleidung und hochwertige Arbeitsmittel</p></li>\n  <li><p class=\"font_8\">Umfassende Einarbeitung</p></li>\n  <li><p class=\"font_8\">Wertschätzendes Arbeitsklima</p></li>\n  <li><p class=\"font_8\">Flache Hierarchien und kurze Entscheidungswege</p></li>\n  <li><p class=\"font_8\">Weiterbildungs- und Entwicklungsmöglichkeiten innerhalb der WB-Unternehmensgruppe</p></li>\n  <li><p class=\"font_8\">Sicherer Arbeitsplatz in einem erfolgreichen Unternehmen</p></li>\n</ul>",
+        "salary": "15,00€ - 21,50€ Stundenlohn",
+        "active": true,
+        "status": "published",
+        "sortOrder": 1,
+        "applicationFormAssignment": "career-standard"
+      }
+    }
+  ],
+  "team": [
+    {
+      "externalId": "24d8cc77-6a8f-4e12-b7ba-5903a4e5071f",
+      "createdAt": "2026-05-19T09:58:49Z",
+      "updatedAt": "2026-05-19T10:08:25Z",
+      "media": {
+        "image": "wix:image://v1/41d685_74797ef6d90a4efd9a3a2d0cdf54bd7e~mv2.jpg/WhatsApp%20Image%202025-12-30%20at%2020.30_edited.jpg#originWidth=1024&originHeight=1090"
+      },
+      "data": {
+        "_id": "24d8cc77-6a8f-4e12-b7ba-5903a4e5071f",
+        "name": "Inna Bohuslavska",
+        "fullName": "Inna Bohuslavska",
+        "position": "Chief Executive Officer (CEO) Cleaning GmbH",
+        "bio": "Inna Bohuslavska ist CEO im Bereich Reinigung und verantwortet die administrative Steuerung sowie die kontinuierliche Optimierung moderner Reinigungsprozesse. Mit ihrer Expertise in Hygienemanagement, Qualitätsstandards und der Organisation effizienter Arbeitsabläufe sorgt sie für zuverlässige, nachhaltige und professionelle Reinigungslösungen auf höchstem Niveau",
+        "shortDescription": "Inna Bohuslavska ist CEO im Bereich Reinigung und verantwortet die administrative Steuerung sowie die kontinuierliche Optimierung moderner Reinigungsprozesse. Mit ihrer Expertise in Hygienemanagement, Qualitätsstandards und der Organisation effizienter Arbeitsabläufe sorgt sie für zuverlässige, nachhaltige und professionelle Reinigungslösungen auf höchstem Niveau",
+        "fullDescription": "Inna Bohuslavska ist CEO im Bereich Reinigung und verantwortet die administrative Steuerung sowie die kontinuierliche Optimierung moderner Reinigungsprozesse. Mit ihrer Expertise in Hygienemanagement, Qualitätsstandards und der Organisation effizienter Arbeitsabläufe sorgt sie für zuverlässige, nachhaltige und professionelle Reinigungslösungen auf höchstem Niveau",
+        "linkedinUrl": "",
+        "linkedInUrl": "",
+        "status": "published",
+        "sortOrder": 1
+      }
+    },
+    {
+      "externalId": "478177a6-01d0-4cc5-a6fa-963fb59285dd",
+      "createdAt": "2026-05-03T07:10:40Z",
+      "updatedAt": "2026-05-19T09:59:45Z",
+      "media": {
+        "image": "https://static.wixstatic.com/media/41d685_e40a561cb7744d7e97c8c7b801bb913a~mv2.png"
+      },
+      "data": {
+        "_id": "478177a6-01d0-4cc5-a6fa-963fb59285dd",
+        "name": "Swen Ahlgrimm",
+        "fullName": "Swen Ahlgrimm",
+        "position": "Chief Operating Officer (COO) Security Baden Würrttemberg",
+        "bio": "Swen Ahlgrimm ist COO der Abteilung Security in Baden-Württemberg und verantwortet die operative Steuerung sowie die Weiterentwicklung sicherheitsrelevanter Prozesse. Mit seiner Expertise im Risikomanagement und in der Führung komplexer Organisationen sorgt er für effiziente, moderne und leistungsfähige Sicherheitsstrukturen.",
+        "shortDescription": "Swen Ahlgrimm ist COO der Abteilung Security in Baden-Württemberg und verantwortet die operative Steuerung sowie die Weiterentwicklung sicherheitsrelevanter Prozesse. Mit seiner Expertise im Risikomanagement und in der Führung komplexer Organisationen sorgt er für effiziente, moderne und leistungsfähige Sicherheitsstrukturen.",
+        "fullDescription": "Swen Ahlgrimm ist COO der Abteilung Security in Baden-Württemberg und verantwortet die operative Steuerung sowie die Weiterentwicklung sicherheitsrelevanter Prozesse. Mit seiner Expertise im Risikomanagement und in der Führung komplexer Organisationen sorgt er für effiziente, moderne und leistungsfähige Sicherheitsstrukturen.",
+        "linkedinUrl": "",
+        "linkedInUrl": "",
+        "status": "published",
+        "sortOrder": 2
+      }
+    },
+    {
+      "externalId": "4c71540a-8ef4-4144-a82a-f143ae63fc67",
+      "createdAt": "2026-05-03T07:10:40Z",
+      "updatedAt": "2026-05-19T09:59:29Z",
+      "media": {
+        "image": "https://static.wixstatic.com/media/41d685_eba543c48a9848c6982e4910a2e5f1f1~mv2.jpg"
+      },
+      "data": {
+        "_id": "4c71540a-8ef4-4144-a82a-f143ae63fc67",
+        "name": "Kateryna Wissmann",
+        "fullName": "Kateryna Wissmann",
+        "position": "Head of Legal & Compliance",
+        "bio": "Kateryna Wissmann verantwortet die Abteilung Legal & Compliance und ist für die strategische sowie operative Steuerung aller rechtlichen und regulatorischen Themen innerhalb des Unternehmens zuständig. In ihrer Funktion stellt sie sicher, dass geschäftliche Entscheidungen nicht nur wirtschaftlich sinnvoll, sondern auch rechtlich belastbar und regelkonform umgesetzt werden.",
+        "shortDescription": "Kateryna Wissmann verantwortet die Abteilung Legal & Compliance und ist für die strategische sowie operative Steuerung aller rechtlichen und regulatorischen Themen innerhalb des Unternehmens zuständig. In ihrer Funktion stellt sie sicher, dass geschäftliche Entscheidungen nicht nur wirtschaftlich sinnvoll, sondern auch rechtlich belastbar und regelkonform umgesetzt werden.",
+        "fullDescription": "Kateryna Wissmann verantwortet die Abteilung Legal & Compliance und ist für die strategische sowie operative Steuerung aller rechtlichen und regulatorischen Themen innerhalb des Unternehmens zuständig. In ihrer Funktion stellt sie sicher, dass geschäftliche Entscheidungen nicht nur wirtschaftlich sinnvoll, sondern auch rechtlich belastbar und regelkonform umgesetzt werden.",
+        "linkedinUrl": "",
+        "linkedInUrl": "",
+        "status": "published",
+        "sortOrder": 3
+      }
+    },
+    {
+      "externalId": "6cfc52da-c2ad-4aa7-9343-39324284c418",
+      "createdAt": "2026-05-03T07:10:40Z",
+      "updatedAt": "2026-07-14T12:15:52Z",
+      "media": {
+        "image": "https://static.wixstatic.com/media/41d685_53f3d1552731408abacce0ddca51e16f~mv2.jpg"
+      },
+      "data": {
+        "_id": "6cfc52da-c2ad-4aa7-9343-39324284c418",
+        "name": "Simon Bayer",
+        "fullName": "Simon Bayer",
+        "position": "Chief Executive Officer (CEO) Emergency Services",
+        "bio": "Simon Bayer verantwortet das operative Tagesgeschäft der WB Securitys, optimiert Prozesse und steigert die Effizienz in allen Security-Abteilungen. Seine umfassende Erfahrung in der privaten Security und in der operativen Exzellenz gewährleistet die reibungslose Umsetzung der Unternehmensstrategien.",
+        "shortDescription": "Simon Bayer verantwortet das operative Tagesgeschäft der WB Securitys, optimiert Prozesse und steigert die Effizienz in allen Security-Abteilungen. Seine umfassende Erfahrung in der privaten Security und in der operativen Exzellenz gewährleistet die reibungslose Umsetzung der Unternehmensstrategien.",
+        "fullDescription": "Simon Bayer verantwortet das operative Tagesgeschäft der WB Securitys, optimiert Prozesse und steigert die Effizienz in allen Security-Abteilungen. Seine umfassende Erfahrung in der privaten Security und in der operativen Exzellenz gewährleistet die reibungslose Umsetzung der Unternehmensstrategien.",
+        "linkedinUrl": "",
+        "linkedInUrl": "",
+        "status": "published",
+        "sortOrder": 4
+      }
+    },
+    {
+      "externalId": "78671fcd-5d80-4153-9c11-9b77b920e6fa",
+      "createdAt": "2026-05-05T13:50:16Z",
+      "updatedAt": "2026-07-13T08:40:47Z",
+      "media": {
+        "image": "https://static.wixstatic.com/media/41d685_92d7210dc4524d51ae6971f5c85ae8b4~mv2.jpg"
+      },
+      "data": {
+        "_id": "78671fcd-5d80-4153-9c11-9b77b920e6fa",
+        "name": "Karl Heinz Krenke",
+        "fullName": "Karl Heinz Krenke",
+        "position": "2. Vorstand & Chief Executive Officer (CEO) Surveillance GmbH",
+        "bio": "Karl Heinz Krenke verantwortet die strategische und operative Leitung der Surveillance GmbH. Als Betriebswirt mit Expertise in Alarm- und Interventionsmanagement sowie Supply Chain Security entwickelt er die Notruf- und Serviceleitstelle konsequent weiter und stellt höchste Qualitätsstandards in der Sicherheits- und Alarmbearbeitung sicher.\nMit seiner umfassenden Branchenerfahrung optimiert er Prozesse, treibt die Digitalisierung voran und gewährleistet effiziente, zuverlässige Sicherheitslösungen mit schneller Reaktionsfähigkeit.",
+        "shortDescription": "Karl Heinz Krenke verantwortet die strategische und operative Leitung der Surveillance GmbH. Als Betriebswirt mit Expertise in Alarm- und Interventionsmanagement sowie Supply Chain Security entwickelt er die Notruf- und Serviceleitstelle konsequent weiter und stellt höchste Qualitätsstandards in der Sicherheits- und Alarmbearbeitung sicher.\nMit seiner umfassenden Branchenerfahrung optimiert er Prozesse, treibt die Digitalisierung voran und gewährleistet effiziente, zuverlässige Sicherheitslösungen mit schneller Reaktionsfähigkeit.",
+        "fullDescription": "Karl Heinz Krenke verantwortet die strategische und operative Leitung der Surveillance GmbH. Als Betriebswirt mit Expertise in Alarm- und Interventionsmanagement sowie Supply Chain Security entwickelt er die Notruf- und Serviceleitstelle konsequent weiter und stellt höchste Qualitätsstandards in der Sicherheits- und Alarmbearbeitung sicher.\nMit seiner umfassenden Branchenerfahrung optimiert er Prozesse, treibt die Digitalisierung voran und gewährleistet effiziente, zuverlässige Sicherheitslösungen mit schneller Reaktionsfähigkeit.",
+        "linkedinUrl": "",
+        "linkedInUrl": "",
+        "status": "published",
+        "sortOrder": 5
+      }
+    },
+    {
+      "externalId": "f4e83514-0849-4c59-a321-9edd8966d8d6",
+      "createdAt": "2026-05-03T07:10:40Z",
+      "updatedAt": "2026-07-14T07:55:36Z",
+      "media": {
+        "image": "https://static.wixstatic.com/media/41d685_269ac1b954c84747bb691420fab6406b~mv2.png"
+      },
+      "data": {
+        "_id": "f4e83514-0849-4c59-a321-9edd8966d8d6",
+        "name": "Dr. Ingo Wissmann",
+        "fullName": "Dr. Ingo Wissmann",
+        "position": "1. Vorstand",
+        "bio": "Dr. Ingo Wissmann ist der visionäre Kopf hinter der WB Holding AG und verfügt über mehr als 27 Jahre Erfahrung in strategischer Führung, Security- und Facility Management und Unternehmensentwicklung. Seine Expertise in Marktanalyse und Innovation hat maßgeblich zum Wachstum und Erfolg des Unternehmens beigetragen.",
+        "shortDescription": "Dr. Ingo Wissmann ist der visionäre Kopf hinter der WB Holding AG und verfügt über mehr als 27 Jahre Erfahrung in strategischer Führung, Security- und Facility Management und Unternehmensentwicklung. Seine Expertise in Marktanalyse und Innovation hat maßgeblich zum Wachstum und Erfolg des Unternehmens beigetragen.",
+        "fullDescription": "Dr. Ingo Wissmann ist der visionäre Kopf hinter der WB Holding AG und verfügt über mehr als 27 Jahre Erfahrung in strategischer Führung, Security- und Facility Management und Unternehmensentwicklung. Seine Expertise in Marktanalyse und Innovation hat maßgeblich zum Wachstum und Erfolg des Unternehmens beigetragen.",
+        "linkedinUrl": "http://www.linkedin.com/in/dr-ingo-w-456264144",
+        "linkedInUrl": "http://www.linkedin.com/in/dr-ingo-w-456264144",
+        "status": "published",
+        "sortOrder": 6
+      }
+    }
+  ],
+  "blogImages": [
+    {
+      "externalId": "0093a05f-f90e-4c3c-8d80-89ffa91f209a",
+      "title": "Sicherheitskonzepte für Verwaltungsgebäude: Strategischer Schutz für Mitarbeiter und Werte (2026)",
+      "slug": "sicherheitskonzepte-fur-verwaltungsgebaude-strategischer-schutz-fur-mitarbeiter-und-werte-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322639_1782884109.jpg",
+      "createdAt": "2026-07-01T10:15:36Z",
+      "updatedAt": "2026-07-01T10:15:36Z"
+    },
+    {
+      "externalId": "020db9e2-7e2e-4b6a-a3e5-65f4c57b5eb0",
+      "title": "Baustellenbewachung: Sicherer Schutz für Bauherren",
+      "slug": "baustellenbewachung-sicherer-schutz-fur-bauherren",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2510048_1783618188.jpg",
+      "createdAt": "2026-07-12T08:03:54Z",
+      "updatedAt": "2026-07-12T08:03:54Z"
+    },
+    {
+      "externalId": "03fa544b-0554-4c12-8714-066710958011",
+      "title": "Revierdienst Augsburg: Objektschutz & schnelle Intervention",
+      "slug": "revierdienst-augsburg-objektschutz-schnelle-intervention",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2510046_1783066914.jpg",
+      "createdAt": "2026-07-04T10:59:54Z",
+      "updatedAt": "2026-07-04T10:59:54Z"
+    },
+    {
+      "externalId": "045bd278-f15e-4e4c-9e0a-6ffad753c8e5",
+      "title": "Empfangsdienst für Unternehmen in Augsburg: Sicherheit und Repräsentanz vereint",
+      "slug": "empfangsdienst-fur-unternehmen-in-augsburg-sicherheit-und-reprasentanz-vereint",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/empfangsdienst-fur-unternehmen-in-augsburg-sicherheit-und-reprasentanz-vereint.jpg?v=76d21f901da9",
+      "createdAt": "2026-07-18T10:08:56Z",
+      "updatedAt": "2026-07-18T10:08:56Z"
+    },
+    {
+      "externalId": "04b3aad8-0c75-4faf-b04c-5fb528fbe02f",
+      "title": "Управління ризиками безпеки: Стратегічний посібник для компаній 2026",
+      "slug": "upravlinnia-rizikami-bezpeki-strategicnii-posibnik-dlia-kompanii-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322636_1782365757.jpg",
+      "createdAt": "2026-06-25T05:40:08Z",
+      "updatedAt": "2026-06-25T05:40:08Z"
+    },
+    {
+      "externalId": "0800af14-de41-47d7-a53a-51fc98746426",
+      "title": "Prävention von Vandalismus im Gewerbe: Mythen, Fakten und strategische Schutzkonzepte 2026",
+      "slug": "pravention-von-vandalismus-im-gewerbe-mythen-fakten-und-strategische-schutzkonzepte-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322634_1782211497.jpg",
+      "createdAt": "2026-06-23T10:44:59Z",
+      "updatedAt": "2026-06-23T10:44:59Z"
+    },
+    {
+      "externalId": "0a29ec26-a4c0-433c-a524-de05ce06fb5e",
+      "title": "Sicherheitsaudit für Firmengebäude: Die strategische Checkliste für 2026",
+      "slug": "sicherheitsaudit-fur-firmengebaude-die-strategische-checkliste-fur-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322640_1782971297.jpg",
+      "createdAt": "2026-07-02T10:22:17Z",
+      "updatedAt": "2026-07-02T10:22:17Z"
+    },
+    {
+      "externalId": "0d145394-2ff3-4e39-8d8b-0ec45a18f29c",
+      "title": "Notfallmanagement für Firmen: Schritt-für-Schritt-Leitfaden für 2026",
+      "slug": "notfallmanagement-fur-firmen-schritt-fur-schritt-leitfaden-fur-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322645_1783580917.jpg",
+      "createdAt": "2026-07-09T10:15:42Z",
+      "updatedAt": "2026-07-09T10:15:42Z"
+    },
+    {
+      "externalId": "0f183d09-c911-4353-90ce-88f050a9a765",
+      "title": "Sicherheitslösungen für Unternehmen 2026: Strategische Resilienz durch integrierte Konzepte",
+      "slug": "sicherheitslosungen-fur-unternehmen-2026-strategische-resilienz-durch-integrierte-konzepte",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/chatgpt-image-15-juli-2026-11-25-50.jpg",
+      "createdAt": "2026-07-15T09:26:56Z",
+      "updatedAt": "2026-07-15T09:26:56Z"
+    },
+    {
+      "externalId": "196f94e2-94b8-4e86-8c5f-50fc2fb8a859",
+      "title": "Захист від крадіжок для виробничих підприємств в Аугсбурзі: Стратегічна безпека 2026",
+      "slug": "zaxist-vid-kradizok-dlia-virobnicix-pidprijemstv-v-augsburzi-strategicna-bezpeka-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384778_1782199482.jpg",
+      "createdAt": "2026-06-23T07:30:49Z",
+      "updatedAt": "2026-06-23T07:30:49Z"
+    },
+    {
+      "externalId": "246d2df0-d5a1-46b0-b00d-12ff13ac4629",
+      "title": "Sicherheitskonzept für Unternehmen in Augsburg: Der Leitfaden für strategische Resilienz 2026",
+      "slug": "sicherheitskonzept-fur-unternehmen-in-augsburg-der-leitfaden-fur-strategische-resilienz-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2510044_1782536952.jpg",
+      "createdAt": "2026-06-27T10:29:26Z",
+      "updatedAt": "2026-06-27T10:29:26Z"
+    },
+    {
+      "externalId": "278f485d-541d-46fc-bf47-0f76399e607a",
+      "title": "Sicherheitstechnik und Wachdienst kombiniert: Synergieeffekte für maximale Unternehmenssicherheit 2026",
+      "slug": "sicherheitstechnik-und-wachdienst-kombiniert-synergieeffekte-fur-maximale-unternehmenssicherheit-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/chatgpt-image-20-juli-2026-10-54-04.jpg?v=c2541c2557f5",
+      "createdAt": "2026-07-20T10:15:16Z",
+      "updatedAt": "2026-07-20T10:15:16Z"
+    },
+    {
+      "externalId": "2cad310f-a985-469c-af4e-382f745cb33e",
+      "title": "Охорона об'єктів Мюнхен 2026: Стратегічне управління безпекою для підприємств",
+      "slug": "oxorona-objektiv-miunxen-2026-strategicne-upravlinnia-bezpekoiu-dlia-pidprijemstv",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384779_1782286990.jpg",
+      "createdAt": "2026-06-24T07:45:11Z",
+      "updatedAt": "2026-06-24T07:45:11Z"
+    },
+    {
+      "externalId": "31f52fc0-286a-4822-9c8a-b1bc4f52d341",
+      "title": "Комплексне обслуговування будівель 2026: Посібник для керівників у Мюнхені та Аугсбурзі",
+      "slug": "kompleksne-obslugovuvannia-budivel-2026-posibnik-dlia-kerivnikiv-u-miunxeni-ta-augsburzi",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322635_1782278608.jpg",
+      "createdAt": "2026-06-24T10:24:07Z",
+      "updatedAt": "2026-06-24T10:24:07Z"
+    },
+    {
+      "externalId": "337e57d4-2599-4036-a51f-51b404a696ee",
+      "title": "Запобігання вандалізму в комерційних об'єктах: Міфи, факти та стратегічні концепції захисту 2026",
+      "slug": "zapobigannia-vandalizmu-v-komerciinix-objektax-mifi-fakti-ta-strategicni-koncepciyi-zaxistu-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2456301_1782211549.jpg",
+      "createdAt": "2026-06-23T11:12:06Z",
+      "updatedAt": "2026-06-23T11:12:06Z"
+    },
+    {
+      "externalId": "35289cc9-f494-4555-ac70-1a4909021916",
+      "title": "Facility Management München 2026: Strategische Gebäudebetreuung für den Mittelstand",
+      "slug": "facility-management-munchen-2026-strategische-gebaudebetreuung-fur-den-mittelstand",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384777_1782016684.jpg",
+      "createdAt": "2026-06-22T12:37:46Z",
+      "updatedAt": "2026-06-22T12:37:46Z"
+    },
+    {
+      "externalId": "3ff55ce5-15af-48f5-bd1f-aa8c03fe0ba1",
+      "title": "Промислове прибирання в Аугсбурзі: Стратегічне збереження цінності для вашого виробництва",
+      "slug": "promislove-pribirannia-v-augsburzi-strategicne-zberezennia-cinnosti-dlia-vasogo-virobnictva",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384780_1782373549.jpg",
+      "createdAt": "2026-06-25T14:14:37Z",
+      "updatedAt": "2026-06-25T14:14:37Z"
+    },
+    {
+      "externalId": "4102a8e3-b36d-427f-bc61-d14b5bf5adc5",
+      "title": "Industriereinigung in Augsburg: Strategische Werterhaltung für Ihre Produktion",
+      "slug": "industriereinigung-in-augsburg-strategische-werterhaltung-fur-ihre-produktion",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384780_1782373549.jpg",
+      "createdAt": "2026-06-26T14:04:17Z",
+      "updatedAt": "2026-06-26T14:04:17Z"
+    },
+    {
+      "externalId": "49f708ef-1605-4b3b-a488-ece305e9a2e4",
+      "title": "Diebstahlschutz für Produktionsbetriebe in Augsburg: Strategische Sicherheit 2026",
+      "slug": "diebstahlschutz-fur-produktionsbetriebe-in-augsburg-strategische-sicherheit-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384778_1782211284.jpg",
+      "createdAt": "2026-06-23T11:17:24Z",
+      "updatedAt": "2026-06-23T11:17:24Z"
+    },
+    {
+      "externalId": "548076cd-b4f3-4bc5-a229-c6ff560f5275",
+      "title": "Facility Management München 2026: Strategische Gebäudebetreuung für den Mittelstand",
+      "slug": "facility-management-munchen-2026-strategische-gebaudebetreuung-fur-den-mittelstand",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384777_1782016684.jpg",
+      "createdAt": "2026-06-26T22:19:56Z",
+      "updatedAt": "2026-06-26T22:19:56Z"
+    },
+    {
+      "externalId": "5dde3461-2ceb-4377-b7c3-ad9c3892041e",
+      "title": "Управління ризиками безпеки: Стратегічний посібник для компаній 2026",
+      "slug": "upravlinnia-rizikami-bezpeki-strategicnii-posibnik-dlia-kompanii-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322636_1782365757.jpg",
+      "createdAt": "2026-06-25T10:19:20Z",
+      "updatedAt": "2026-06-25T10:19:20Z"
+    },
+    {
+      "externalId": "607bec48-2063-4c50-86a3-1397bfa94348",
+      "title": "Sicherheitskonzept für Produktionsanlagen: Strategischer Leitfaden für Industrieunternehmen 2026",
+      "slug": "sicherheitskonzept-fur-produktionsanlagen-strategischer-leitfaden-fur-industrieunternehmen-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/sicherheitskonzept-fur-produktionsanlagen-strategischer-leitfaden-fur-industrieunternehmen-2026.jpg?v=30d9bdfc25f5",
+      "createdAt": "2026-07-22T10:24:46Z",
+      "updatedAt": "2026-07-22T10:24:46Z"
+    },
+    {
+      "externalId": "608abbcd-ec2b-442e-b481-bef9e7b5e8a9",
+      "title": "Промислове прибирання в Аугсбурзі: Стратегічне збереження цінності для вашого виробництва",
+      "slug": "promislove-pribirannia-v-augsburzi-strategicne-zberezennia-cinnosti-dlia-vasogo-virobnictva",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384780_1782373549.jpg",
+      "createdAt": "2026-06-25T07:48:47Z",
+      "updatedAt": "2026-06-25T07:48:47Z"
+    },
+    {
+      "externalId": "665faca2-fa46-4c72-b71d-a561e12fe3a3",
+      "title": "Professionelle Reinigungsleistungen in Augsburg, München und Umgebung",
+      "slug": "",
+      "coverUrl": "wix:image://v1/41d685_7de07f6ca05e493683168173d07899d2~mv2.jpg/professionelle-reinigungsleistungen-in-augsburg-m.jpg#originWidth=1200&originHeight=1200",
+      "createdAt": "2026-06-20T13:19:14Z",
+      "updatedAt": "2026-06-20T13:22:18Z"
+    },
+    {
+      "externalId": "6720e8db-9492-4792-a562-597ab7aeaf72",
+      "title": "Integriertes Facility Management: Ganzheitliche Gebäudebetreuung für Unternehmen in Bayern",
+      "slug": "",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322629_1781726594.jpg",
+      "createdAt": "2026-06-20T10:17:18Z",
+      "updatedAt": "2026-06-20T10:17:18Z"
+    },
+    {
+      "externalId": "6919ece8-bf84-42e3-8bd9-05c4b818dd4f",
+      "title": "Захист від крадіжок для виробничих підприємств в Аугсбурзі: Стратегічна безпека 2026",
+      "slug": "zaxist-vid-kradizok-dlia-virobnicix-pidprijemstv-v-augsburzi-strategicna-bezpeka-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2457977_1782211325.jpg",
+      "createdAt": "2026-06-23T14:28:50Z",
+      "updatedAt": "2026-06-23T14:28:50Z"
+    },
+    {
+      "externalId": "6ac46cce-c639-48de-a48d-0b18ae34adb9",
+      "title": "Objektschutz München 2026: Strategisches Sicherheitsmanagement für Unternehmen",
+      "slug": "objektschutz-munchen-2026-strategisches-sicherheitsmanagement-fur-unternehmen",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384779_1782286990.jpg",
+      "createdAt": "2026-06-24T14:15:28Z",
+      "updatedAt": "2026-06-24T14:15:28Z"
+    },
+    {
+      "externalId": "6c4a2612-c068-464c-a6bc-13c7c35fa62b",
+      "title": "Notruf- und Serviceleitstelle (NSL): Das Herzstück moderner Unternehmenssicherheit",
+      "slug": "notruf-und-serviceleitstelle-nsl-das-herzstuck-moderner-unternehmenssicherheit",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322642_1783319052.jpg",
+      "createdAt": "2026-07-06T10:32:44Z",
+      "updatedAt": "2026-07-06T10:32:44Z"
+    },
+    {
+      "externalId": "7036453b-dc6d-4cbf-9a13-7bde627290a2",
+      "title": "Schließdienst für Firmen in München: Strategische Objektsicherheit und Haftungsminimierung",
+      "slug": "schliessdienst-fur-firmen-in-munchen-strategische-objektsicherheit-und-haftungsminimierung",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2510047_1783230407.jpg",
+      "createdAt": "2026-07-05T11:00:52Z",
+      "updatedAt": "2026-07-05T11:00:52Z"
+    },
+    {
+      "externalId": "79147167-544c-4dc9-8829-bb4586f5fc90",
+      "title": "Betriebssanitäter für Firmenveranstaltungen: Professionelle medizinische Absicherung für Ihr Event",
+      "slug": "",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322631_1781950105.jpg",
+      "createdAt": "2026-06-20T10:20:04Z",
+      "updatedAt": "2026-06-20T13:30:46Z"
+    },
+    {
+      "externalId": "7c99eddb-0f54-4753-81d3-353b3d80c348",
+      "title": "Industrielle Reinigungsservices 2026: Strategien für Prozesseffizienz und Werterhalt",
+      "slug": "industrielle-reinigungsservices-2026-strategien-fur-prozesseffizienz-und-werterhalt",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/chatgpt-image-17-juli-2026-10-17-45.jpg?v=616bddbcc8a1",
+      "createdAt": "2026-07-17T08:19:34Z",
+      "updatedAt": "2026-07-17T08:19:34Z"
+    },
+    {
+      "externalId": "7cd39f76-a751-4b75-b7d8-54119b924868",
+      "title": "Відеовіддалений моніторинг у Баварії: Інтелектуальний захист через зовнішній центр екстреного виклику",
+      "slug": "videoviddalenii-monitoring-u-bavariyi-intelektualnii-zaxist-cerez-zovnisnii-centr-ekstrenogo-vikliku",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322633_1782104576.jpg",
+      "createdAt": "2026-06-22T12:37:48Z",
+      "updatedAt": "2026-06-22T12:37:48Z"
+    },
+    {
+      "externalId": "7e10d9ee-b16c-451a-90b1-b05f974c41c4",
+      "title": "Pfortendienst im Industriegebiet München: Strategische Sicherheit und Logistiksteuerung 2026",
+      "slug": "pfortendienst-im-industriegebiet-munchen-strategische-sicherheit-und-logistiksteuerung-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/pfortendienst-im-industriegebiet-munchen-strategische-sicherheit-und-logistiksteuerung-2026.jpg?v=0d58358e1edd",
+      "createdAt": "2026-07-19T10:13:46Z",
+      "updatedAt": "2026-07-19T10:13:46Z"
+    },
+    {
+      "externalId": "7fab82b5-77b2-40e0-9e08-684c08b497ba",
+      "title": "Fachkraft für Schutz und Sicherheit mieten: Strategische Sicherheit für Unternehmen 2026",
+      "slug": "fachkraft-fur-schutz-und-sicherheit-mieten-strategische-sicherheit-fur-unternehmen-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/chatgpt-image-13-juli-2026-10-26-25.jpg",
+      "createdAt": "2026-07-13T09:34:12Z",
+      "updatedAt": "2026-07-13T09:34:12Z"
+    },
+    {
+      "externalId": "7ff1697e-c0fa-41cf-8295-08ac8fe76d99",
+      "title": "Концепція безпеки для підприємств в Аугсбурзі: Стратегічна стійкість та комплексний захист 2026",
+      "slug": "",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384776_1781961805.jpg",
+      "createdAt": "2026-06-20T18:24:25Z",
+      "updatedAt": "2026-06-20T18:24:25Z"
+    },
+    {
+      "externalId": "85edbd51-5020-4d75-80d6-9d32d29be6e6",
+      "title": "Ganzheitliche Gebäudebetreuung 2026: Der Leitfaden für Entscheider in München und Augsburg",
+      "slug": "ganzheitliche-gebaudebetreuung-2026-der-leitfaden-fur-entscheider-in-munchen-und-augsburg",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322635_1782278608.jpg",
+      "createdAt": "2026-06-24T10:34:05Z",
+      "updatedAt": "2026-06-24T10:34:05Z"
+    },
+    {
+      "externalId": "891194ee-1d58-4087-ac87-a915230d4e26",
+      "title": "Diebstahlschutz für Produktionsbetriebe in Augsburg: Strategische Sicherheit 2026",
+      "slug": "diebstahlschutz-fur-produktionsbetriebe-in-augsburg-strategische-sicherheit-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384778_1782211284.jpg",
+      "createdAt": "2026-06-23T14:28:49Z",
+      "updatedAt": "2026-06-23T14:28:49Z"
+    },
+    {
+      "externalId": "91f40529-ee94-43c5-970c-4af8399c6f5a",
+      "title": "Sicherheitskonzept für Logistikzentren: Strategische Risikominimierung durch integrierte Systeme",
+      "slug": "sicherheitskonzept-fur-logistikzentren-strategische-risikominimierung-durch-integrierte-systeme",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322644_1783491883.jpg",
+      "createdAt": "2026-07-08T11:05:46Z",
+      "updatedAt": "2026-07-08T11:05:46Z"
+    },
+    {
+      "externalId": "92065696-d765-4d7e-a77f-1f5104f7e89d",
+      "title": "Revierwachdienst für Gewerbegebiete: Strategische Sicherheit und mobile Prävention 2026",
+      "slug": "revierwachdienst-fur-gewerbegebiete-strategische-sicherheit-und-mobile-pravention-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/revierwachdienst-fur-gewerbegebiete-strategische-sicherheit-und-mobile-pravention-2026.jpg?v=4e3b1189dfc0",
+      "createdAt": "2026-07-21T10:25:55Z",
+      "updatedAt": "2026-07-21T10:25:55Z"
+    },
+    {
+      "externalId": "928991d3-5930-4781-bf3b-e5b597a42e83",
+      "title": "Sicherheitsdienstleistungen für Unternehmen 2026: Strategien für maximale Resilienz",
+      "slug": "sicherheitsdienstleistungen-fur-unternehmen-2026-strategien-fur-maximale-resilienz",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/chatgpt-image-15-juli-2026-11-36-16.jpg",
+      "createdAt": "2026-07-15T10:01:15Z",
+      "updatedAt": "2026-07-15T10:01:15Z"
+    },
+    {
+      "externalId": "9994c6f0-1308-4524-a86a-5ca43abc015f",
+      "title": "Veranstaltungsschutz München: Leitfaden für professionelle Sicherheitskonzepte 2026",
+      "slug": "veranstaltungsschutz-munchen-leitfaden-fur-professionelle-sicherheitskonzepte-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2510049_1783843784.jpg",
+      "createdAt": "2026-07-12T10:06:50Z",
+      "updatedAt": "2026-07-12T10:06:50Z"
+    },
+    {
+      "externalId": "9a0f61c4-6803-48b0-8e96-12c234f66147",
+      "title": "Управління ризиками безпеки: Стратегічний посібник для компаній 2026",
+      "slug": "upravlinnia-rizikami-bezpeki-strategicnii-posibnik-dlia-kompanii-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322636_1782365757.jpg",
+      "createdAt": "2026-06-25T05:39:00Z",
+      "updatedAt": "2026-06-25T05:39:00Z"
+    },
+    {
+      "externalId": "9c167f32-ab78-45c2-ab0d-397a31368d43",
+      "title": "Захист від крадіжок для виробничих підприємств в Аугсбурзі: Стратегічна безпека 2026",
+      "slug": "zaxist-vid-kradizok-dlia-virobnicix-pidprijemstv-v-augsburzi-strategicna-bezpeka-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2457977_1782211325.jpg",
+      "createdAt": "2026-06-23T11:17:42Z",
+      "updatedAt": "2026-06-23T11:17:42Z"
+    },
+    {
+      "externalId": "a9fa4d54-160b-4784-84fc-56f4cfad68c3",
+      "title": "Sicherheitsaudit für Firmengebäude: Die strategische Checkliste für 2026",
+      "slug": "sicherheitsaudit-fur-firmengebaude-die-strategische-checkliste-fur-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322640_1782971297.jpg",
+      "createdAt": "2026-07-04T07:32:42Z",
+      "updatedAt": "2026-07-04T07:32:42Z"
+    },
+    {
+      "externalId": "aca14bc1-53a6-4b85-828e-d986ef52e0d4",
+      "title": "Sicherheitskonzept für Unternehmen in Augsburg: Strategische Resilienz und ganzheitlicher Schutz 2026",
+      "slug": "",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384776_1781961805.jpg",
+      "createdAt": "2026-06-20T18:24:37Z",
+      "updatedAt": "2026-06-21T08:32:08Z"
+    },
+    {
+      "externalId": "b0700431-be9e-48a7-9f30-6c9e87b9cd6e",
+      "title": "Reinigungsservice für Industriehallen: Der Leitfaden für operative Exzellenz 2026",
+      "slug": "reinigungsservice-fur-industriehallen-der-leitfaden-fur-operative-exzellenz-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322637_1782710554.jpg",
+      "createdAt": "2026-06-29T11:44:01Z",
+      "updatedAt": "2026-06-29T11:44:01Z"
+    },
+    {
+      "externalId": "b9ff16d0-2594-4dde-a245-85a3dde9b43a",
+      "title": "Schutz von kritischer Infrastruktur 2026: Strategien für operative Resilienz",
+      "slug": "schutz-von-kritischer-infrastruktur-2026-strategien-fur-operative-resilienz",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/schutz-von-kritischer-infrastruktur-2026-strategien-fur-operative-resilienz.jpg",
+      "createdAt": "2026-07-16T10:10:02Z",
+      "updatedAt": "2026-07-16T10:10:02Z"
+    },
+    {
+      "externalId": "bb3ac06d-17dd-4abe-9a01-38e8b1bcca51",
+      "title": "Промислове прибирання в Аугсбурзі: Стратегічне збереження цінності для вашого виробництва",
+      "slug": "promislove-pribirannia-v-augsburzi-strategicne-zberezennia-cinnosti-dlia-vasogo-virobnictva",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384780_1782373549.jpg",
+      "createdAt": "2026-06-25T07:53:14Z",
+      "updatedAt": "2026-06-25T07:53:14Z"
+    },
+    {
+      "externalId": "bb4ca75a-4426-49b3-a72f-ad74d4968518",
+      "title": "Sicherheitsanalyse für Gewerbeimmobilien: Strategische Risikoauditierung in Bayern",
+      "slug": "sicherheitsanalyse-fur-gewerbeimmobilien-strategische-risikoauditierung-in-bayern",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322641_1783066720.jpg",
+      "createdAt": "2026-07-03T08:22:21Z",
+      "updatedAt": "2026-07-03T08:22:21Z"
+    },
+    {
+      "externalId": "beab6aed-8078-4bdd-9b41-96f62f2226af",
+      "title": "Prävention von Vandalismus im Gewerbe: Mythen, Fakten und strategische Schutzkonzepte 2026",
+      "slug": "pravention-von-vandalismus-im-gewerbe-mythen-fakten-und-strategische-schutzkonzepte-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322634_1782211497.jpg",
+      "createdAt": "2026-06-23T11:31:54Z",
+      "updatedAt": "2026-06-23T11:31:54Z"
+    },
+    {
+      "externalId": "c0dab942-ad88-47e0-a5b7-55f32bf8ef2d",
+      "title": "Фасиліті-менеджмент Мюнхен 2026: Стратегічне обслуговування будівель для середнього бізнесу",
+      "slug": "fasiliti-menedzment-miunxen-2026-strategicne-obslugovuvannia-budivel-dlia-serednyogo-biznesu",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384777_1782016684.jpg",
+      "createdAt": "2026-06-22T12:37:44Z",
+      "updatedAt": "2026-06-22T12:37:44Z"
+    },
+    {
+      "externalId": "c6249f45-cf66-475a-88ca-40f29e5c3104",
+      "title": "Охорона об'єктів Мюнхен 2026: Стратегічне управління безпекою для підприємств",
+      "slug": "oxorona-objektiv-miunxen-2026-strategicne-upravlinnia-bezpekoiu-dlia-pidprijemstv",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384779_1782286990.jpg",
+      "createdAt": "2026-06-24T07:46:28Z",
+      "updatedAt": "2026-06-24T07:46:28Z"
+    },
+    {
+      "externalId": "d35469ea-70bf-4cba-818c-5a6ac9c65dc9",
+      "title": "Brandmeldeanlage aufschalten: Strategische Leitfaden für Unternehmen 2026",
+      "slug": "brandmeldeanlage-aufschalten-strategische-leitfaden-fur-unternehmen-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322643_1783405302.jpg",
+      "createdAt": "2026-07-07T10:45:15Z",
+      "updatedAt": "2026-07-07T10:45:15Z"
+    },
+    {
+      "externalId": "d36d6253-6161-4fc7-825a-8fcf31b07c1f",
+      "title": "Management von Sicherheitsrisiken: Ein strategischer Leitfaden für Unternehmen 2026",
+      "slug": "management-von-sicherheitsrisiken-ein-strategischer-leitfaden-fur-unternehmen-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322636_1782365757.jpg",
+      "createdAt": "2026-06-25T10:15:52Z",
+      "updatedAt": "2026-06-25T10:15:52Z"
+    },
+    {
+      "externalId": "d3d5f15d-fd25-4770-8971-56a75688afb4",
+      "title": "Комплексне обслуговування будівель 2026: Посібник для керівників у Мюнхені та Аугсбурзі",
+      "slug": "kompleksne-obslugovuvannia-budivel-2026-posibnik-dlia-kerivnikiv-u-miunxeni-ta-augsburzi",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322635_1782278608.jpg",
+      "createdAt": "2026-06-24T05:25:32Z",
+      "updatedAt": "2026-06-24T05:25:32Z"
+    },
+    {
+      "externalId": "d7022bc5-423d-4148-8ee4-d411516ab95e",
+      "title": "Ganzheitliche Gebäudebetreuung 2026: Der Leitfaden für Entscheider in München und Augsburg",
+      "slug": "ganzheitliche-gebaudebetreuung-2026-der-leitfaden-fur-entscheider-in-munchen-und-augsburg",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322635_1782278608.jpg",
+      "createdAt": "2026-06-24T10:23:56Z",
+      "updatedAt": "2026-06-24T10:23:56Z"
+    },
+    {
+      "externalId": "d973de0e-3dff-455f-83bb-cc6fc5865d9a",
+      "title": "Gebäudemanagement in München 2026: Strategische Werterhaltung und Sicherheit für Ihr Unternehmen",
+      "slug": "gebaudemanagement-in-munchen-2026-strategische-werterhaltung-und-sicherheit-fur-ihr-unternehmen",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2510045_1782642451.jpg",
+      "createdAt": "2026-06-28T10:30:43Z",
+      "updatedAt": "2026-06-28T10:30:43Z"
+    },
+    {
+      "externalId": "d98b2ade-66e7-423c-9146-7b1c8eb4a937",
+      "title": "Запобігання вандалізму в комерційних об'єктах: Міфи, факти та стратегічні концепції захисту 2026",
+      "slug": "zapobigannia-vandalizmu-v-komerciinix-objektax-mifi-fakti-ta-strategicni-koncepciyi-zaxistu-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322634_1782191109.jpg",
+      "createdAt": "2026-06-23T05:08:34Z",
+      "updatedAt": "2026-06-23T05:08:34Z"
+    },
+    {
+      "externalId": "ddb95656-72bb-42f9-9769-37b2d71b97ca",
+      "title": "Videofernüberwachung in Bayern: Intelligenter Schutz durch externe Notrufzentrale",
+      "slug": "videofernuberwachung-in-bayern-intelligenter-schutz-durch-externe-notrufzentrale",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322633_1782104576.jpg",
+      "createdAt": "2026-06-22T12:37:49Z",
+      "updatedAt": "2026-06-22T12:37:49Z"
+    },
+    {
+      "externalId": "e0e90cfa-ce8c-4bb4-8769-9e218894e159",
+      "title": "Outsourcing von Facility Services: Strategischer Vergleich und Leitfaden 2026",
+      "slug": "outsourcing-von-facility-services-strategischer-vergleich-und-leitfaden-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/chatgpt-image-14-juli-2026-10-09-35.jpg",
+      "createdAt": "2026-07-14T08:18:57Z",
+      "updatedAt": "2026-07-14T08:18:57Z"
+    },
+    {
+      "externalId": "e950a933-271c-448f-992b-55ae1755157c",
+      "title": "Überwachung von Lagerhallen 2026: Strategien für maximale Sicherheit und Effizienz",
+      "slug": "",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322632_1781900790.jpg",
+      "createdAt": "2026-06-20T07:09:52Z",
+      "updatedAt": "2026-06-20T07:09:52Z"
+    },
+    {
+      "externalId": "f19dbd95-10dc-48e1-9e7b-83c53a6b2490",
+      "title": "Охорона об'єктів Мюнхен 2026: Стратегічне управління безпекою для підприємств",
+      "slug": "oxorona-objektiv-miunxen-2026-strategicne-upravlinnia-bezpekoiu-dlia-pidprijemstv",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2384779_1782286990.jpg",
+      "createdAt": "2026-06-24T14:15:29Z",
+      "updatedAt": "2026-06-24T14:15:29Z"
+    },
+    {
+      "externalId": "f2378a77-2538-4e30-9b30-0742e7306e47",
+      "title": "Optimierung von Reinigungsprozessen in der Industrie: Strategien für 2026",
+      "slug": "optimierung-von-reinigungsprozessen-in-der-industrie-strategien-fur-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/wb-cleaning-blog-reinigungsprozesse-industrie-2026.jpg?v=756f97de9022",
+      "createdAt": "2026-07-24T09:02:14Z",
+      "updatedAt": "2026-07-24T09:02:14Z"
+    },
+    {
+      "externalId": "f87ff16c-4977-479d-8d6a-bb94cb178720",
+      "title": "Комплексне обслуговування будівель 2026: Посібник для керівників у Мюнхені та Аугсбурзі",
+      "slug": "kompleksne-obslugovuvannia-budivel-2026-posibnik-dlia-kerivnikiv-u-miunxeni-ta-augsburzi",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322635_1782278608.jpg",
+      "createdAt": "2026-06-24T05:26:35Z",
+      "updatedAt": "2026-06-24T05:26:35Z"
+    },
+    {
+      "externalId": "fd8364db-9607-4eea-8782-5e777a30ee84",
+      "title": "Infrastrukturelles Facility Management München: Strategische Gebäudebetreuung 2026",
+      "slug": "infrastrukturelles-facility-management-munchen-strategische-gebaudebetreuung-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322638_1782796365.jpg",
+      "createdAt": "2026-06-30T10:13:14Z",
+      "updatedAt": "2026-06-30T10:13:14Z"
+    },
+    {
+      "externalId": "fdd02000-e918-4e3f-9338-1bd34e4bedbf",
+      "title": "Sicherheitslösungen für Unternehmen 2026: Strategische Resilienz durch integrierte Konzepte",
+      "slug": "",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322628_1781726579.jpg",
+      "createdAt": "2026-06-20T10:17:19Z",
+      "updatedAt": "2026-06-20T10:17:19Z"
+    },
+    {
+      "externalId": "fe317068-8e42-4631-9ab1-10afd3fa861e",
+      "title": "Notfallreaktionsplan für Unternehmen: Strategischer Leitfaden und Struktur für 2026",
+      "slug": "notfallreaktionsplan-fur-unternehmen-strategischer-leitfaden-und-struktur-fur-2026",
+      "coverUrl": "https://getautoseo.com/storage/hero_images/article_2322646_1783616438.jpg",
+      "createdAt": "2026-07-10T10:01:32Z",
+      "updatedAt": "2026-07-10T10:01:32Z"
+    }
+  ]
+}

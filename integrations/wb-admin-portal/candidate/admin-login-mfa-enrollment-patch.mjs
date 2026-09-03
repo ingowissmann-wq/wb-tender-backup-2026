@@ -11,6 +11,10 @@ export function patchAdminLoginMfa(root) {
   const clientPath = path.join(assetsPath, asset);
 
   let api = fs.readFileSync(apiPath, "utf8");
+  const importsBefore = `import nodemailer from "nodemailer";`;
+  const importsAfter = `import nodemailer from "nodemailer";\nimport QRCode from "qrcode";`;
+  if (!api.includes(importsBefore)) throw new Error("Expected production nodemailer import not found");
+  api = api.replace(importsBefore, importsAfter);
   const loginBefore = `    if (!user.mfa_required || !user.mfa_secret_encrypted)
         return reply.code(403).send({ error: "mfa_setup_required" });
     const challenge = randomToken();
@@ -31,12 +35,14 @@ export function patchAdminLoginMfa(root) {
         preauth.mfaSetupSecret = encryptSecret(secret);
         await redis.set(\`iam:preauth:\${hashToken(challenge)}\`, JSON.stringify(preauth), "EX", 300, "NX");
         const label = encodeURIComponent(user.email), issuer = encodeURIComponent("WB Holding Admin");
+        const uri = \`otpauth://totp/\${issuer}:\${label}?secret=\${secret}&issuer=\${issuer}&algorithm=SHA1&digits=6&period=30\`;
         return {
             mfaRequired: true,
             mfaSetupRequired: true,
             challenge,
             secret,
-            uri: \`otpauth://totp/\${issuer}:\${label}?secret=\${secret}&issuer=\${issuer}&algorithm=SHA1&digits=6&period=30\`,
+            uri,
+            qrDataUrl: await QRCode.toDataURL(uri, { errorCorrectionLevel: "M", margin: 2, width: 240 }),
         };
     }
     await redis.set(\`iam:preauth:\${hashToken(challenge)}\`, JSON.stringify(preauth), "EX", 300, "NX");
@@ -81,7 +87,7 @@ export function patchAdminLoginMfa(root) {
   const replacements = [
     ["M(F.challenge),C(\"mfa\")", "M(F),C(\"mfa\")"],
     ["{challenge:R,code:X.get(\"code\")}", "{challenge:R.challenge,code:X.get(\"code\")}"],
-    ["children:\"Zwei-Faktor-Authentifizierung\"}),i.jsx(\"p\",{children:\"Geben Sie den sechsstelligen Code Ihrer Authenticator-App oder einen gültigen Wiederherstellungscode ein.\"})", "children:\"Zwei-Faktor-Authentifizierung\"}),R.mfaSetupRequired&&i.jsxs(i.Fragment,{children:[i.jsx(\"p\",{className:\"notice\",children:\"Richten Sie jetzt die verpflichtende Zwei-Faktor-Authentifizierung in Ihrer Authenticator-App ein. Eine Sitzung wird erst nach erfolgreicher Codeprüfung erstellt.\"}),i.jsxs(\"label\",{children:[\"Manueller Schlüssel\",i.jsx(\"input\",{readOnly:!0,value:R.secret})]}),i.jsxs(\"label\",{children:[\"Konfigurations-URI\",i.jsx(\"textarea\",{readOnly:!0,value:R.uri})]})]}),i.jsx(\"p\",{children:R.mfaSetupRequired?\"Geben Sie zur Bestätigung den sechsstelligen Code Ihrer Authenticator-App ein.\":\"Geben Sie den sechsstelligen Code Ihrer Authenticator-App oder einen gültigen Wiederherstellungscode ein.\"})"],
+    ["children:\"Zwei-Faktor-Authentifizierung\"}),i.jsx(\"p\",{children:\"Geben Sie den sechsstelligen Code Ihrer Authenticator-App oder einen gültigen Wiederherstellungscode ein.\"})", "children:\"Zwei-Faktor-Authentifizierung\"}),R.mfaSetupRequired&&i.jsxs(i.Fragment,{children:[i.jsx(\"p\",{className:\"notice\",children:\"Richten Sie jetzt die verpflichtende Zwei-Faktor-Authentifizierung in Ihrer Authenticator-App ein. Eine Sitzung wird erst nach erfolgreicher Codeprüfung erstellt.\"}),i.jsx(\"img\",{src:R.qrDataUrl,alt:\"QR-Code für die Authenticator-App\",width:240,height:240}),i.jsxs(\"label\",{children:[\"Manueller Schlüssel\",i.jsx(\"input\",{readOnly:!0,value:R.secret})]}),i.jsxs(\"label\",{children:[\"Konfigurations-URI\",i.jsx(\"textarea\",{readOnly:!0,value:R.uri})]})]}),i.jsx(\"p\",{children:R.mfaSetupRequired?\"Geben Sie zur Bestätigung den sechsstelligen Code Ihrer Authenticator-App ein.\":\"Geben Sie den sechsstelligen Code Ihrer Authenticator-App oder einen gültigen Wiederherstellungscode ein.\"})"],
   ];
   for (const [before, after] of replacements) {
     if (!client.includes(before)) throw new Error(`Expected production client marker not found: ${before.slice(0, 48)}`);
