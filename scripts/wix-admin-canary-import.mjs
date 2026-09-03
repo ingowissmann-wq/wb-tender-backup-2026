@@ -173,7 +173,11 @@ try {
   for (const item of payload.team) {
     const image = await media(item.media.image, `${item.externalId}-team`);
     const data = { ...item.data, imageId: image?.id || "", imageUrl: image?.url || "", profilePicture: image?.url || "", imageAlt: item.data.name };
-    upsertContent.run("teammembers", item.externalId, JSON.stringify(data), data.status, data.sortOrder, item.createdAt, item.updatedAt); stats.team++;
+    upsertContent.run("teammembers", item.externalId, JSON.stringify(data), data.status, data.sortOrder, item.createdAt, item.updatedAt);
+    const publicItem = { ...item, title: item.data.name, status: data.status };
+    const resource = await upsertCms("team", publicItem, data);
+    await link(resource.id, image, "profile-image", item.data.name);
+    stats.team++;
   }
 
   db.exec("COMMIT");
