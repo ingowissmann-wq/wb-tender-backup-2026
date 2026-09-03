@@ -54,8 +54,10 @@ kept a correct delivery from completing:
 
 ## Fix
 
-Commits `93ac2813f418b4e1140588944a2a42ea2ef23baf` and
-`32f2ad0` contain the handler and public-rendering fixes:
+Local commits `93ac2813f418b4e1140588944a2a42ea2ef23baf` and
+`32f2ad0` contain the handler and public-rendering fixes. The complete final
+file set is published on GitHub as commit
+`4375134e4b41cebefaec3d9a0c5cfdaa5d438994`:
 
 - target the exact tenant-scoped partial unique index;
 - preserve the already deployed URL-key, raw-body compatibility and explicit
