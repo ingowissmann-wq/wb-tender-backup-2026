@@ -58,7 +58,7 @@ rollback() {
 }
 trap rollback ERR
 
-docker exec "$C" sh -c 'cp /tmp/owner-auth.patched.mjs /app/platform/owner-auth.mjs'
+docker exec --user 0:0 "$C" cp /tmp/owner-auth.patched.mjs "$TARGET"
 APPLIED=true
 docker restart "$C" >/dev/null
 
