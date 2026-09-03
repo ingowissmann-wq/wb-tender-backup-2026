@@ -90,18 +90,18 @@ async function media(value, title) {
 }
 
 async function findResource(type, item) {
-  const found = await client.query(`SELECT * FROM app.resources WHERE resource_type=$1 AND deleted_at IS NULL
-    AND (external_id=$2 OR ($3<>'' AND data->>'slug'=$3) OR title=$4)
-    ORDER BY CASE WHEN external_id=$2 THEN 0 WHEN data->>'slug'=$3 THEN 1 ELSE 2 END LIMIT 1`,
-    [type, item.externalId, String(item.data?.slug || item.slug || ""), item.title]);
+  const found = await client.query(`SELECT * FROM app.resources WHERE tenant_id=$1 AND resource_type=$2 AND deleted_at IS NULL
+    AND (external_id=$3 OR ($4<>'' AND data->>'slug'=$4) OR title=$5)
+    ORDER BY CASE WHEN external_id=$3 THEN 0 WHEN data->>'slug'=$4 THEN 1 ELSE 2 END LIMIT 1`,
+    [tenantId, type, item.externalId, String(item.data?.slug || item.slug || ""), item.title]);
   return found.rows[0] || null;
 }
 
 async function link(resourceId, file, kind, altText) {
   if (!file) return;
-  await client.query(`INSERT INTO app.resource_files(resource_id,file_id,kind,metadata) VALUES($1,$2,$3,$4)
+  await client.query(`INSERT INTO app.resource_files(resource_id,file_id,kind,metadata,tenant_id) VALUES($1,$2,$3,$4,$5)
     ON CONFLICT(resource_id,file_id) DO UPDATE SET kind=EXCLUDED.kind,metadata=EXCLUDED.metadata`,
-    [resourceId, file.id, kind, { altText, position: kind }]);
+    [resourceId, file.id, kind, { altText, position: kind }, tenantId]);
 }
 
 async function upsertCms(type, item, additions) {
@@ -113,9 +113,9 @@ async function upsertCms(type, item, additions) {
   }
   const owner = (await client.query("SELECT id FROM iam.users WHERE lower(email)=lower($1) LIMIT 1", ["admin@wb-holding.ag"])).rows[0];
   if (!owner) throw new Error("isolated_admin_owner_missing");
-  return (await client.query(`INSERT INTO app.resources(domain,resource_type,external_id,title,status,data,owner_id,created_at,updated_at)
-    VALUES('cms',$1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`, [type, item.externalId, item.title, item.status || "published",
-    JSON.stringify({ ...item.data, ...additions }), owner.id, item.createdAt || new Date().toISOString(), item.updatedAt || new Date().toISOString()])).rows[0];
+  return (await client.query(`INSERT INTO app.resources(domain,resource_type,external_id,title,status,data,owner_id,created_at,updated_at,tenant_id)
+    VALUES('cms',$1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [type, item.externalId, item.title, item.status || "published",
+    JSON.stringify({ ...item.data, ...additions }), owner.id, item.createdAt || new Date().toISOString(), item.updatedAt || new Date().toISOString(), tenantId])).rows[0];
 }
 
 try {
