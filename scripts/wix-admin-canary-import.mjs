@@ -46,7 +46,7 @@ async function media(value, title) {
   if (bytes.length < 100 || bytes.length > 10_000_000) throw new Error(`invalid_media_size:${bytes.length}`);
   const [mime, extension] = detect(bytes);
   const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
-  let row = (await client.query("SELECT * FROM files.objects WHERE sha256=$1 AND size_bytes=$2 AND protection_class='public' AND deleted_at IS NULL LIMIT 1", [sha256, bytes.length])).rows[0];
+  let row = (await client.query("SELECT * FROM files.objects WHERE sha256=$1 AND size_bytes=$2 AND protection_class='public' ORDER BY deleted_at NULLS FIRST LIMIT 1", [sha256, bytes.length])).rows[0];
   if (!row) {
     const id = crypto.randomUUID(), storageName = `${sha256}-${id}`;
     await fsp.writeFile(path.join(privateRoot, storageName), bytes, { mode: 0o600 });
@@ -61,6 +61,7 @@ async function media(value, title) {
       createdFiles.push(target);
       stats.mediaDownloaded++;
     } else stats.mediaReused++;
+    row = (await client.query("UPDATE files.objects SET deleted_at=NULL,missing_binary=false,verified=true WHERE id=$1 RETURNING *", [row.id])).rows[0];
   }
   return { id: row.id, url: `/cms-media/${row.id}` };
 }
@@ -75,8 +76,9 @@ async function findResource(type, item) {
 
 async function link(resourceId, file, kind, altText) {
   if (!file) return;
-  const exists = await client.query("SELECT 1 FROM app.resource_files WHERE resource_id=$1 AND file_id=$2 AND kind=$3", [resourceId, file.id, kind]);
-  if (!exists.rowCount) await client.query("INSERT INTO app.resource_files(resource_id,file_id,kind,metadata) VALUES($1,$2,$3,$4)", [resourceId, file.id, kind, { altText, position: kind }]);
+  await client.query(`INSERT INTO app.resource_files(resource_id,file_id,kind,metadata) VALUES($1,$2,$3,$4)
+    ON CONFLICT(resource_id,file_id) DO UPDATE SET kind=EXCLUDED.kind,metadata=EXCLUDED.metadata`,
+    [resourceId, file.id, kind, { altText, position: kind }]);
 }
 
 async function upsertCms(type, item, additions) {
@@ -98,7 +100,7 @@ try {
   db.exec("BEGIN IMMEDIATE");
   db.exec(`CREATE TABLE IF NOT EXISTS content_items(
     collection TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'draft',
-    sort_order INTEGER NOT NULL DEFAULT 999,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+    sort_order INTEGER DEFAULT 999,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
     PRIMARY KEY(collection,id));
     CREATE INDEX IF NOT EXISTS content_items_collection_updated ON content_items(collection,updated_at DESC);
     CREATE TABLE IF NOT EXISTS assets(id TEXT PRIMARY KEY,disk_name TEXT NOT NULL UNIQUE,original_name TEXT NOT NULL,
