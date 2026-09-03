@@ -11,7 +11,7 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const normalize = value => String(value || "").trim().toLocaleLowerCase("de-DE");
 
 function candidateFileIds(data) {
-  const keys = ["fileId", "imageId", "assetId", "objectId", "mediaId", "coverImageId", "cardImageId"];
+  const keys = ["coverImageId", "cardImageId", "imageId", "fileId", "assetId", "objectId", "mediaId"];
   const found = [];
   for (const key of keys) {
     const value = data?.[key];
@@ -20,30 +20,55 @@ function candidateFileIds(data) {
   return found;
 }
 
-try {
-  await client.query("BEGIN");
+function topicFor(title) {
+  const value = normalize(title);
+  if (/notruf|serviceleitstelle/.test(value)) return "notruf";
+  if (/betriebssanit|notfallsanit|notfallmanagement/.test(value)) return "betriebssanit";
+  if (/facility/.test(value)) return "facility";
+  if (/reinig/.test(value)) return "reinig";
+  if (/videoüberwach|sicherheitstechnik/.test(value)) return "sicherheitstechnik";
+  if (/interventionsdienst|werkschutz|objektschutz/.test(value)) return "objektschutz";
+  return "sicherheitsdienst";
+}
 
+function serviceTopic(resource) {
+  const value = normalize(`${resource.title} ${resource.data?.slug || ""}`);
+  if (/notruf|serviceleitstelle/.test(value)) return "notruf";
+  if (/betriebssanit/.test(value)) return "betriebssanit";
+  if (/facility/.test(value)) return "facility";
+  if (/reinig/.test(value)) return "reinig";
+  if (/sicherheitstechnik/.test(value)) return "sicherheitstechnik";
+  if (/objektschutz/.test(value)) return "objektschutz";
+  if (/sicherheitsdienst/.test(value)) return "sicherheitsdienst";
+  return "";
+}
+
+async function resolveTenantId() {
   const userHasTenant = (await client.query(`SELECT EXISTS(
     SELECT 1 FROM information_schema.columns
     WHERE table_schema='iam' AND table_name='users' AND column_name='tenant_id'
   ) AS present`)).rows[0].present;
 
-  let tenantId = null;
   if (userHasTenant) {
-    tenantId = (await client.query(
+    const owner = (await client.query(
       "SELECT tenant_id FROM iam.users WHERE lower(email)=lower($1) AND tenant_id IS NOT NULL LIMIT 1",
       ["admin@wb-holding.ag"]
-    )).rows[0]?.tenant_id || null;
+    )).rows[0];
+    if (owner?.tenant_id) return owner.tenant_id;
   }
-  if (!tenantId) {
-    const tenants = (await client.query(`SELECT tenant_id,count(*)::int AS total
-      FROM files.objects
-      WHERE tenant_id IS NOT NULL
-      GROUP BY tenant_id
-      ORDER BY total DESC`)).rows;
-    if (tenants.length !== 1) throw new Error(`isolated_canary_tenant_not_unique:${tenants.length}`);
-    tenantId = tenants[0].tenant_id;
-  }
+
+  const tenants = (await client.query(`SELECT tenant_id,count(*)::int AS total
+    FROM files.objects
+    WHERE tenant_id IS NOT NULL
+    GROUP BY tenant_id
+    ORDER BY total DESC`)).rows;
+  if (tenants.length !== 1) throw new Error(`isolated_canary_tenant_not_unique:${tenants.length}`);
+  return tenants[0].tenant_id;
+}
+
+try {
+  await client.query("BEGIN");
+  const tenantId = await resolveTenantId();
   await client.query("SELECT set_config('app.tenant_id',$1,true)", [tenantId]);
 
   const blogs = (await client.query(`
@@ -57,16 +82,17 @@ try {
     ORDER BY updated_at DESC
   `, [tenantId])).rows;
 
-  const mediaResources = (await client.query(`
+  const services = (await client.query(`
     SELECT id,title,data
     FROM app.resources
     WHERE tenant_id=$1
+      AND resource_type='services'
       AND deleted_at IS NULL
-      AND title LIKE 'AutoSEO hero %'
+      AND status='published'
   `, [tenantId])).rows;
 
   const links = (await client.query(`
-    SELECT resource_id,file_id,kind
+    SELECT resource_id,file_id,kind,metadata
     FROM app.resource_files
     WHERE tenant_id=$1
   `, [tenantId])).rows;
@@ -80,44 +106,58 @@ try {
   const fileRows = (await client.query(`
     SELECT id,storage_name,mime_type,size_bytes
     FROM files.objects
-    WHERE tenant_id=$1 AND deleted_at IS NULL AND protection_class='public'
+    WHERE tenant_id=$1
+      AND deleted_at IS NULL
+      AND protection_class='public'
+      AND verified=true
   `, [tenantId])).rows;
   const filesById = new Map(fileRows.map(row => [row.id, row]));
 
-  const heroes = new Map();
-  for (const media of mediaResources) {
-    const title = String(media.title || "").replace(/^AutoSEO hero\s+/i, "");
-    const candidates = [...(linksByResource.get(media.id) || []), ...candidateFileIds(media.data)];
-    const file = candidates.map(id => filesById.get(id)).find(Boolean);
-    if (!file) continue;
-    const key = normalize(title);
-    if (!heroes.has(key)) heroes.set(key, []);
-    heroes.get(key).push({ mediaId: media.id, file });
-  }
-
-  const plan = [];
-  for (const blog of blogs) {
-    const matches = heroes.get(normalize(blog.title)) || [];
-    if (matches.length !== 1) continue;
-    const [{ file }] = matches;
-    const binary = path.join(privateRoot, file.storage_name);
-    const stat = await fs.stat(binary);
-    if (!stat.isFile() || stat.size !== Number(file.size_bytes)) {
-      throw new Error(`invalid_media_binary:${file.id}`);
+  async function validFile(resource) {
+    const ids = [...candidateFileIds(resource.data), ...(linksByResource.get(resource.id) || [])];
+    for (const id of [...new Set(ids)]) {
+      const file = filesById.get(id);
+      if (!file) continue;
+      try {
+        const stat = await fs.stat(path.join(privateRoot, file.storage_name));
+        if (stat.isFile() && stat.size === Number(file.size_bytes)) return file;
+      } catch {}
     }
-    plan.push({ blog, file });
+    return null;
   }
 
-  if (plan.length < 10) {
-    throw new Error(`expected_at_least_10_unambiguous_blog_image_links_found_${plan.length}`);
+  const serviceFiles = new Map();
+  for (const service of services) {
+    const topic = serviceTopic(service);
+    if (!topic || serviceFiles.has(topic)) continue;
+    const file = await validFile(service);
+    if (file) serviceFiles.set(topic, { file, serviceId: service.id, serviceTitle: service.title });
+  }
+
+  const requiredTopics = [...new Set(blogs.map(blog => topicFor(blog.title)))];
+  const missingTopics = requiredTopics.filter(topic => !serviceFiles.has(topic));
+  if (missingTopics.length) throw new Error(`missing_verified_service_images:${missingTopics.join(",")}`);
+
+  const plan = blogs.map(blog => {
+    const topic = topicFor(blog.title);
+    const source = serviceFiles.get(topic);
+    return { blog, topic, ...source };
+  });
+
+  if (plan.length < 10 || plan.length !== blogs.length) {
+    throw new Error(`incomplete_blog_image_plan:${plan.length}_of_${blogs.length}`);
   }
 
   const backup = {
     createdAt: new Date().toISOString(),
     tenantId,
-    changes: plan.map(({ blog, file }) => ({
+    strategy: "verified-own-cms-service-images",
+    changes: plan.map(({ blog, file, topic, serviceId, serviceTitle }) => ({
       resourceId: blog.id,
       title: blog.title,
+      topic,
+      sourceServiceId: serviceId,
+      sourceServiceTitle: serviceTitle,
       previousData: blog.data,
       fileId: file.id,
       previousLinks: links.filter(link => link.resource_id === blog.id)
@@ -157,10 +197,16 @@ try {
       AND COALESCE(data->>'cardImageUrl','') LIKE '/cms-media/%'
   `, [tenantId, plan.map(item => item.blog.id)])).rows[0].total;
 
-  if (verified !== plan.length) throw new Error(`verification_mismatch_${verified}_of_${plan.length}`);
+  if (verified !== plan.length) throw new Error(`verification_mismatch:${verified}_of_${plan.length}`);
 
   await client.query("COMMIT");
-  console.log(JSON.stringify({ ok: true, linked: plan.length, verified, titles: plan.map(item => item.blog.title) }));
+  console.log(JSON.stringify({
+    ok: true,
+    linked: plan.length,
+    verified,
+    strategy: "verified-own-cms-service-images",
+    assignments: plan.map(item => ({ title: item.blog.title, image: item.serviceTitle }))
+  }));
 } catch (error) {
   try { await client.query("ROLLBACK"); } catch {}
   throw error;
