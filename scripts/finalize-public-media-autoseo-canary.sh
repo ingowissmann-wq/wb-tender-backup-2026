@@ -52,6 +52,8 @@ if public_line not in text:
         include /etc/nginx/proxy_params;
         proxy_http_version 1.1;
         proxy_read_timeout 60s;
+        add_header Access-Control-Allow-Origin "https://www.wb-holding.ag" always;
+        add_header Vary "Origin" always;
     }
 
 '''
