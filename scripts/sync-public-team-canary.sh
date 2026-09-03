@@ -4,8 +4,8 @@ set -Eeuo pipefail
 C=wb-admin-rehearsal-auth-1
 EXPECTED_IMAGE='sha256:871f89c205b68d43043fa06c25a5e3a5a7083f550ab7d41e2b8cd950b11efe86'
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-WORK="/srv/wb-tender-recovery/admin-runtime-rehearsal-4/public-team-sync-\${STAMP}"
-ROOT=$(cd -- "$(dirname -- "\${BASH_SOURCE[0]}")/.." && pwd)
+WORK="/srv/wb-tender-recovery/admin-runtime-rehearsal-4/public-team-sync-${STAMP}"
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
 test "$(docker inspect "$C" --format '{{.State.Running}}')" = true
 test "$(docker inspect "$C" --format '{{.Image}}')" = "$EXPECTED_IMAGE"
