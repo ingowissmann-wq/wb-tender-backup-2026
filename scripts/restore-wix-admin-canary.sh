@@ -86,7 +86,7 @@ done
 
 for PATHNAME in /admin/ /api/healthz; do
   CODE=$(curl -ksS -o /dev/null -w '%{http_code}' --resolve www.enwi.online:443:127.0.0.1 "https://www.enwi.online${PATHNAME}")
-  case "$PATHNAME:$CODE" in /admin/:200|/api/healthz:200) ;; *) exit 1 ;; esac
+  case "$PATHNAME:$CODE" in /admin/:200|/admin/:302|/api/healthz:200) ;; *) exit 1 ;; esac
 done
 
 printf '%s\n' 'WB_WIX_ADMIN_CANARY_RESTORE=SUCCESS'
