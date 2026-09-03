@@ -5,6 +5,7 @@ IMAGE="sha256:871f89c205b68d43043fa06c25a5e3a5a7083f550ab7d41e2b8cd950b11efe86"
 docker image inspect "$IMAGE" >/dev/null
 
 docker run --rm \
+  --interactive \
   --network none \
   --user 0 \
   --entrypoint node \
