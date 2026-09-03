@@ -13,9 +13,14 @@ TMP_ENWI=$(mktemp)
 mkdir -p "$WORK"
 trap 'rm -f "$TMP_CFG" "$TMP_ENWI"' EXIT
 
-test "$(docker inspect "$C" --format '{{.State.Running}}')" = true
-test "$(docker inspect "$C" --format '{{.Image}}')" = "$EXPECTED_IMAGE"
-test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:4341/api/healthz)" = 200
+ACTUAL_RUNNING=$(docker inspect "$C" --format '{{.State.Running}}')
+ACTUAL_IMAGE=$(docker inspect "$C" --format '{{.Image}}')
+HEALTH_CODE=$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:4341/api/healthz || true)
+if test "$ACTUAL_RUNNING" != true || test "$ACTUAL_IMAGE" != "$EXPECTED_IMAGE" || test "$HEALTH_CODE" != 200; then
+  printf 'preflight_blocked=canary_identity_or_health running=%s image=%s health=%s\n' "$ACTUAL_RUNNING" "$ACTUAL_IMAGE" "$HEALTH_CODE" >&2
+  exit 41
+fi
+printf '%s\n' 'preflight=canary_identity_and_health_ok'
 
 ENWI_CFG=$(readlink -f /etc/nginx/sites-enabled/wb-tender-www.conf)
 test -f "$ENWI_CFG"
@@ -24,9 +29,24 @@ test -n "$MEDIA_INCLUDE"
 test -f "$MEDIA_INCLUDE"
 MEDIA_ID=$(awk '$1 == "location" && $2 == "=" && $3 ~ /^\/cms-media\/[0-9a-f-]+$/ {sub("^/cms-media/", "", $3); print $3; exit}' "$MEDIA_INCLUDE")
 test -n "$MEDIA_ID"
+printf '%s\n' 'preflight=existing_canary_media_include_ok'
 
-mapfile -t CANDIDATES < <(grep -RIlE 'server_name[^;]*(^|[[:space:]])(www[.])?wb-holding[.]ag([[:space:]]|;)' /etc/nginx/sites-enabled 2>/dev/null | while read -r f; do readlink -f "$f"; done | sort -u)
+mapfile -t CANDIDATES < <(
+  nginx -T 2>&1 |
+    awk '
+      /^# configuration file \/.*:$/ {
+        file=$0
+        sub(/^# configuration file /, "", file)
+        sub(/:$/, "", file)
+        next
+      }
+      /server_name[^;]*www[.]wb-holding[.]ag/ && file != "" { print file }
+    ' |
+    while read -r f; do test -f "$f" && readlink -f "$f"; done |
+    sort -u
+)
 test "${#CANDIDATES[@]}" -ge 1
+printf 'preflight=active_public_vhost_candidates_ok count=%s\n' "${#CANDIDATES[@]}"
 
 PUBLIC_CFG=$(
   python3 - "$MEDIA_INCLUDE" "${CANDIDATES[@]}" <<'PY'
@@ -61,6 +81,7 @@ PY
 )
 
 test -f "$PUBLIC_CFG"
+printf 'preflight=public_tls_vhost_ok file=%s\n' "$PUBLIC_CFG"
 PUBLIC_BACKUP="$WORK/$(basename "$PUBLIC_CFG").before"
 cp -a "$PUBLIC_CFG" "$PUBLIC_BACKUP"
 ENWI_BACKUP="$WORK/$(basename "$ENWI_CFG").before"
