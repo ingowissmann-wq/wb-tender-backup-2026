@@ -3,7 +3,7 @@ import { customerIdentityHash, hashVerificationToken, verificationToken, Unconfi
 import {
   MODULE_CATALOG, MODULE_KEYS, SUITE_PRODUCT_KEY, assessPlanChange, effectiveAccess,
   moduleAccess, navigationCatalog, normalizeModuleKey, normalizePlanCode,
-  resolveModuleEntitlements, technicalCapabilities, transitionSubscription,
+  resolveModuleEntitlements, technicalCapabilities, transitionSubscription, APPROVED_TENDER_PLAN_PRICES,
 } from "./saas-catalog.mjs";
 import { withTenantContext } from "./tenant-context.mjs";
 
@@ -96,7 +96,9 @@ export async function registerPendingTenant(client, input, { verificationPepper,
   const tenantId = crypto.randomUUID(), slug = `account-${tenantId.slice(0, 12)}`;
   await client.query("BEGIN");
   try {
-    const availablePlan = await client.query("SELECT 1 FROM saas.plans WHERE code=$1 AND active AND price_status='APPROVED' AND recommended_monthly_price_minor IS NOT NULL", [plan]);
+    const expectedPrice = APPROVED_TENDER_PLAN_PRICES[plan];
+    if (!expectedPrice) throw Object.assign(new Error("plan_not_available"), { statusCode: 409 });
+    const availablePlan = await client.query("SELECT 1 FROM saas.plans WHERE code=$1 AND active AND price_status='APPROVED' AND recommended_monthly_price_minor=$2", [plan, expectedPrice]);
     if (!availablePlan.rowCount) throw Object.assign(new Error("plan_not_available"), { statusCode: 409 });
     await client.query("SELECT set_config('app.tenant_id',$1,true)", [tenantId]);
     await client.query("INSERT INTO saas.tenants(id,slug,display_name,customer_identity_hash) VALUES($1,$2,$3,$4)", [tenantId, slug, company, identityHash]);

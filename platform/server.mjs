@@ -18,6 +18,7 @@ import { registerTenantPortalRoutes } from "./tenant-portal.mjs";
 import { SmtpEmailAdapter, StripeBillingAdapter, UnconfiguredBillingAdapter, UnconfiguredEmailAdapter } from "./saas-adapters.mjs";
 import { TenantFilesystemStorage, UnconfiguredTenantStorage } from "./tenant-storage.mjs";
 import { PostgresLoginStateStore, PostgresSaasSessionStore, SAAS_LOGIN_PATH, SaasOidcClient, registerSaasIamRoutes } from "./saas-iam.mjs";
+import { registerAdminAuth } from "./admin-auth.mjs";
 import { decoratePortalNavigation } from "./portal-navigation.mjs";
 import { loadTenderLinkEvidence } from "./tender-link-evidence.mjs";
 import { registerLiveSubmissionRoutes } from "./submission-live-routes.mjs";
@@ -35,8 +36,8 @@ const enabled =
   process.env.TENDER_PILOT_ENABLED === "true";
 const saasRequested = process.env.WB_TENDER_SAAS_ENABLED === "true";
 const stripeProviderConfigured = process.env.SAAS_BILLING_ADAPTER === "stripe"
-  && Boolean(process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET_KEY_FILE)
-  && Boolean(process.env.STRIPE_WEBHOOK_SECRET || process.env.STRIPE_WEBHOOK_SECRET_FILE)
+  && Boolean(process.env.STRIPE_SECRET_KEY_FILE)
+  && Boolean(process.env.STRIPE_WEBHOOK_SECRET_FILE)
   && /^https:\/\//.test(String(process.env.WB_TENDER_PUBLIC_BASE_URL || ""));
 // The commercial surface remains entirely dark unless the selected billing
 // provider has all configuration required for checkout and verified webhooks.
@@ -71,13 +72,16 @@ const sendAsset = (reply, name, type, { immutable = false } = {}) => {
     .type(type)
     .send(current.body);
 };
-const secret = (name) =>
-  process.env[name] || readFileSync(process.env[`${name}_FILE`], "utf8").trim();
-const optionalSecret = (name) => process.env[name] || (process.env[`${name}_FILE`] ? readFileSync(process.env[`${name}_FILE`], "utf8").trim() : "");
 const fileOnlySecret = (name) => {
   if (process.env[name]) throw new Error(`inline_secret_forbidden_${name.toLowerCase()}`);
   const path = process.env[`${name}_FILE`];
   return path ? readFileSync(path, "utf8").replace(/\r?\n$/, "") : "";
+};
+const optionalSecret = fileOnlySecret;
+const secret = (name) => {
+  const value = fileOnlySecret(name);
+  if (!value) throw new Error(`${name.toLowerCase()}_file_required`);
+  return value;
 };
 const readOnlyCandidate = process.env.WB_TENDER_READ_ONLY_CANDIDATE === "true";
 const pool = new pg.Pool({
@@ -92,6 +96,9 @@ const app = Fastify({
   trustProxy: true,
 });
 await app.register(cookie);
+const sessionPepper = secret("SESSION_PEPPER");
+const fieldEncryptionKeyHex = secret("FIELD_ENCRYPTION_KEY");
+if (!/^[0-9a-f]{64}$/i.test(fieldEncryptionKeyHex)) throw new Error("field_encryption_key_invalid");
 await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
 await app.register(helmet, {
   contentSecurityPolicy: {
@@ -110,6 +117,12 @@ const rateLimitMax = Number(process.env.TENDER_RATE_LIMIT_MAX || 300);
 if (!Number.isInteger(rateLimitMax) || rateLimitMax < 120 || rateLimitMax > 600)
   throw new Error("TENDER_RATE_LIMIT_MAX_OUT_OF_RANGE");
 await app.register(rateLimit, { max: rateLimitMax, timeWindow: "1 minute" });
+registerAdminAuth(app, {
+  pool,
+  sessionPepper,
+  fieldEncryptionKey: Buffer.from(fieldEncryptionKeyHex, "hex"),
+  secureCookies: process.env.ADMIN_COOKIE_SECURE !== "false",
+});
 app.addHook("onSend", async (_, reply, payload) => {
   reply.header("x-robots-tag", "noindex, nofollow");
   reply.header("x-wb-tender-release",TENDER_RELEASE);
@@ -124,7 +137,7 @@ async function auth(req, reply) {
   const identity = await loadIdentity(
     pool,
     req.cookies.wb_session,
-    secret("SESSION_PEPPER"),
+    sessionPepper,
   );
   if (!identity) {
     const browserRequest = String(req.headers.accept || "").includes("text/html");
@@ -173,7 +186,7 @@ const csrf = async (req, reply) => {
   const supplied = String(req.headers["x-csrf-token"] || "");
   if (
     !supplied ||
-    hashSession(supplied, secret("SESSION_PEPPER")) !== req.identity.csrfHash
+    hashSession(supplied, sessionPepper) !== req.identity.csrfHash
   )
     return reply.code(403).send({ error: "csrf_rejected" });
 };
@@ -367,7 +380,7 @@ app.get(
   async (req) => ({
     items: (
       await pool.query(
-        "SELECT x.*,t.title tender_title FROM tender.tasks x JOIN tender.tenders t ON t.id=x.tender_id WHERE x.assignee_id=$1 ORDER BY x.due_at NULLS LAST",
+        "SELECT x.*,t.title tender_title,t.company_id,t.assigned_user_id,t.sector_id FROM tender.tasks x JOIN tender.tenders t ON t.id=x.tender_id WHERE x.assignee_id=$1 ORDER BY x.due_at NULLS LAST",
         [req.identity.userId],
       )
     ).rows.filter((item) => mayView(req.identity, item)),
@@ -379,7 +392,7 @@ app.get(
   async (req) => ({
     items: (
       await pool.query(
-        "SELECT x.*,t.title tender_title FROM tender.reminders x JOIN tender.tenders t ON t.id=x.tender_id WHERE x.user_id=$1 ORDER BY x.remind_at",
+        "SELECT x.*,t.title tender_title,t.company_id,t.assigned_user_id,t.sector_id FROM tender.reminders x JOIN tender.tenders t ON t.id=x.tender_id WHERE x.user_id=$1 ORDER BY x.remind_at",
         [req.identity.userId],
       )
     ).rows.filter((item) => mayView(req.identity, item)),
@@ -488,7 +501,8 @@ app.delete(
 app.post(
   "/api/tenders/:id/tasks",
   { preHandler: [requirePermission("tender.task.manage"), csrf] },
-  async (req) => {
+  async (req, reply) => {
+    if (!(await visibleTender(req, reply, req.params.id))) return;
     const title = String(req.body?.title || "")
       .trim()
       .slice(0, 300);
@@ -507,7 +521,8 @@ app.post(
 app.post(
   "/api/tenders/:id/notes",
   { preHandler: [requirePermission("tender.note.manage"), csrf] },
-  async (req) => {
+  async (req, reply) => {
+    if (!(await visibleTender(req, reply, req.params.id))) return;
     const body = String(req.body?.body || "")
       .trim()
       .slice(0, 10000);
@@ -526,7 +541,8 @@ app.post(
 app.post(
   "/api/tenders/:id/reminders",
   { preHandler: [requirePermission("tender.deadline.manage"), csrf] },
-  async (req) => {
+  async (req, reply) => {
+    if (!(await visibleTender(req, reply, req.params.id))) return;
     await pool.query(
       "INSERT INTO tender.reminders(tender_id,user_id,remind_at) VALUES($1,$2,$3)",
       [req.params.id, req.identity.userId, req.body?.remindAt],
@@ -537,7 +553,8 @@ app.post(
 app.post(
   "/api/tenders/:id/evaluations",
   { preHandler: [requirePermission("tender.evaluate"), csrf] },
-  async (req) => {
+  async (req, reply) => {
+    if (!(await visibleTender(req, reply, req.params.id))) return;
     await pool.query(
       "INSERT INTO tender.evaluations(tender_id,actor_id,score,explanation) VALUES($1,$2,$3,$4)",
       [
@@ -655,7 +672,7 @@ registerAutopilotRoutes(app, {
   invitationPepper: optionalSecret("SAAS_INVITATION_PEPPER"),
   visibleTender,
 });
-const submissionContinuationSecret = optionalSecret("SUBMISSION_CONTINUATION_SECRET") || secret("SESSION_PEPPER");
+const submissionContinuationSecret = optionalSecret("SUBMISSION_CONTINUATION_SECRET") || sessionPepper;
 registerLiveSubmissionRoutes(app, {
   pool, requirePermission, csrf,
   continuationSecret: submissionContinuationSecret,
@@ -664,7 +681,7 @@ registerLiveSubmissionRoutes(app, {
   isFreshWbMfa: async (req) => {
     const token = req.cookies.wb_session;
     if (!token) return false;
-    const row = (await pool.query("SELECT mfa_verified_at FROM iam.sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()", [hashSession(token, secret("SESSION_PEPPER"))])).rows[0];
+    const row = (await pool.query("SELECT mfa_verified_at FROM iam.sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()", [hashSession(token, sessionPepper)])).rows[0];
     return Boolean(row?.mfa_verified_at && new Date(row.mfa_verified_at).getTime() >= Date.now() - 5 * 60_000);
   },
 });
@@ -778,6 +795,23 @@ app.get("/assets/:digest/:name", uiAuth, async (req, reply) => {
     : "text/javascript";
   return sendAsset(reply, req.params.name, type, { immutable: true });
 });
+app.get(`${uiBase}/assets/:digest/:name`, uiAuth, async (req, reply) => {
+  const current = assetMeta.get(req.params.name);
+  if (!current || req.params.digest !== version(req.params.name))
+    return reply.code(404).send({ error: "asset_not_found" });
+  const type = req.params.name.endsWith(".css")
+    ? "text/css"
+    : "text/javascript";
+  return sendAsset(reply, req.params.name, type, { immutable: true });
+});
+for (const name of [
+  "wb-holding-logo.png", "roboto-latin-variable.woff2", "contrast.css",
+  "configuration.js", "configuration-race-guard.js", "configuration-nav.js",
+  "status-blockers.css", "autopilot-navigation.js", "autopilot-navigation.css",
+  "ui.css", "ui.js", "inbox-regions.js", "inbox-regions.css",
+]) {
+  app.get(`${uiBase}/${name}`, uiAuth, async (_, reply) => reply.redirect(`/${name}`, 307));
+}
 app.get("/ui.css", uiAuth, async (_, r) =>
   r
     .type("text/css")

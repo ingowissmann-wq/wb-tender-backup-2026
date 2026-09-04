@@ -1,19 +1,23 @@
-ARG RUNTIME_IMAGE
+ARG RUNTIME_IMAGE=node@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
 FROM ${RUNTIME_IMAGE}
-
-ARG RELEASE_VERSION
-ARG SOURCE_FINGERPRINT
-LABEL org.opencontainers.image.title="WB Tender release" \
-      org.opencontainers.image.version="${RELEASE_VERSION}" \
-      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}"
 
 ENV EXTERNAL_SUBMISSION_ENABLED=false \
     WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false \
     WB_TENDER_SAAS_LEGACY_API_ENABLED=false
 
 WORKDIR /app
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-client-15=15.19-0+deb12u1 \
+ && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/* /var/cache/ldconfig/* \
+ && rm -f /var/log/alternatives.log /var/log/dpkg.log /var/log/apt/*
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --audit=false --fund=false \
+ && rm -rf /root/.npm /tmp/*
 COPY --chown=root:root . /app/
 COPY --chown=root:root deployment/wb-tender-ingestion-entrypoint /usr/local/bin/wb-tender-ingestion-entrypoint
 RUN chmod 0555 /usr/local/bin/wb-tender-ingestion-entrypoint
+ARG RELEASE_VERSION
+ARG SOURCE_FINGERPRINT
+LABEL org.opencontainers.image.title="WB Tender release" \
+      org.opencontainers.image.version="${RELEASE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}"

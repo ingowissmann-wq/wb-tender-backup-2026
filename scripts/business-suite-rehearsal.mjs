@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import pg from "pg";
 
 if(process.env.WB_TENDER_ISOLATION_TEST_DATABASE!=="true")throw new Error("refusing_non_test_database");
-if(!process.env.DATABASE_URL)throw new Error("database_url_missing");
+if(process.env.DATABASE_URL)throw new Error("inline_database_secret_forbidden");
+if(!process.env.DATABASE_URL_FILE)throw new Error("database_url_file_missing");
 if(process.env.EXTERNAL_SUBMISSION_ENABLED!=="false"||process.env.WB_TENDER_ALLOW_EXTERNAL_SUBMISSION!=="false")throw new Error("external_submission_flags_must_be_false");
-const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1});
+const pool=new pg.Pool({connectionString:readFileSync(process.env.DATABASE_URL_FILE,"utf8").trim(),max:1});
 const root=new URL('../',import.meta.url),internalTenant='00000000-0000-4000-8000-000000000085',wbRun='00000000-0000-4000-8000-000000000086',adminRun=process.env.REHEARSAL_ADMIN_RUN_ID||'00000000-0000-4000-8000-000000000087';
 const sql=async(relative)=>readFile(new URL(relative,root),'utf8');
 const execFile=async(relative)=>pool.query(await sql(relative));
