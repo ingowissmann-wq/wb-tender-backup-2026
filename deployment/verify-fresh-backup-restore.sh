@@ -18,10 +18,12 @@ network="wb-tender-restore-$suffix"
 database_container="wb-tender-restore-db-$suffix"
 secret_dir=$(mktemp -d /tmp/wb-tender-restore-secrets.XXXXXX)
 database_url_file="$secret_dir/database_url"
+database_admin_url_file="$secret_dir/database_admin_url"
 network_created=false
 container_created=false
 printf 'postgresql://postgres@db/wb_restore\n' >"$database_url_file"
-chmod 0600 "$database_url_file"
+printf 'postgresql://postgres@db/wb_restore\n' >"$database_admin_url_file"
+chmod 0600 "$database_url_file" "$database_admin_url_file"
 cleanup() {
   status=$?
   trap - EXIT ERR INT TERM
@@ -66,12 +68,42 @@ decrypt | docker exec -i "$database_container" pg_restore -U postgres --exit-on-
 
 run_tools() {
   docker run --rm --network "$network" --network-alias tools \
-    -v "$repository:/app:ro" -v "$database_url_file:/run/secrets/database_url:ro" \
-    -w /app -e DATABASE_URL_FILE=/run/secrets/database_url -e TEST_DATABASE_ADMIN_URL_FILE=/run/secrets/database_url \
+    -v "$repository:/app:ro" \
+    -v "$database_url_file:/run/secrets/database_url:ro" \
+    -v "$database_admin_url_file:/run/secrets/test_database_admin_url:ro" \
+    -w /app -e DATABASE_URL_FILE=/run/secrets/database_url -e TEST_DATABASE_ADMIN_URL_FILE=/run/secrets/test_database_admin_url \
     "$RELEASE_IMAGE" "$@"
 }
 run_tools env ISOLATED_RESTORE_DATABASE_TRUSTED=true deployment/verify-rehearsal-prerequisites.sh
 run_tools env RELEASE_ID="$RELEASE_ID" deployment/apply-release-migrations.sh
+
+docker exec -i "$database_container" psql -U postgres -d wb_restore -v ON_ERROR_STOP=1 <<'SQL'
+CREATE ROLE wb_restore_runtime
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS NOLOGIN;
+GRANT CONNECT ON DATABASE wb_restore TO wb_restore_runtime;
+DO $grant$
+DECLARE
+  schema_name text;
+BEGIN
+  FOR schema_name IN
+    SELECT nspname
+    FROM pg_namespace
+    WHERE nspname NOT LIKE 'pg_%'
+      AND nspname <> 'information_schema'
+  LOOP
+    EXECUTE format('GRANT USAGE ON SCHEMA %I TO wb_restore_runtime', schema_name);
+    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO wb_restore_runtime', schema_name);
+    EXECUTE format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I TO wb_restore_runtime', schema_name);
+    EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO wb_restore_runtime', schema_name);
+  END LOOP;
+END
+$grant$;
+SQL
+runtime_role_safe=$(docker exec "$database_container" psql -U postgres -At -d wb_restore -c \
+  "SELECT NOT rolsuper AND NOT rolbypassrls AND NOT rolcreaterole AND NOT rolcreatedb FROM pg_roles WHERE rolname='wb_restore_runtime'")
+[[ "$runtime_role_safe" == t ]] || { echo "isolated restore runtime role is privileged" >&2; exit 78; }
+printf '%s\n' 'postgresql://postgres@db/wb_restore?options=-c%20role%3Dwb_restore_runtime' >"$database_url_file"
+
 run_tools env WB_TENDER_ISOLATION_TEST_DATABASE=true node scripts/tenant-isolation-integration.mjs
 run_tools env WB_ADMIN_ISOLATION_TEST_DATABASE=true node scripts/admin-real-tenant-integration.mjs
 prices=$(docker exec "$database_container" psql -U postgres -At -d wb_restore -c "SELECT display_name||':'||recommended_monthly_price_minor FROM saas.plans WHERE code IN ('NORMAL','PROFESSIONAL','ENTERPRISE') ORDER BY code")
