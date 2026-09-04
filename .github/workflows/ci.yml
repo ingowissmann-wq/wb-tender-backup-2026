@@ -18,7 +18,9 @@ jobs:
       - run: npm test
       - run: npm run gate
       - run: npm run verify:artifact
-      - run: bash -n deployment/production-rollout.sh deployment/rehearse-release.sh deployment/apply-release-migrations.sh deployment/verify-rehearsal-prerequisites.sh deployment/create-encrypted-production-backup.sh deployment/rehearsal/rollback-probe.sh
+      - run: bash -n deployment/production-rollout.sh deployment/rehearse-release.sh deployment/apply-release-migrations.sh deployment/verify-rehearsal-prerequisites.sh deployment/create-encrypted-production-backup.sh deployment/verify-fresh-backup-restore.sh deployment/capture-rollout-db-state.sh deployment/rollback-applied-release-migrations.sh deployment/rehearsal/rollback-probe.sh tests/rollback-hard-gates.integration.sh tests/rollout-binding.integration.sh
+      - run: tests/rollback-hard-gates.integration.sh
+      - run: sudo --preserve-env=PATH tests/rollout-binding.integration.sh
       - run: git diff --check
 
   release-image:
@@ -46,10 +48,12 @@ jobs:
           commit=$(git rev-parse HEAD)
           source_date_epoch=$(git show -s --format=%ct HEAD)
           archive="$RUNNER_TEMP/wb-tender-release-ci.tar"
-          docker buildx build --output "type=docker,dest=$archive,rewrite-timestamp=true" --provenance=false --pull=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg RUNTIME_IMAGE='${{ steps.base.outputs.image }}' --build-arg RELEASE_VERSION="$GITHUB_RUN_ID" --build-arg SOURCE_FINGERPRINT="$commit" -t wb-tender-release:ci -f Dockerfile.release .
+          tree=$(git rev-parse HEAD^{tree})
+          docker buildx build --output "type=docker,dest=$archive,rewrite-timestamp=true" --provenance=false --pull=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg RUNTIME_IMAGE='${{ steps.base.outputs.image }}' --build-arg RELEASE_VERSION="$GITHUB_RUN_ID" --build-arg SOURCE_FINGERPRINT="$commit" --build-arg SOURCE_TREE="$tree" -t wb-tender-release:ci -f Dockerfile.release .
           docker load --input "$archive"
           rm -f "$archive"
           test "$(docker image inspect wb-tender-release:ci --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$commit"
+          test "$(docker image inspect wb-tender-release:ci --format '{{index .Config.Labels "org.opencontainers.image.source-tree"}}')" = "$tree"
           image_id=$(docker image inspect wb-tender-release:ci --format '{{.Id}}')
           for service in api worker scheduler; do
             id=$(docker create --name "release-$service" wb-tender-release:ci true)
@@ -84,3 +88,31 @@ jobs:
           grep -q 'missing required environment' <<<"$output"
       - name: Clarify that this job is not release rehearsal evidence
         run: echo 'This job validates fail-closed inputs only; RESULT=PASS can only come from a full isolated restore/browser/rollback rehearsal.'
+
+  rollout-db-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Execute real pending-migration and exact-rollback gates
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+          db_file="$RUNNER_TEMP/rollout-database-url"
+          printf 'postgresql://postgres@127.0.0.1:5432/postgres\n' >"$db_file"
+          chmod 0600 "$db_file"
+          DATABASE_URL_FILE="$db_file" WB_TENDER_ROLLOUT_ISOLATED_TEST=true tests/rollout-db.integration.sh

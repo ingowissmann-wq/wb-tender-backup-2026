@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-[[ "${REHEARSAL_DATABASE_TRUSTED:-false}" == true ]] || { echo "prerequisite verification is restricted to the trusted isolated rehearsal database" >&2; exit 64; }
-database=(-h db -U postgres -d wb_rehearsal)
+if [[ "${REHEARSAL_DATABASE_TRUSTED:-false}" == true ]]; then
+  database=(-h db -U postgres -d wb_rehearsal)
+elif [[ "${ISOLATED_RESTORE_DATABASE_TRUSTED:-false}" == true ]]; then
+  : "${DATABASE_URL_FILE:?DATABASE_URL_FILE is required for isolated restore verification}"
+  [[ -r "$DATABASE_URL_FILE" ]] || { echo "isolated restore database file is unreadable" >&2; exit 66; }
+  database=("$(cat "$DATABASE_URL_FILE")")
+else
+  echo "prerequisite verification is restricted to a trusted isolated database" >&2
+  exit 64
+fi
 required_versions=(
   0131-calculation-version-concurrency
   0132-calculation-duplicate-order-repair

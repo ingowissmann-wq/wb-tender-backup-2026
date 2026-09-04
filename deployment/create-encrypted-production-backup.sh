@@ -4,10 +4,12 @@ umask 077
 : "${BACKUP_DIR:?BACKUP_DIR is required}"
 : "${BACKUP_ENCRYPTION_KEY_FILE:?BACKUP_ENCRYPTION_KEY_FILE is required}"
 [[ "$BACKUP_DIR" = /* ]] || { echo "BACKUP_DIR must be absolute" >&2; exit 64; }
-[[ -r "$BACKUP_ENCRYPTION_KEY_FILE" ]] || { echo "backup encryption key file is unreadable" >&2; exit 66; }
+[[ -f "$BACKUP_ENCRYPTION_KEY_FILE" && ! -L "$BACKUP_ENCRYPTION_KEY_FILE" && -r "$BACKUP_ENCRYPTION_KEY_FILE" ]] || { echo "backup encryption key file is unreadable or unsafe" >&2; exit 66; }
+key_mode=$(stat -c '%a' "$BACKUP_ENCRYPTION_KEY_FILE")
+(( (8#$key_mode & 077) == 0 && (8#$key_mode & 0700) <= 0600 )) || { echo "backup encryption key file must have mode 0600 or stricter" >&2; exit 66; }
 mkdir -p "$BACKUP_DIR"
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-backup="$BACKUP_DIR/wb-tender-$timestamp.dump.gpg"
+backup="$BACKUP_DIR/wb-tender-$timestamp-$$.dump.gpg"
 manifest="$backup.manifest"
 manifest_checksum="$manifest.sha256"
 plain_hash=$(mktemp "$BACKUP_DIR/.plain-sha.XXXXXX")
@@ -37,9 +39,9 @@ gpg --batch --quiet --pinentry-mode loopback --passphrase-file "$BACKUP_ENCRYPTI
 set +o pipefail
 gpg --batch --quiet --pinentry-mode loopback --passphrase-file "$BACKUP_ENCRYPTION_KEY_FILE" --decrypt "$backup" \
   | pg_restore -l >/dev/null
-list_status=${PIPESTATUS[1]}
+list_status=("${PIPESTATUS[@]}")
 set -o pipefail
-[[ "$list_status" -eq 0 ]] || { echo "decrypted backup catalog verification failed" >&2; exit 74; }
+[[ "${list_status[0]}" -eq 0 && "${list_status[1]}" -eq 0 ]] || { echo "decrypted backup catalog verification failed" >&2; exit 74; }
 cmp -s "$plain_hash" "$verified_hash" || { echo "backup plaintext digest verification failed" >&2; exit 74; }
 {
   printf 'created_utc=%s\n' "$timestamp"
