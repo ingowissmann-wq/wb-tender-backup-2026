@@ -1,9 +1,11 @@
 import pg from "pg";
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 if(process.env.WB_TENDER_ISOLATION_TEST_DATABASE!=="true")throw new Error('refusing_non_test_database');
-if(!process.env.DATABASE_URL)throw new Error('database_url_missing');
+if(process.env.DATABASE_URL)throw new Error('inline_database_secret_forbidden');
+if(!process.env.DATABASE_URL_FILE)throw new Error('database_url_file_missing');
 if(process.env.EXTERNAL_SUBMISSION_ENABLED!=="false"||process.env.WB_TENDER_ALLOW_EXTERNAL_SUBMISSION!=="false")throw new Error('external_submission_flags_must_be_false');
-const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:1}),root=new URL('../',import.meta.url),internalTenant='00000000-0000-4000-8000-000000000085',wbRun='00000000-0000-4000-8000-000000000086',adminRun=process.env.REHEARSAL_ADMIN_RUN_ID||'00000000-0000-4000-8000-000000000087';
+const pool=new pg.Pool({connectionString:readFileSync(process.env.DATABASE_URL_FILE,'utf8').trim(),max:1}),root=new URL('../',import.meta.url),internalTenant='00000000-0000-4000-8000-000000000085',wbRun='00000000-0000-4000-8000-000000000086',adminRun=process.env.REHEARSAL_ADMIN_RUN_ID||'00000000-0000-4000-8000-000000000087';
 const execFile=async(relative)=>pool.query(await readFile(new URL(relative,root),'utf8'));
 const businessManifest=async()=>{const tables=(await pool.query("SELECT schemaname,tablename FROM pg_tables WHERE schemaname IN('app','audit','cms','crm','files','iam','integration','communication','recruiting','tender') ORDER BY 1,2")).rows;const counts={};for(const t of tables)counts[`${t.schemaname}.${t.tablename}`]=Number((await pool.query(`SELECT count(*) count FROM ${t.schemaname}.${t.tablename}`)).rows[0].count);return counts;};
 try{

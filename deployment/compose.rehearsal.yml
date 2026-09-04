@@ -19,7 +19,7 @@ services:
       db: { condition: service_healthy }
     environment:
       DATABASE_URL_FILE: /run/secrets/database_url
-    secrets: [database_url]
+    secrets: [database_url, runtime_database_url]
   api:
     image: ${RELEASE_IMAGE:?RELEASE_IMAGE must be digest pinned}
     command: ["node", "platform/server.mjs"]
@@ -30,12 +30,21 @@ services:
       TENDER_ENABLED: "true"
       DATABASE_URL_FILE: /run/secrets/database_url
       SESSION_PEPPER_FILE: /run/secrets/session_pepper
-      CAREER_DATABASE_PATH: /app/deployment/rehearsal/career.db
+      FIELD_ENCRYPTION_KEY_FILE: /run/secrets/field_encryption_key
+      PORTAL_CREDENTIAL_KEY_FILE: /run/secrets/portal_credential_key
+      CAREER_DATABASE_PATH: /run/rehearsal/career.db
+      TENDER_API_BASE: /api
       EXTERNAL_SUBMISSION_ENABLED: "false"
       WB_TENDER_ALLOW_EXTERNAL_SUBMISSION: "false"
       WB_TENDER_SAAS_ENABLED: "true"
+      SCHEDULER_REHEARSAL_IDLE: "true"
       WIKOS_LOCAL_STUB: "true"
-    secrets: [database_url, session_pepper]
+    volumes:
+      - type: bind
+        source: ${REHEARSAL_SECRET_DIR:?REHEARSAL_SECRET_DIR is required}
+        target: /run/rehearsal
+        read_only: true
+    secrets: [database_url, session_pepper, field_encryption_key, portal_credential_key]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:4240/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 3s
@@ -47,31 +56,65 @@ services:
     depends_on:
       api: { condition: service_healthy }
     environment: *runtime
-    secrets: [database_url, session_pepper]
+    secrets: [database_url, session_pepper, field_encryption_key, portal_credential_key]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4240/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 3s
+      timeout: 2s
+      retries: 40
   scheduler:
     image: ${RELEASE_IMAGE:?RELEASE_IMAGE must be digest pinned}
-    command: ["node", "platform/autopilot-pipeline-worker.mjs"]
+    command: ["node", "platform/scheduler.mjs"]
     depends_on:
       api: { condition: service_healthy }
     environment: *runtime
-    secrets: [database_url, session_pepper]
+    secrets: [database_url, session_pepper, field_encryption_key, portal_credential_key]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4240/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 3s
+      timeout: 2s
+      retries: 40
   browser:
     image: ${BROWSER_IMAGE:?BROWSER_IMAGE must be digest pinned}
     working_dir: /app
     depends_on:
-      api: { condition: service_healthy }
+      tls-proxy: { condition: service_healthy }
     volumes:
       - ..:/app:ro
     environment:
-      E2E_BASE_URL: http://api:4240
-      E2E_AUTH_FILE: /run/secrets/e2e_auth
-    secrets: [e2e_auth]
-  wikOS-stub:
+      E2E_BASE_URL: https://tls-proxy:4443
+      E2E_EMAIL_FILE: /run/secrets/e2e_email
+      E2E_PASSWORD_FILE: /run/secrets/e2e_password
+      E2E_TOTP_FILE: /run/secrets/e2e_totp
+    secrets: [e2e_email, e2e_password, e2e_totp]
+  tls-proxy:
+    image: ${RELEASE_IMAGE:?RELEASE_IMAGE must be digest pinned}
+    command: ["node", "deployment/rehearsal/tls-proxy.mjs"]
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      TLS_KEY_FILE: /run/secrets/tls_key
+      TLS_CERT_FILE: /run/secrets/tls_cert
+      TLS_PROXY_UPSTREAM: http://api:4240
+    secrets: [tls_key, tls_cert]
+    healthcheck:
+      test: ["CMD", "node", "-e", "process.env.NODE_TLS_REJECT_UNAUTHORIZED='0';fetch('https://localhost:4443/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 3s
+      timeout: 2s
+      retries: 40
+  wikos-stub:
     image: ${RELEASE_IMAGE:?RELEASE_IMAGE must be digest pinned}
     command: ["node", "deployment/rehearsal/wikos-stub.mjs"]
 secrets:
   database_url: { file: "${DATABASE_URL_FILE:?DATABASE_URL_FILE is required}" }
+  runtime_database_url: { file: "${RUNTIME_DATABASE_URL_FILE:?RUNTIME_DATABASE_URL_FILE is required}" }
   session_pepper: { file: "${SESSION_PEPPER_FILE:?SESSION_PEPPER_FILE is required}" }
-  e2e_auth: { file: "${E2E_AUTH_FILE:?E2E_AUTH_FILE is required}" }
+  field_encryption_key: { file: "${FIELD_ENCRYPTION_KEY_FILE:?FIELD_ENCRYPTION_KEY_FILE is required}" }
+  portal_credential_key: { file: "${PORTAL_CREDENTIAL_KEY_FILE:?PORTAL_CREDENTIAL_KEY_FILE is required}" }
+  e2e_email: { file: "${E2E_EMAIL_FILE:?E2E_EMAIL_FILE is required}" }
+  e2e_password: { file: "${E2E_PASSWORD_FILE:?E2E_PASSWORD_FILE is required}" }
+  e2e_totp: { file: "${E2E_TOTP_FILE:?E2E_TOTP_FILE is required}" }
+  tls_key: { file: "${TLS_KEY_FILE:?TLS_KEY_FILE is required}" }
+  tls_cert: { file: "${TLS_CERT_FILE:?TLS_CERT_FILE is required}" }
 volumes:
   rehearsal-db:

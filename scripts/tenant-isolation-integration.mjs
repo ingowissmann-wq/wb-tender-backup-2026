@@ -1,13 +1,17 @@
 import pg from "pg";
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
 import { withTenantContext } from "../platform/tenant-context.mjs";
 
 if (process.env.WB_TENDER_ISOLATION_TEST_DATABASE !== "true")
   throw new Error("refusing_non_test_database");
-if (!process.env.DATABASE_URL) throw new Error("database_url_missing");
-if (!process.env.TEST_DATABASE_ADMIN_URL) throw new Error("test_database_admin_url_missing");
+if (process.env.DATABASE_URL || process.env.TEST_DATABASE_ADMIN_URL) throw new Error("inline_database_secret_forbidden");
+if (!process.env.DATABASE_URL_FILE) throw new Error("database_url_file_missing");
+if (!process.env.TEST_DATABASE_ADMIN_URL_FILE) throw new Error("test_database_admin_url_file_missing");
+const databaseUrl = readFileSync(process.env.DATABASE_URL_FILE, "utf8").trim();
+const adminUrl = readFileSync(process.env.TEST_DATABASE_ADMIN_URL_FILE, "utf8").trim();
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 4 });
+const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 });
 const a = crypto.randomUUID(), b = crypto.randomUUID();
 const insertTenant = (id, name) => withTenantContext(pool, { tenantId: id }, async (db) => {
   await db.query("INSERT INTO saas.tenants(id,slug,display_name,status,customer_identity_hash) VALUES($1,$2,$3,'ACTIVE',$4)", [id, `test-${id.slice(0,12)}`, name, crypto.createHash("sha256").update(id).digest("hex")]);
@@ -76,7 +80,7 @@ try {
   for(const table of ["tasks","csm_customers","csm_service_cases","employee_profiles","people_onboarding_tasks","files"]){const missing=await pool.query(`SELECT count(*) FROM tenant_portal.${table}`);if(Number(missing.rows[0].count)!==0)throw new Error(`missing_context_did_not_fail_closed_${table}`);}
   console.log(JSON.stringify({passed:true,tenantA:a,tenantB:b,externalSubmissionEnabled:false}));
 } finally {
-  const admin=new pg.Pool({connectionString:process.env.TEST_DATABASE_ADMIN_URL,max:1});
+  const admin=new pg.Pool({connectionString:adminUrl,max:1});
   for (const id of [a,b]) { await admin.query("DELETE FROM saas.audit_events WHERE tenant_id=$1",[id]).catch(()=>{}); await admin.query("DELETE FROM saas.tenants WHERE id=$1 AND slug LIKE 'test-%'",[id]).catch(()=>{}); }
   await admin.end();
   await pool.end();

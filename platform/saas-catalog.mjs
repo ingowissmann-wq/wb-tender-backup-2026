@@ -1,4 +1,5 @@
 export const PLAN_CODES = Object.freeze(["CORE", "NORMAL", "PROFESSIONAL", "ENTERPRISE"]);
+export const APPROVED_TENDER_PLAN_PRICES = Object.freeze({ NORMAL: 99_000, PROFESSIONAL: 149_000, ENTERPRISE: 249_000 });
 export const SUITE_PRODUCT_KEY = "wb_business_suite";
 
 export const MODULE_KEYS = Object.freeze({

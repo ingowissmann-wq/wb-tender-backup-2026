@@ -620,7 +620,9 @@ async function renewLease(pool, sourceCode, ownerId) {
 
 export async function runIngestion({ once = false } = {}) {
   if (String(process.env.EXTERNAL_SUBMISSION_ENABLED).toLowerCase() !== "false" || String(process.env.WB_TENDER_ALLOW_EXTERNAL_SUBMISSION).toLowerCase() !== "false") throw new Error("external submission must remain hard-disabled");
-  const connectionString = process.env.DATABASE_URL || readFileSync(process.env.DATABASE_URL_FILE, "utf8").toString().trim();
+  if (process.env.DATABASE_URL) throw new Error("inline_secret_forbidden_database_url");
+  if (!process.env.DATABASE_URL_FILE) throw new Error("database_url_file_required");
+  const connectionString = readFileSync(process.env.DATABASE_URL_FILE, "utf8").toString().trim();
   const pool = new pg.Pool({ connectionString, max: 4, options: "-c tender.pipeline_job_id=DAILY_INBOX_PIPELINE" });
   const workerId = crypto.randomUUID();
   const sources = String(process.env.INGESTION_SOURCES || "TED,DOE").split(",").map((value) => value.trim().toUpperCase()).filter((value) => PUBLIC_SOURCES.includes(value));

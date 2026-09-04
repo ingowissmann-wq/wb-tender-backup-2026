@@ -5,6 +5,7 @@ import test from "node:test";
 const routes = await readFile(new URL("../platform/autopilot-routes.mjs", import.meta.url), "utf8");
 const migration = await readFile(new URL("../migrations/155_autopilot_overview_latest_lookup.sql", import.meta.url), "utf8");
 const rollout = await readFile(new URL("../deployment/production-rollout.sh", import.meta.url), "utf8");
+const backup = await readFile(new URL("../deployment/create-encrypted-production-backup.sh", import.meta.url), "utf8");
 const plans = await readFile(new URL("../migrations/156_approved_tender_commercial_plans.sql", import.meta.url), "utf8");
 
 test("overview resolves latest rows set-wise before joining", () => {
@@ -29,7 +30,11 @@ test("overview indexes are additive, online and reversible", () => {
 test("production rollout is digest-pinned, rehearsed and fail-closed", () => {
   assert.match(rollout, /RELEASE_IMAGE.*@sha256/);
   assert.match(rollout, /COMMIT=\$commit/);
-  assert.match(rollout, /pg_dump/);
+  assert.match(rollout, /create-encrypted-production-backup\.sh/);
+  assert.match(backup, /pg_dump/);
+  assert.match(backup, /gpg .*--symmetric/);
+  assert.match(backup, /pg_restore -l/);
+  assert.match(backup, /sha256sum/);
   assert.match(rollout, /REHEARSAL_EVIDENCE/);
   assert.match(rollout, /api worker scheduler/);
   assert.match(rollout, /EXTERNAL_SUBMISSION_ENABLED=false/);

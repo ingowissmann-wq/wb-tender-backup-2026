@@ -16,7 +16,7 @@ jobs:
       - run: npm test
       - run: npm run gate
       - run: npm run verify:artifact
-      - run: bash -n deployment/production-rollout.sh deployment/rehearse-release.sh deployment/apply-release-migrations.sh deployment/rehearsal/rollback-probe.sh
+      - run: bash -n deployment/production-rollout.sh deployment/rehearse-release.sh deployment/apply-release-migrations.sh deployment/verify-rehearsal-prerequisites.sh deployment/create-encrypted-production-backup.sh deployment/rehearsal/rollback-probe.sh
       - run: git diff --check
 
   release-image:
@@ -39,7 +39,11 @@ jobs:
           set -Eeuo pipefail
           test -z "$(git status --porcelain)"
           commit=$(git rev-parse HEAD)
-          docker build --pull=false --build-arg RUNTIME_IMAGE='${{ steps.base.outputs.image }}' --build-arg RELEASE_VERSION="$GITHUB_RUN_ID" --build-arg SOURCE_FINGERPRINT="$commit" -t wb-tender-release:ci -f Dockerfile.release .
+          source_date_epoch=$(git show -s --format=%ct HEAD)
+          archive="$RUNNER_TEMP/wb-tender-release-ci.tar"
+          docker buildx build --output "type=docker,dest=$archive,rewrite-timestamp=true" --provenance=false --pull=false --build-arg SOURCE_DATE_EPOCH="$source_date_epoch" --build-arg RUNTIME_IMAGE='${{ steps.base.outputs.image }}' --build-arg RELEASE_VERSION="$GITHUB_RUN_ID" --build-arg SOURCE_FINGERPRINT="$commit" -t wb-tender-release:ci -f Dockerfile.release .
+          docker load --input "$archive"
+          rm -f "$archive"
           test "$(docker image inspect wb-tender-release:ci --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$commit"
           image_id=$(docker image inspect wb-tender-release:ci --format '{{.Id}}')
           for service in api worker scheduler; do
@@ -51,7 +55,7 @@ jobs:
           ! docker run --rm wb-tender-release:ci test -e /app/production-snapshot
           ! docker run --rm wb-tender-release:ci test -e /app/.git
 
-  rehearsal-contract:
+  rehearsal-input-safety:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,10 +67,7 @@ jobs:
           export POSTGRES_IMAGE=$(docker image inspect postgres:16-bookworm --format '{{index .RepoDigests 0}}')
           export BROWSER_IMAGE=$(docker image inspect mcr.microsoft.com/playwright:v1.55.1-noble --format '{{index .RepoDigests 0}}')
           export RELEASE_IMAGE=$(docker image inspect node:22-bookworm-slim --format '{{index .RepoDigests 0}}')
-          export DATABASE_URL_FILE=/tmp/database_url E2E_AUTH_FILE=/tmp/e2e_auth SESSION_PEPPER_FILE=/tmp/session_pepper
-          touch "$DATABASE_URL_FILE" "$E2E_AUTH_FILE" "$SESSION_PEPPER_FILE"
-          docker compose -f deployment/compose.rehearsal.yml config --quiet
-      - name: Rehearsal remains fail-closed without an authorized MFA fixture and source dump
+      - name: Input validation remains fail-closed without the full source archive
         run: |
           set +e
           output=$(deployment/rehearse-release.sh 2>&1)
@@ -74,3 +75,5 @@ jobs:
           set -e
           test "$status" -eq 64
           grep -q 'missing required environment' <<<"$output"
+      - name: Clarify that this job is not release rehearsal evidence
+        run: echo 'This job validates fail-closed inputs only; RESULT=PASS can only come from a full isolated restore/browser/rollback rehearsal.'

@@ -95,7 +95,7 @@ test("plan catalog is data driven and upgrades never enable external submission"
 
 test("registration accepts only active, approved, explicitly priced plans", async () => {
   const platform = await readFile(new URL("../platform/saas-platform.mjs", import.meta.url), "utf8");
-  assert.match(platform, /code=\$1 AND active AND price_status='APPROVED' AND recommended_monthly_price_minor IS NOT NULL/);
+  assert.match(platform, /code=\$1 AND active AND price_status='APPROVED' AND recommended_monthly_price_minor=\$2/);
   assert.match(platform, /plan_not_available/);
   assert.match(platform, /\$1::uuid::text/);
 });
@@ -107,13 +107,14 @@ test("approved registration creates only pending, verification-bound records", a
     if (String(sql).startsWith("SELECT 1 FROM saas.plans")) return { rowCount: 1, rows: [{ ok: 1 }] };
     return { rowCount: 1, rows: [] };
   } };
-  const created = await registerPendingTenant(client, { email: "owner@example.invalid", company: "Isolated GmbH", plan: "CORE" }, { verificationPepper: "isolated-verification-pepper-over-thirty-two-characters" });
-  assert.equal(created.plan, "CORE");
+  const created = await registerPendingTenant(client, { email: "owner@example.invalid", company: "Isolated GmbH", plan: "NORMAL" }, { verificationPepper: "isolated-verification-pepper-over-thirty-two-characters" });
+  assert.equal(created.plan, "NORMAL");
   assert.ok(created.token.length >= 32);
+  assert.deepEqual(calls.find(([sql]) => sql.startsWith("SELECT 1 FROM saas.plans"))[1], ["NORMAL", 99_000]);
   assert.deepEqual(calls.map(([sql]) => sql === "BEGIN" || sql === "COMMIT" ? sql : sql.split(/\s+/).slice(0, 3).join(" ")), ["BEGIN", "SELECT 1 FROM", "SELECT set_config('app.tenant_id',$1,true)", "INSERT INTO saas.tenants(id,slug,display_name,customer_identity_hash)", "INSERT INTO saas.pending_registrations(tenant_id,email,requested_plan_code,verification_token_hash,verification_expires_at,request_ip_hash,request_user_agent_hash)", "INSERT INTO saas.subscriptions(tenant_id,plan_code,status)", "SELECT tenant_portal.provision_empty_tenant($1,$2)", "INSERT INTO saas.audit_events(tenant_id,action,target_type,target_id,metadata)", "COMMIT"]);
 
   const unavailable = { async query(sql) { if (sql === "BEGIN" || sql === "ROLLBACK") return { rowCount: 0, rows: [] }; return { rowCount: 0, rows: [] }; } };
-  await assert.rejects(registerPendingTenant(unavailable, { email: "owner@example.invalid", company: "Isolated GmbH", plan: "CORE" }, { verificationPepper: "isolated-verification-pepper-over-thirty-two-characters" }), /plan_not_available/);
+  await assert.rejects(registerPendingTenant(unavailable, { email: "owner@example.invalid", company: "Isolated GmbH", plan: "NORMAL" }, { verificationPepper: "isolated-verification-pepper-over-thirty-two-characters" }), /plan_not_available/);
 });
 
 test("server keeps SaaS behind a default-off feature flag and isolates company scopes", async () => {
