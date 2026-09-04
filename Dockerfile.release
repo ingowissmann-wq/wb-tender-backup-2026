@@ -18,6 +18,8 @@ COPY --chown=root:root deployment/wb-tender-ingestion-entrypoint /usr/local/bin/
 RUN chmod 0555 /usr/local/bin/wb-tender-ingestion-entrypoint
 ARG RELEASE_VERSION
 ARG SOURCE_FINGERPRINT
+ARG SOURCE_TREE
 LABEL org.opencontainers.image.title="WB Tender release" \
       org.opencontainers.image.version="${RELEASE_VERSION}" \
-      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}"
+      org.opencontainers.image.revision="${SOURCE_FINGERPRINT}" \
+      org.opencontainers.image.source-tree="${SOURCE_TREE}"

@@ -29,7 +29,8 @@ test("overview indexes are additive, online and reversible", () => {
 
 test("production rollout is digest-pinned, rehearsed and fail-closed", () => {
   assert.match(rollout, /RELEASE_IMAGE.*@sha256/);
-  assert.match(rollout, /COMMIT=\$commit/);
+  assert.match(rollout, /ACTUAL_COMMIT=\$\(git rev-parse HEAD\)/);
+  assert.match(rollout, /EXPECTED_TREE/);
   assert.match(rollout, /create-encrypted-production-backup\.sh/);
   assert.match(backup, /pg_dump/);
   assert.match(backup, /gpg .*--symmetric/);
