@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
+deployment_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$deployment_dir/lib/encrypted-pg-archive.sh"
 : "${BACKUP_DIR:?BACKUP_DIR is required}"
 : "${BACKUP_ENCRYPTION_KEY_FILE:?BACKUP_ENCRYPTION_KEY_FILE is required}"
 [[ "$BACKUP_DIR" = /* ]] || { echo "BACKUP_DIR must be absolute" >&2; exit 64; }
@@ -36,13 +38,9 @@ dump_archive \
 [[ -s "$backup" && -s "$plain_hash" ]] || { echo "encrypted backup was not created" >&2; exit 74; }
 gpg --batch --quiet --pinentry-mode loopback --passphrase-file "$BACKUP_ENCRYPTION_KEY_FILE" --decrypt "$backup" \
   | sha256sum | cut -d' ' -f1 >"$verified_hash"
-set +o pipefail
-gpg --batch --quiet --pinentry-mode loopback --passphrase-file "$BACKUP_ENCRYPTION_KEY_FILE" --decrypt "$backup" \
-  | pg_restore -l >/dev/null
-list_status=("${PIPESTATUS[@]}")
-set -o pipefail
-[[ "${list_status[0]}" -eq 0 && "${list_status[1]}" -eq 0 ]] || { echo "decrypted backup catalog verification failed" >&2; exit 74; }
 cmp -s "$plain_hash" "$verified_hash" || { echo "backup plaintext digest verification failed" >&2; exit 74; }
+decrypt_backup_catalog() { gpg --batch --quiet --pinentry-mode loopback --passphrase-file "$BACKUP_ENCRYPTION_KEY_FILE" --decrypt "$backup"; }
+verify_encrypted_pg_archive_catalog decrypt_backup_catalog >/dev/null || { echo "decrypted backup catalog verification failed" >&2; exit 74; }
 {
   printf 'created_utc=%s\n' "$timestamp"
   printf 'archive=%s\n' "${backup##*/}"

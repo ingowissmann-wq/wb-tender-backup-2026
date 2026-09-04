@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
+deployment_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$deployment_dir/lib/encrypted-pg-archive.sh"
 required=(SOURCE_COMMIT SOURCE_TREE RELEASE_IMAGE POSTGRES_IMAGE BROWSER_IMAGE SOURCE_DUMP SOURCE_DUMP_SHA256 SOURCE_DUMP_ENCRYPTION_KEY_FILE EVIDENCE_FILE WIKOS_REAL_TEST_RESULT_FILE)
 for name in "${required[@]}"; do [[ -n "${!name:-}" ]] || { echo "missing required environment: $name" >&2; exit 64; }; done
 for name in RELEASE_IMAGE POSTGRES_IMAGE BROWSER_IMAGE; do [[ "${!name}" == *@sha256:* ]] || { echo "$name must be digest pinned" >&2; exit 64; }; done
@@ -21,7 +23,7 @@ done
 [[ ! -e "$EVIDENCE_FILE" && ! -e "$WIKOS_REAL_TEST_RESULT_FILE" ]] || { echo "evidence outputs must not already exist" >&2; exit 65; }
 [[ "$(sha256sum "$SOURCE_DUMP" | cut -d' ' -f1)" == "$SOURCE_DUMP_SHA256" ]] || { echo "source dump checksum mismatch" >&2; exit 65; }
 decrypt_archive() { gpg --batch --quiet --pinentry-mode loopback --passphrase-file "$SOURCE_DUMP_ENCRYPTION_KEY_FILE" --decrypt "$SOURCE_DUMP"; }
-if ! toc=$(decrypt_archive | pg_restore -l); then
+if ! toc=$(verify_encrypted_pg_archive_catalog decrypt_archive); then
   echo "encrypted source archive catalog is unreadable" >&2
   exit 65
 fi

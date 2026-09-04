@@ -18,7 +18,8 @@ jobs:
       - run: npm test
       - run: npm run gate
       - run: npm run verify:artifact
-      - run: bash -n deployment/production-rollout.sh deployment/rehearse-release.sh deployment/apply-release-migrations.sh deployment/verify-rehearsal-prerequisites.sh deployment/create-encrypted-production-backup.sh deployment/verify-fresh-backup-restore.sh deployment/capture-rollout-db-state.sh deployment/rollback-applied-release-migrations.sh deployment/rehearsal/rollback-probe.sh tests/rollback-hard-gates.integration.sh tests/rollout-binding.integration.sh
+      - run: bash -n deployment/production-rollout.sh deployment/rehearse-release.sh deployment/apply-release-migrations.sh deployment/verify-rehearsal-prerequisites.sh deployment/create-encrypted-production-backup.sh deployment/verify-fresh-backup-restore.sh deployment/lib/encrypted-pg-archive.sh deployment/capture-rollout-db-state.sh deployment/rollback-applied-release-migrations.sh deployment/rehearsal/rollback-probe.sh tests/encrypted-catalog-verification.integration.sh tests/rollback-hard-gates.integration.sh tests/rollout-binding.integration.sh
+      - run: tests/encrypted-catalog-verification.integration.sh
       - run: tests/rollback-hard-gates.integration.sh
       - run: sudo --preserve-env=PATH tests/rollout-binding.integration.sh
       - run: git diff --check
