@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
+deployment_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+source "$deployment_dir/lib/encrypted-pg-archive.sh"
 
 required=(BACKUP_FILE BACKUP_MANIFEST BACKUP_MANIFEST_SHA256 BACKUP_ENCRYPTION_KEY_FILE POSTGRES_IMAGE RELEASE_IMAGE RELEASE_ID ISOLATED_RESTORE_RESULT_FILE)
 for name in "${required[@]}"; do [[ -n "${!name:-}" ]] || { echo "missing required environment: $name" >&2; exit 64; }; done
@@ -46,11 +48,7 @@ catalog_verified=$(awk -F= '$1=="pg_restore_list_verified"{print $2}' "$BACKUP_M
 [[ "$(sha256sum "$BACKUP_FILE" | cut -d' ' -f1)" == "$archive_sha" ]] || { echo "backup ciphertext checksum mismatch" >&2; exit 74; }
 decrypt() { gpg --batch --quiet --pinentry-mode loopback --passphrase-file "$BACKUP_ENCRYPTION_KEY_FILE" --decrypt "$BACKUP_FILE"; }
 [[ "$(decrypt | sha256sum | cut -d' ' -f1)" == "$plaintext_sha" ]] || { echo "backup plaintext checksum mismatch" >&2; exit 74; }
-set +o pipefail
-decrypt | pg_restore -l >/dev/null
-catalog_status=("${PIPESTATUS[@]}")
-set -o pipefail
-[[ "${catalog_status[0]}" -eq 0 && "${catalog_status[1]}" -eq 0 ]] || { echo "backup pg_restore catalog check failed" >&2; exit 74; }
+verify_encrypted_pg_archive_catalog decrypt >/dev/null || { echo "backup pg_restore catalog check failed" >&2; exit 74; }
 
 docker network create --internal "$network" >/dev/null
 network_created=true

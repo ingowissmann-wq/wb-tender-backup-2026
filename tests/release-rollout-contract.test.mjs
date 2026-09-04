@@ -6,6 +6,7 @@ const routes = await readFile(new URL("../platform/autopilot-routes.mjs", import
 const migration = await readFile(new URL("../migrations/155_autopilot_overview_latest_lookup.sql", import.meta.url), "utf8");
 const rollout = await readFile(new URL("../deployment/production-rollout.sh", import.meta.url), "utf8");
 const backup = await readFile(new URL("../deployment/create-encrypted-production-backup.sh", import.meta.url), "utf8");
+const encryptedCatalog = await readFile(new URL("../deployment/lib/encrypted-pg-archive.sh", import.meta.url), "utf8");
 const plans = await readFile(new URL("../migrations/156_approved_tender_commercial_plans.sql", import.meta.url), "utf8");
 
 test("overview resolves latest rows set-wise before joining", () => {
@@ -34,7 +35,9 @@ test("production rollout is digest-pinned, rehearsed and fail-closed", () => {
   assert.match(rollout, /create-encrypted-production-backup\.sh/);
   assert.match(backup, /pg_dump/);
   assert.match(backup, /gpg .*--symmetric/);
-  assert.match(backup, /pg_restore -l/);
+  assert.match(backup, /verify_encrypted_pg_archive_catalog/);
+  assert.match(encryptedCatalog, /pg_restore -l/);
+  assert.match(encryptedCatalog, /Broken pipe/);
   assert.match(backup, /sha256sum/);
   assert.match(rollout, /REHEARSAL_EVIDENCE/);
   assert.match(rollout, /api worker scheduler/);
