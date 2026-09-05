@@ -51,8 +51,8 @@ done
 capture_db_state() {
   output=$1
   docker compose -p "$project" -f "$COMPOSE_FILE" run --rm -T \
-    -v "$DATABASE_URL_FILE:/run/secrets/database_url:ro" -v "$output:/state" \
-    -e DATABASE_URL_FILE=/run/secrets/database_url -e STATE_OUTPUT_DIR=/state tools deployment/capture-rollout-db-state.sh
+    -v "$output:/state" -e ROLLOUT_DATABASE_ADMIN_TRUSTED=true -e STATE_OUTPUT_DIR=/state \
+    db sh -s <deployment/capture-rollout-db-state.sh
 }
 capture_db_state "$state_dir/before"
 ledger_existed=false; snapshot_existed=false

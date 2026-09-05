@@ -10,6 +10,7 @@ const migration = await readFile(new URL("../migrations/155_autopilot_overview_l
 const rollout = await readFile(new URL("../deployment/production-rollout.sh", import.meta.url), "utf8");
 const productionBrowserRunner = await readFile(new URL("../deployment/run-production-browser-canary.sh", import.meta.url), "utf8");
 const runtimeDrain = await readFile(new URL("../deployment/drain-runtime-database-sessions.sh", import.meta.url), "utf8");
+const rolloutStateCapture = await readFile(new URL("../deployment/capture-rollout-db-state.sh", import.meta.url), "utf8");
 const rolloutGuide = await readFile(new URL("../docs/production-rollout-hard-gates.md", import.meta.url), "utf8");
 const backup = await readFile(new URL("../deployment/create-encrypted-production-backup.sh", import.meta.url), "utf8");
 const encryptedCatalog = await readFile(new URL("../deployment/lib/encrypted-pg-archive.sh", import.meta.url), "utf8");
@@ -105,6 +106,14 @@ test("rollback stops services, drains only the runtime role, and restores exact 
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("production state snapshots use the existing restore-admin database client", () => {
+  assert.match(rollout, /ROLLOUT_DATABASE_ADMIN_TRUSTED=true/);
+  assert.match(rollout, /db sh -s <deployment\/capture-rollout-db-state\.sh/);
+  assert.doesNotMatch(rollout.slice(rollout.indexOf("capture_db_state()"), rollout.indexOf("ledger_existed=")), /DATABASE_URL_FILE/);
+  assert.match(rolloutStateCapture, /ROLLOUT_DATABASE_ADMIN_TRUSTED/);
+  for (const name of ["PGHOST", "PGUSER", "PGDATABASE", "PGPASSFILE"]) assert.match(rolloutStateCapture, new RegExp(name));
 });
 
 test("production IAM canary is IAM-only, file-secret-only and revocation-first", () => {
