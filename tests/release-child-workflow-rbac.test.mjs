@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const server = readFileSync(new URL("../platform/server.mjs", import.meta.url), "utf8");
+const browserGate = readFileSync(new URL("../scripts/release-browser-e2e.mjs", import.meta.url), "utf8");
 
 test("every tender child workflow write resolves tender visibility before mutation", () => {
   for (const child of ["tasks", "notes", "reminders", "evaluations"]) {
@@ -22,4 +23,10 @@ test("task and reminder reads carry authoritative tender scope into mayView", ()
     }
     assert.match(handler, /\.filter\(\(item\) => mayView\(req\.identity, item\)\)/);
   }
+});
+
+test("browser rehearsal requires RLS-hidden foreign tender targets to remain non-enumerating", () => {
+  assert.match(browserGate, /foreignTenderId}`\)\)\)\.status\(\), 404, "foreign company tender was not hidden"/);
+  assert.match(browserGate, /foreignTenderId}\/tasks`[\s\S]*?\.status\(\), 404, "foreign tender task target was not hidden"/);
+  assert.match(browserGate, /foreignTenderId}\/reminders`[\s\S]*?\.status\(\), 404, "foreign tender reminder target was not hidden"/);
 });
