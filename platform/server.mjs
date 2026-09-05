@@ -7,6 +7,7 @@ import pg from "pg";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { loadFieldEncryptionKey } from "./field-encryption-key.mjs";
 import { hashSession, loadIdentity, mayView } from "./auth.mjs";
 import { registerAutopilotRoutes } from "./autopilot-routes.mjs";
 import { registerConfigurationAdmin } from "./configuration-admin.mjs";
@@ -97,7 +98,7 @@ const app = Fastify({
 });
 await app.register(cookie);
 const sessionPepper = secret("SESSION_PEPPER");
-const fieldEncryptionKeyHex = secret("FIELD_ENCRYPTION_KEY");
+const fieldEncryptionKeyHex = loadFieldEncryptionKey();
 if (!/^[0-9a-f]{64}$/i.test(fieldEncryptionKeyHex)) throw new Error("field_encryption_key_invalid");
 await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
 await app.register(helmet, {
