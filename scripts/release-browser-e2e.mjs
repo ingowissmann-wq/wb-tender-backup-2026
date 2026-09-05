@@ -124,7 +124,7 @@ try {
   const tenderId = String(fixtureTender.id), companyId = fixtureUuid("companyA"), foreignCompanyId = fixtureUuid("companyB"), foreignTenderId = fixtureUuid("tenderB"), lotKey = "LOT-REHEARSAL-1";
   assert.match(tenderId, /^[0-9a-f-]{36}$/i);
   assert.equal((await request("get", api(`/tenders/${tenderId}`))).status(), 200);
-  assert.equal((await request("get", api(`/tenders/${foreignTenderId}`))).status(), 403, "foreign company tender was not denied");
+  assert.equal((await request("get", api(`/tenders/${foreignTenderId}`))).status(), 404, "foreign company tender was not hidden");
   const mutationHeaders = { "x-csrf-token": csrf.value };
   const decision = await request("post", api(`/tenders/${tenderId}/bid-decision`), { headers: mutationHeaders, data: { companyId, lotKey, action: "REJECT", reason: `${marker} synthetic rehearsal decision` } });
   const decisionBody = await decision.json();
@@ -149,8 +149,8 @@ try {
   assert.deepEqual(workflowCoverage, { documents: true, calculation: true, management: true, decision: true });
   assert.equal((await request("get", api(`/autopilot/calculation/${tenderId}?company=${foreignCompanyId}&lot=${lotKey}`))).status(), 403, "foreign company calculation context was not denied");
   assert.equal((await request("get", api(`/tenders/${tenderId}/management-output?company=${foreignCompanyId}&lot=${lotKey}`))).status(), 403, "foreign company management context was not denied");
-  assert.equal((await request("post", api(`/tenders/${foreignTenderId}/tasks`), { headers: mutationHeaders, data: { title: `${marker}_FORBIDDEN_TASK` } })).status(), 403, "foreign tender task write was not denied");
-  assert.equal((await request("post", api(`/tenders/${foreignTenderId}/reminders`), { headers: mutationHeaders, data: { remindAt: "2099-09-22T12:00:00Z" } })).status(), 403, "foreign tender reminder write was not denied");
+  assert.equal((await request("post", api(`/tenders/${foreignTenderId}/tasks`), { headers: mutationHeaders, data: { title: `${marker}_FORBIDDEN_TASK` } })).status(), 404, "foreign tender task target was not hidden");
+  assert.equal((await request("post", api(`/tenders/${foreignTenderId}/reminders`), { headers: mutationHeaders, data: { remindAt: "2099-09-22T12:00:00Z" } })).status(), 404, "foreign tender reminder target was not hidden");
   assert.equal((await request("post", api(`/tenders/${tenderId}/tasks`), { headers: mutationHeaders, data: { title: `${marker}_TASK_HTTP`, dueAt: "2099-09-22T12:00:00Z" } })).status(), 200);
   assert.equal((await request("post", api(`/tenders/${tenderId}/reminders`), { headers: mutationHeaders, data: { remindAt: "2099-09-23T12:00:00Z" } })).status(), 200);
   const taskItems = (await (await request("get", api("/tasks"))).json()).items || [];
