@@ -5,6 +5,8 @@ umask 077
 required=(PRODUCTION_CANARY_STATE_DIR DATABASE_URL_FILE SESSION_PEPPER_FILE FIELD_ENCRYPTION_KEY_FILE)
 for name in "${required[@]}"; do [[ -n "${!name:-}" ]] || { echo "missing required environment: $name" >&2; exit 64; }; done
 
+[[ "${TENDER_API_BASE:-/api/tender}" == /api/tender ]] || { echo "production TENDER_API_BASE must be /api/tender" >&2; exit 64; }
+export TENDER_API_BASE=/api/tender
 export PRODUCTION_SESSION_FILE="$PRODUCTION_CANARY_STATE_DIR/curl.config"
 
 cleanup_canary() {

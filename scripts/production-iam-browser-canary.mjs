@@ -13,7 +13,8 @@ let parsedBase;
 try { parsedBase = new URL(baseUrl); } catch { throw new Error("production_base_url_invalid"); }
 if (!baseUrl || (parsedBase.protocol !== "https:" && process.env.ALLOW_LOOPBACK_HTTP !== "true")) throw new Error("production_base_url_https_required");
 if (parsedBase.username || parsedBase.password || parsedBase.search || parsedBase.hash || parsedBase.pathname !== "/" || parsedBase.origin !== baseUrl) throw new Error("production_base_url_must_be_origin_only");
-for (const [name, value] of [["tender_ui_base", uiBase], ["tender_api_base", apiBase]]) if (!/^\/[A-Za-z0-9_~.-]+(?:\/[A-Za-z0-9_~.-]+)*$/.test(value)) throw new Error(`${name}_invalid`);
+for (const [name, value] of [["tender_ui_base", uiBase], ["tender_api_base", apiBase]]) if (!/^\/(?:[A-Za-z0-9_~-]+(?:\.[A-Za-z0-9_~-]+)*(?:\/[A-Za-z0-9_~-]+(?:\.[A-Za-z0-9_~-]+)*)*)?$/.test(value)
+    || value === "/" || value.endsWith("/") || value.includes("//")) throw new Error(`${name}_invalid`);
 const readSecret = (name) => {
   const pathname = String(process.env[`${name}_FILE`] || "");
   if (!path.isAbsolute(pathname)) throw new Error(`${name.toLowerCase()}_file_required`);
