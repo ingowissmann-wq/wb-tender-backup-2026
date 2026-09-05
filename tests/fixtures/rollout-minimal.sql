@@ -4,9 +4,6 @@ CREATE SCHEMA saas;
 CREATE SCHEMA iam;
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='tender_api_runtime') THEN
-    CREATE ROLE tender_api_runtime NOLOGIN;
-  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='wb_tender_api_login') THEN
     CREATE ROLE wb_tender_api_login LOGIN IN ROLE tender_api_runtime;
   END IF;
