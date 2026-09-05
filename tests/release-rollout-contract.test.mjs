@@ -19,6 +19,7 @@ const browserCanary = await readFile(new URL("../scripts/production-iam-browser-
 const rehearsal = await readFile(new URL("../deployment/rehearse-release.sh", import.meta.url), "utf8");
 const rehearsalCompose = await readFile(new URL("../deployment/compose.rehearsal.yml", import.meta.url), "utf8");
 const isolatedRestore = await readFile(new URL("../deployment/verify-fresh-backup-restore.sh", import.meta.url), "utf8");
+const isolatedRestoreRuntimeRole = await readFile(new URL("../deployment/prepare-isolated-restore-runtime-role.sql", import.meta.url), "utf8");
 const rehearsalFixture = await readFile(new URL("../scripts/release-rehearsal-fixture.mjs", import.meta.url), "utf8");
 const rollbackRuntimeWriter = new URL("../deployment/write-rollback-runtime-override.mjs", import.meta.url);
 
@@ -139,4 +140,16 @@ test("restore readiness waits for the final PostgreSQL PID 1 instead of the temp
   assert.match(rehearsal, /\/proc\/1\/comm/);
   assert.match(isolatedRestore, /\/proc\/1\/comm/);
   assert.match(rehearsalCompose, /\/proc\/1\/comm/);
+});
+
+test("database-only restore recreates the least-privilege release runtime role before migrations", () => {
+  const restore = isolatedRestore.indexOf("pg_restore -U postgres");
+  const prepareRole = isolatedRestore.indexOf("prepare-isolated-restore-runtime-role.sql");
+  const migrate = isolatedRestore.indexOf("deployment/apply-release-migrations.sh");
+  assert.ok(restore >= 0 && restore < prepareRole && prepareRole < migrate);
+  assert.match(isolatedRestoreRuntimeRole, /CREATE ROLE tender_api_runtime/);
+  assert.match(isolatedRestoreRuntimeRole, /NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS NOLOGIN/);
+  assert.match(isolatedRestoreRuntimeRole, /existing tender_api_runtime role is not least privilege/);
+  assert.match(isolatedRestore, /has_table_privilege\('tender_api_runtime','iam\.tender_login_challenges','SELECT,INSERT,DELETE'\)/);
+  assert.match(isolatedRestore, /NOT has_table_privilege\('tender_api_runtime','iam\.tender_login_challenges','UPDATE,TRUNCATE,REFERENCES,TRIGGER'\)/);
 });

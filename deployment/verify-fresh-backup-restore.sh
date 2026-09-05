@@ -69,6 +69,8 @@ done
 [[ "$database_ready" == true ]] || { echo "final PostgreSQL server did not become ready" >&2; exit 78; }
 [[ "$(docker inspect "$database_container" --format '{{len .NetworkSettings.Networks}}')" == 1 ]] || { echo "restore database has unexpected network connectivity" >&2; exit 78; }
 decrypt | docker exec -i "$database_container" pg_restore -U postgres --exit-on-error --clean --if-exists --no-owner --no-acl -d wb_restore
+docker exec -i "$database_container" psql -U postgres -d wb_restore -v ON_ERROR_STOP=1 \
+  <"$repository/deployment/prepare-isolated-restore-runtime-role.sql"
 
 run_tools() {
   docker run --rm --network "$network" --network-alias tools \
@@ -80,6 +82,10 @@ run_tools() {
 }
 run_tools env ISOLATED_RESTORE_DATABASE_TRUSTED=true deployment/verify-rehearsal-prerequisites.sh
 run_tools env RELEASE_ID="$RELEASE_ID" deployment/apply-release-migrations.sh
+
+release_runtime_role_safe=$(docker exec "$database_container" psql -U postgres -At -d wb_restore -c \
+  "SELECT NOT rolsuper AND NOT rolbypassrls AND NOT rolcreaterole AND NOT rolcreatedb AND NOT rolcanlogin AND rolinherit AND NOT EXISTS(SELECT 1 FROM pg_auth_members WHERE member='tender_api_runtime'::regrole) AND has_table_privilege('tender_api_runtime','iam.tender_login_challenges','SELECT,INSERT,DELETE') AND NOT has_table_privilege('tender_api_runtime','iam.tender_login_challenges','UPDATE,TRUNCATE,REFERENCES,TRIGGER') FROM pg_roles WHERE rolname='tender_api_runtime'")
+[[ "$release_runtime_role_safe" == t ]] || { echo "isolated restore release runtime role contract failed" >&2; exit 78; }
 
 docker exec -i "$database_container" psql -U postgres -d wb_restore -v ON_ERROR_STOP=1 <<'SQL'
 CREATE ROLE wb_restore_runtime
