@@ -14,6 +14,7 @@ const canary = await readFile(new URL("../scripts/production-iam-canary.mjs", im
 const browserCanary = await readFile(new URL("../scripts/production-iam-browser-canary.mjs", import.meta.url), "utf8");
 const rehearsal = await readFile(new URL("../deployment/rehearse-release.sh", import.meta.url), "utf8");
 const rehearsalCompose = await readFile(new URL("../deployment/compose.rehearsal.yml", import.meta.url), "utf8");
+const isolatedRestore = await readFile(new URL("../deployment/verify-fresh-backup-restore.sh", import.meta.url), "utf8");
 const rehearsalFixture = await readFile(new URL("../scripts/release-rehearsal-fixture.mjs", import.meta.url), "utf8");
 
 test("overview resolves latest rows set-wise before joining", () => {
@@ -92,4 +93,10 @@ test("rehearsal applies IAM migrations before starting the API as the production
   assert.match(rehearsalFixture, /CREATE ROLE wb_tender_api_login LOGIN[^;]*IN ROLE tender_api_runtime/);
   assert.match(rehearsalCompose, /api_runtime_database_url/);
   assert.match(rehearsalCompose, /api:\n[\s\S]*?DATABASE_URL_FILE: \/run\/secrets\/api_runtime_database_url/);
+});
+
+test("restore readiness waits for the final PostgreSQL PID 1 instead of the temporary init server", () => {
+  assert.match(rehearsal, /\/proc\/1\/comm/);
+  assert.match(isolatedRestore, /\/proc\/1\/comm/);
+  assert.match(rehearsalCompose, /\/proc\/1\/comm/);
 });

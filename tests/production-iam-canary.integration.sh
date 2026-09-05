@@ -11,7 +11,10 @@ cleanup() {
 trap cleanup EXIT
 
 docker run -d --name "$container" -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1::5432 postgres:16.10-alpine >/dev/null
-for _ in {1..60}; do docker exec "$container" pg_isready -U postgres -d postgres >/dev/null 2>&1 && break; sleep 1; done
+for _ in {1..60}; do
+  docker exec "$container" sh -c '[ "$(cat /proc/1/comm)" = postgres ] && psql -U postgres -d postgres -Atc "SELECT 1"' | grep -qx 1 && break
+  sleep 1
+done
 docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<'SQL' >/dev/null
 CREATE EXTENSION pgcrypto;
 CREATE SCHEMA iam;
