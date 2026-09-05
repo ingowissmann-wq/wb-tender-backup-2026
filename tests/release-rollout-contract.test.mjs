@@ -8,6 +8,8 @@ const rollout = await readFile(new URL("../deployment/production-rollout.sh", im
 const backup = await readFile(new URL("../deployment/create-encrypted-production-backup.sh", import.meta.url), "utf8");
 const encryptedCatalog = await readFile(new URL("../deployment/lib/encrypted-pg-archive.sh", import.meta.url), "utf8");
 const plans = await readFile(new URL("../migrations/156_approved_tender_commercial_plans.sql", import.meta.url), "utf8");
+const canary = await readFile(new URL("../scripts/production-iam-canary.mjs", import.meta.url), "utf8");
+const browserCanary = await readFile(new URL("../scripts/production-iam-browser-canary.mjs", import.meta.url), "utf8");
 
 test("overview resolves latest rows set-wise before joining", () => {
   assert.match(routes, /selected AS MATERIALIZED/);
@@ -44,5 +46,18 @@ test("production rollout is digest-pinned, rehearsed and fail-closed", () => {
   assert.match(rollout, /EXTERNAL_SUBMISSION_ENABLED=false/);
   assert.match(rollout, /WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false/);
   assert.match(rollout, /trap rollback ERR INT TERM/);
+  assert.match(rollout, /production-iam-browser-canary\.mjs/);
+  assert.match(rollout, /production-iam-canary\.mjs cleanup/);
+  assert.match(rollout, /production-iam-canary\.mjs verify-absence/);
   assert.doesNotMatch(rollout, /(?:password|token|secret)=['"][^'"]+['"]/i);
+});
+
+test("production IAM canary is IAM-only, file-secret-only and revocation-first", () => {
+  assert.match(canary, /inline_secret_forbidden/);
+  assert.match(canary, /UPDATE iam\.sessions SET revoked_at/);
+  assert.match(canary, /DELETE FROM iam\.tender_login_challenges/);
+  assert.match(canary, /DELETE FROM iam\.login_attempts/);
+  assert.doesNotMatch(canary, /(?:INSERT INTO|UPDATE|DELETE FROM)\s+(?:tender|saas|cms)\./i);
+  assert.match(browserCanary, /passwordMfaReturnTo/);
+  assert.match(browserCanary, /businessWrites: 0/);
 });

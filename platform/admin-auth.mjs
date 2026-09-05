@@ -13,12 +13,27 @@ const constantTimeText = (left, right) => {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
 
-export function safeAdminReturnTo(value) {
+export function tenderBasePath(value, name = "tender_base") {
   const raw = String(value || "");
-  if (!raw.startsWith("/admin/") || raw.startsWith("//") || raw.includes("\\") || /[\u0000-\u001f\u007f]/.test(raw)) return "/admin/";
+  if (!/^\/(?:[A-Za-z0-9_~-]+(?:\.[A-Za-z0-9_~-]+)*(?:\/[A-Za-z0-9_~-]+(?:\.[A-Za-z0-9_~-]+)*)*)?$/.test(raw)
+      || raw === "/" || raw.endsWith("/") || raw.includes("//")) {
+    throw new Error(`${name}_invalid`);
+  }
+  return raw;
+}
+
+export function safeAdminReturnTo(value, configuredUiBase = "/admin/ausschreibungen") {
+  const uiBase = tenderBasePath(configuredUiBase, "tender_ui_base");
+  const fallback = `${uiBase}/`;
+  const raw = String(value || "");
+  if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\") || /[\u0000-\u001f\u007f]/.test(raw)) return fallback;
   let target;
-  try { target = new URL(raw, "https://wb-tender.invalid"); } catch { return "/admin/"; }
-  if (target.origin !== "https://wb-tender.invalid" || !target.pathname.startsWith("/admin/") || target.pathname.startsWith("/admin/login") || target.pathname.includes("//")) return "/admin/";
+  try { target = new URL(raw, "https://wb-tender.invalid"); } catch { return fallback; }
+  let decodedPath;
+  try { decodedPath = decodeURIComponent(target.pathname); } catch { return fallback; }
+  const insideTender = decodedPath === uiBase || decodedPath.startsWith(`${uiBase}/`);
+  if (target.origin !== "https://wb-tender.invalid" || !insideTender || decodedPath === `${uiBase}/login`
+      || decodedPath.startsWith(`${uiBase}/login/`) || decodedPath.includes("//") || decodedPath.includes("\\")) return fallback;
   return `${target.pathname}${target.search}`;
 }
 
@@ -88,19 +103,22 @@ export function decryptTotpSecret(value, key) {
   return Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString("utf8");
 }
 
-const loginHtml = `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Anmelden · WB Plattform</title><link rel="stylesheet" href="/admin/login.css"><script src="/admin/login.js" defer></script></head><body><main><h1>WB Plattform</h1><form id="login-form"><label>E-Mail<input name="email" type="email" autocomplete="username" required></label><label>Passwort<input name="password" type="password" autocomplete="current-password" minlength="12" required></label><button type="submit">Weiter</button></form><form id="mfa-form" hidden><label>Authenticator-Code<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label><button type="submit">Sicher anmelden</button></form><p id="status" role="status" aria-live="polite"></p></main></body></html>`;
+const loginHtml = (uiBase) => `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Anmelden · WB Plattform</title><link rel="stylesheet" href="${uiBase}/login.css"><script src="${uiBase}/login.js" defer></script></head><body><main><h1>WB Plattform</h1><form id="login-form"><label>E-Mail<input name="email" type="email" autocomplete="username" required></label><label>Passwort<input name="password" type="password" autocomplete="current-password" minlength="12" required></label><button type="submit">Weiter</button></form><form id="mfa-form" hidden><label>Authenticator-Code<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label><button type="submit">Sicher anmelden</button></form><p id="status" role="status" aria-live="polite"></p></main></body></html>`;
 const loginCss = `:root{font-family:system-ui;color:#172033;background:#f6f7f9}body{margin:0;min-height:100vh;display:grid;place-items:center}main{width:min(92vw,28rem);background:#fff;border:1px solid #d8dee7;border-radius:12px;padding:2rem;box-shadow:0 8px 30px #0f172915}[hidden]{display:none!important}form,label{display:grid;gap:.5rem}form{gap:1rem}input,button{font:inherit;min-height:44px;padding:.55rem .7rem}button{background:#0f8f91;color:white;border:0;border-radius:6px;font-weight:700}#status{min-height:1.5rem;color:#b42318}`;
-const loginJs = `const login=document.querySelector('#login-form'),mfa=document.querySelector('#mfa-form'),status=document.querySelector('#status');let challenge='';const returnTo=()=>{const raw=new URLSearchParams(location.search).get('returnTo')||'';if(!raw.startsWith('/admin/')||raw.startsWith('//')||raw.includes('\\\\')||raw.startsWith('/admin/login')||raw.includes('//'))return '/admin/';try{const value=new URL(raw,location.origin);return value.origin===location.origin&&value.pathname.startsWith('/admin/')?value.pathname+value.search:'/admin/'}catch{return '/admin/'}};login.addEventListener('submit',async event=>{event.preventDefault();status.textContent='';const values=new FormData(login),response=await fetch('/api/admin/v1/iam/login',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({email:values.get('email'),password:values.get('password')})});const body=await response.json();if(!response.ok){status.textContent='Anmeldung fehlgeschlagen.';return}challenge=body.challenge;login.hidden=true;mfa.hidden=false;mfa.elements.code.focus()});mfa.addEventListener('submit',async event=>{event.preventDefault();status.textContent='';const response=await fetch('/api/admin/v1/iam/mfa',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({challenge,code:new FormData(mfa).get('code')})});if(!response.ok){status.textContent='Code ungültig oder abgelaufen.';return}location.assign(returnTo())});`;
+const loginJs = (uiBase, apiBase) => `const UI=${JSON.stringify(uiBase)},API=${JSON.stringify(apiBase)},login=document.querySelector('#login-form'),mfa=document.querySelector('#mfa-form'),status=document.querySelector('#status');let challenge='';const fallback=UI+'/';const returnTo=()=>{const raw=new URLSearchParams(location.search).get('returnTo')||'';if(!raw.startsWith('/')||raw.startsWith('//')||raw.includes('\\\\'))return fallback;try{const value=new URL(raw,location.origin),path=decodeURIComponent(value.pathname),inside=path===UI||path.startsWith(UI+'/');return value.origin===location.origin&&inside&&path!==UI+'/login'&&!path.startsWith(UI+'/login/')&&!path.includes('//')&&!path.includes('\\\\')?value.pathname+value.search:fallback}catch{return fallback}};login.addEventListener('submit',async event=>{event.preventDefault();status.textContent='';const values=new FormData(login),response=await fetch(API+'/iam/login',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({email:values.get('email'),password:values.get('password')})});const body=await response.json();if(!response.ok){status.textContent='Anmeldung fehlgeschlagen.';return}challenge=body.challenge;login.hidden=true;mfa.hidden=false;mfa.elements.code.focus()});mfa.addEventListener('submit',async event=>{event.preventDefault();status.textContent='';const response=await fetch(API+'/iam/mfa',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({challenge,code:new FormData(mfa).get('code')})});if(!response.ok){status.textContent='Code ungültig oder abgelaufen.';return}location.assign(returnTo())});`;
 
-export function registerAdminAuth(app, { pool, sessionPepper, fieldEncryptionKey, secureCookies = true, now = () => new Date() }) {
+export function registerAdminAuth(app, { pool, sessionPepper, fieldEncryptionKey, secureCookies = true, now = () => new Date(), uiBase: configuredUiBase = "/admin/ausschreibungen", apiBase: configuredApiBase = "/api/tender" }) {
   if (!sessionPepper || sessionPepper.length < 32) throw new Error("session_pepper_invalid");
   if (!Buffer.isBuffer(fieldEncryptionKey) || fieldEncryptionKey.length !== 32) throw new Error("field_encryption_key_invalid");
-  app.get("/admin/login", async (req, reply) => reply.header("content-security-policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'").type("text/html").send(loginHtml));
-  app.get("/admin/login.js", async (_, reply) => reply.type("text/javascript").send(loginJs));
-  app.get("/admin/login.css", async (_, reply) => reply.type("text/css").send(loginCss));
-  app.get("/admin/", async (_, reply) => reply.redirect("/admin/ausschreibungen/", 303));
+  const uiBase = tenderBasePath(configuredUiBase, "tender_ui_base");
+  const apiBase = tenderBasePath(configuredApiBase, "tender_api_base");
+  if (uiBase === "/admin" || uiBase === "/admin/login" || uiBase.startsWith("/admin/login/")) throw new Error("tender_ui_base_conflicts_with_wb_admin");
+  const routeAliases = (stripped, direct) => [...new Set([stripped, direct])];
+  for (const route of routeAliases("/login", `${uiBase}/login`)) app.get(route, async (_, reply) => reply.header("content-security-policy", "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'").type("text/html").send(loginHtml(uiBase)));
+  for (const route of routeAliases("/login.js", `${uiBase}/login.js`)) app.get(route, async (_, reply) => reply.type("text/javascript").send(loginJs(uiBase, apiBase)));
+  for (const route of routeAliases("/login.css", `${uiBase}/login.css`)) app.get(route, async (_, reply) => reply.type("text/css").send(loginCss));
 
-  app.post("/api/admin/v1/iam/login", { config: { rateLimit: { max: 12, timeWindow: "15 minutes" } } }, async (req, reply) => {
+  const loginHandler = async (req, reply) => {
     const email = String(req.body?.email || "").trim().toLowerCase();
     const password = String(req.body?.password || "");
     if (!EMAIL.test(email) || email.length > 254 || password.length < 12 || password.length > 1024) return reply.code(400).send({ error: "invalid_request" });
@@ -117,9 +135,10 @@ export function registerAdminAuth(app, { pool, sessionPepper, fieldEncryptionKey
     await pool.query("DELETE FROM iam.tender_login_challenges WHERE expires_at<=now() OR user_id=$1", [user.id]);
     await pool.query("INSERT INTO iam.tender_login_challenges(challenge_hash,user_id,user_agent_hash,network_hash,expires_at) VALUES($1,$2,$3,$4,now()+interval '5 minutes')", [hmac(challenge, sessionPepper), user.id, userAgentHash, networkHash]);
     return { mfaRequired: true, challenge };
-  });
+  };
+  for (const route of routeAliases("/api/iam/login", `${apiBase}/iam/login`)) app.post(route, { config: { rateLimit: { max: 12, timeWindow: "15 minutes" } } }, loginHandler);
 
-  app.post("/api/admin/v1/iam/mfa", { config: { rateLimit: { max: 12, timeWindow: "15 minutes" } } }, async (req, reply) => {
+  const mfaHandler = async (req, reply) => {
     const challenge = String(req.body?.challenge || ""), code = String(req.body?.code || "");
     if (challenge.length < 32 || challenge.length > 512 || !/^\d{6}$/.test(code)) return reply.code(400).send({ error: "invalid_request" });
     const client = await pool.connect();
@@ -147,5 +166,6 @@ export function registerAdminAuth(app, { pool, sessionPepper, fieldEncryptionKey
       await client.query("ROLLBACK").catch(() => {});
       throw error;
     } finally { client.release(); }
-  });
+  };
+  for (const route of routeAliases("/api/iam/mfa", `${apiBase}/iam/mfa`)) app.post(route, { config: { rateLimit: { max: 12, timeWindow: "15 minutes" } } }, mfaHandler);
 }

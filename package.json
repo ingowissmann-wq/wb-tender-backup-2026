@@ -12,6 +12,8 @@
     "test:admin-tenant-isolation": "node scripts/admin-real-tenant-integration.mjs",
     "test:business-suite-rehearsal": "node scripts/business-suite-rehearsal.mjs",
     "test:business-suite-rollback": "node scripts/business-suite-rehearsal-rollback.mjs",
+    "test:iam-canary": "bash tests/production-iam-canary.integration.sh",
+    "test:auth-browser": "node tests/tender-auth-browser.integration.mjs",
     "sbom": "node scripts/generate-sbom.mjs",
     "start": "node platform/server.mjs",
     "worker": "node platform/autopilot-pipeline-worker.mjs",
