@@ -68,6 +68,24 @@ rollback() {
   node scripts/production-iam-canary.mjs verify-absence
   canary_absence_status=$?
   if (( canary_cleanup_status != 0 || canary_absence_status != 0 )); then echo "ROLLBACK_ERROR: IAM canary cleanup/absence proof failed" >&2; emergency=1; fi
+  docker compose -p "$project" -f "$COMPOSE_FILE" stop -t 30 api worker scheduler
+  service_stop_status=$?
+  if (( service_stop_status != 0 )); then echo "ROLLBACK_ERROR: candidate services did not stop" >&2; emergency=1; fi
+  docker compose -p "$project" -f "$COMPOSE_FILE" run --rm -T \
+    -v "$DATABASE_URL_FILE:/run/secrets/database_url:ro" -e DATABASE_URL_FILE=/run/secrets/database_url \
+    tools deployment/drain-runtime-database-sessions.sh | tee "$state_dir/runtime-session-drain.log"
+  runtime_drain_status=$?
+  if (( runtime_drain_status != 0 )); then echo "ROLLBACK_ERROR: runtime database sessions did not drain" >&2; emergency=1; fi
+  migration_rollback_status=1
+  if (( runtime_drain_status == 0 )); then
+    docker compose -p "$project" -f "$COMPOSE_FILE" run --rm -T \
+      -v "$DATABASE_URL_FILE:/run/secrets/database_url:ro" -v "$state_dir/migrations.log:/state/migrations.log:ro" \
+      -e DATABASE_URL_FILE=/run/secrets/database_url -e APPLIED_MIGRATIONS_FILE=/state/migrations.log \
+      -e RELEASE_ID="$EXPECTED_COMMIT" -e LEDGER_EXISTED_BEFORE="$ledger_existed" -e SNAPSHOT_EXISTED_BEFORE="$snapshot_existed" \
+      tools deployment/rollback-applied-release-migrations.sh
+    migration_rollback_status=$?
+  fi
+  if (( migration_rollback_status != 0 )); then echo "ROLLBACK_ERROR: reverse migration failed" >&2; emergency=1; fi
   override="$state_dir/rollback-images.compose.yml"
   {
     printf 'services:\n'
@@ -76,13 +94,6 @@ rollback() {
   docker compose -p "$project" -f "$COMPOSE_FILE" -f "$override" up -d --no-deps --force-recreate api worker scheduler
   service_restore_status=$?
   if (( service_restore_status != 0 )); then echo "ROLLBACK_ERROR: exact service image restoration failed" >&2; emergency=1; fi
-  docker compose -p "$project" -f "$COMPOSE_FILE" run --rm -T \
-    -v "$DATABASE_URL_FILE:/run/secrets/database_url:ro" -v "$state_dir/migrations.log:/state/migrations.log:ro" \
-    -e DATABASE_URL_FILE=/run/secrets/database_url -e APPLIED_MIGRATIONS_FILE=/state/migrations.log \
-    -e RELEASE_ID="$EXPECTED_COMMIT" -e LEDGER_EXISTED_BEFORE="$ledger_existed" -e SNAPSHOT_EXISTED_BEFORE="$snapshot_existed" \
-    tools deployment/rollback-applied-release-migrations.sh
-  migration_rollback_status=$?
-  if (( migration_rollback_status != 0 )); then echo "ROLLBACK_ERROR: reverse migration failed" >&2; emergency=1; fi
   capture_db_state "$state_dir/after-rollback"
   snapshot_status=$?
   if (( snapshot_status != 0 )); then echo "ROLLBACK_ERROR: verification snapshot failed" >&2; emergency=1; fi

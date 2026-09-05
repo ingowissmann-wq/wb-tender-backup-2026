@@ -128,7 +128,10 @@ fixture_seeded=false
 iam_after=$(docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" exec -T db psql -U postgres -At -d wb_rehearsal -c "$iam_snapshot_sql")
 [[ "$iam_before" == "$iam_after" ]] || { echo "synthetic browser IAM rows were not exactly restored" >&2; exit 1; }
 
-docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" stop api worker scheduler
+docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" stop -t 30 api worker scheduler
+docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" run --rm -T \
+  -e DATABASE_URL_FILE=/run/secrets/database_url \
+  tools deployment/drain-runtime-database-sessions.sh
 REHEARSAL_FORCE_FAILURE=after_migrations deployment/rehearsal/rollback-probe.sh "$project" "$REHEARSAL_COMPOSE_FILE" "$commit"
 after=$(docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" exec -T db psql -U postgres -At -d wb_rehearsal -c "SELECT encode(digest(coalesce(jsonb_agg(to_jsonb(p) ORDER BY code)::text,''),'sha256'),'hex') FROM saas.plans p WHERE code IN ('CORE','NORMAL','PROFESSIONAL','ENTERPRISE')")
 [[ "$before" == "$after" ]] || { echo "rollback did not restore exact plan rows" >&2; exit 1; }

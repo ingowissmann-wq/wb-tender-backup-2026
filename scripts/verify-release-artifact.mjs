@@ -56,6 +56,7 @@ const required = [
   "tests/encrypted-catalog-verification.integration.sh",
   "deployment/capture-rollout-db-state.sh",
   "deployment/rollback-applied-release-migrations.sh",
+  "deployment/drain-runtime-database-sessions.sh",
   "deployment/production-live-http-gate.mjs",
   "deployment/production-rollout-with-iam-canary.sh",
   "scripts/verify-rollout-binding.mjs",

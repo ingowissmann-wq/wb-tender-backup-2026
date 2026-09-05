@@ -22,7 +22,19 @@ VALUES(repeat('a',64),'00000000-0000-0000-0000-000000000001','browser','network'
 SELECT challenge_hash FROM iam.tender_login_challenges WHERE challenge_hash=repeat('a',64);
 DELETE FROM iam.tender_login_challenges WHERE challenge_hash=repeat('a',64);
 SQL
+runtime_url=${url/postgres@/wb_tender_api_login@}
+psql "$runtime_url" -v ON_ERROR_STOP=1 -c "SELECT pg_sleep(300)" >/dev/null 2>&1 &
+runtime_client=$!
+for attempt in {1..30}; do
+  [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND usename='wb_tender_api_login'")" == 1 ]] && break
+  sleep 1
+done
+[[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND usename='wb_tender_api_login'")" == 1 ]]
+drain_result=$("$root/deployment/drain-runtime-database-sessions.sh")
+wait "$runtime_client" 2>/dev/null || true
+grep -qx 'RUNTIME_SESSIONS_TERMINATED=1' <<<"$drain_result"
+grep -qx 'RUNTIME_SESSIONS_REMAINING=0' <<<"$drain_result"
 APPLIED_MIGRATIONS_FILE="$temporary/migrations.log" RELEASE_ID=0000000000000000000000000000000000000001 LEDGER_EXISTED_BEFORE=false SNAPSHOT_EXISTED_BEFORE=false "$root/deployment/rollback-applied-release-migrations.sh"
 STATE_OUTPUT_DIR="$temporary/after" "$root/deployment/capture-rollout-db-state.sh"
 for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger.sha256 migration-snapshots.present migration-snapshots.sha256; do cmp -s "$temporary/before/$item" "$temporary/after/$item"; done
-printf '{"passed":true,"isolatedPostgres":true,"pendingMigrations":5,"runtimeLoginInheritedLeastPrivilege":true,"exactReverseRollback":true,"schemaLedgerSnapshotPlansRestored":true}\n'
+printf '{"passed":true,"isolatedPostgres":true,"pendingMigrations":5,"runtimeLoginInheritedLeastPrivilege":true,"runtimeSessionsDrainedBeforeRollback":true,"exactReverseRollback":true,"schemaLedgerSnapshotPlansRestored":true}\n'
