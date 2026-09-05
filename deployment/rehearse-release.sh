@@ -76,7 +76,13 @@ export RELEASE_IMAGE POSTGRES_IMAGE BROWSER_IMAGE EXTERNAL_SUBMISSION_ENABLED=fa
 
 docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" config --quiet
 docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" up -d db
-docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" exec -T db sh -c 'until pg_isready -U postgres -d wb_rehearsal; do sleep 1; done'
+docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" exec -T db sh -c '
+  for _ in $(seq 1 90); do
+    if [ "$(cat /proc/1/comm)" = postgres ] && psql -U postgres -d wb_rehearsal -Atc "SELECT 1" | grep -qx 1; then exit 0; fi
+    sleep 1
+  done
+  exit 1
+'
 decrypt_archive | docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" exec -T db pg_restore -U postgres --exit-on-error --clean --if-exists --no-owner --no-acl -d wb_rehearsal
 docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" run --rm -T -e REHEARSAL_DATABASE_TRUSTED=true tools deployment/verify-rehearsal-prerequisites.sh
 docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" run --rm -T -v "$secret_dir:/run/rehearsal:ro" -e REHEARSAL_SECRET_DIR=/run/rehearsal tools node scripts/release-rehearsal-fixture.mjs prepare-runtime

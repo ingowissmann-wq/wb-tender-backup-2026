@@ -58,11 +58,15 @@ network_created=true
 docker run -d --name "$database_container" --network "$network" --network-alias db \
   -e POSTGRES_DB=wb_restore -e POSTGRES_HOST_AUTH_METHOD=trust "$POSTGRES_IMAGE" >/dev/null
 container_created=true
+database_ready=false
 for _ in $(seq 1 90); do
-  docker exec "$database_container" pg_isready -U postgres -d wb_restore >/dev/null 2>&1 && break
+  if docker exec "$database_container" sh -c '[ "$(cat /proc/1/comm)" = postgres ] && psql -U postgres -d wb_restore -Atc "SELECT 1"' | grep -qx 1; then
+    database_ready=true
+    break
+  fi
   sleep 1
 done
-docker exec "$database_container" pg_isready -U postgres -d wb_restore >/dev/null
+[[ "$database_ready" == true ]] || { echo "final PostgreSQL server did not become ready" >&2; exit 78; }
 [[ "$(docker inspect "$database_container" --format '{{len .NetworkSettings.Networks}}')" == 1 ]] || { echo "restore database has unexpected network connectivity" >&2; exit 78; }
 decrypt | docker exec -i "$database_container" pg_restore -U postgres --exit-on-error --clean --if-exists --no-owner --no-acl -d wb_restore
 
