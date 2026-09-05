@@ -1,5 +1,12 @@
 # Public admin login routing incident (2026-09-03)
 
+> Superseded release contract (2026-09-05): the durable candidate login is
+> `/admin/ausschreibungen/login`, browser IAM calls are
+> `/api/tender/iam/login` and `/api/tender/iam/mfa`, and Tender does not
+> register `/admin/login`. See `docs/production-rollout-hard-gates.md`. The
+> `/api/tender/auth/login` path below describes the earlier owner-login runtime
+> investigated by this historical incident record, not the release candidate.
+
 ## Proven public path
 
 The public page `/admin/ausschreibungen/login` is routed by the active host

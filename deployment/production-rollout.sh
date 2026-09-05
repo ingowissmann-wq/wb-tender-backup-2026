@@ -2,11 +2,13 @@
 set -Eeuo pipefail
 umask 077
 
-required=(COMPOSE_FILE COMPOSE_PROJECT_NAME RELEASE_IMAGE POSTGRES_IMAGE DATABASE_URL_FILE BACKUP_DIR BACKUP_ENCRYPTION_KEY_FILE REHEARSAL_EVIDENCE OPERATOR_APPROVAL PRODUCTION_SESSION_FILE PRODUCTION_BASE_URL ROLLOUT_STATE_DIR EXPECTED_COMMIT EXPECTED_TREE EXPECTED_RELEASE_IMAGE_ID EXPECTED_RELEASE_IMAGE_DIGEST EXPECTED_EVIDENCE_SHA256)
+required=(COMPOSE_FILE COMPOSE_PROJECT_NAME RELEASE_IMAGE POSTGRES_IMAGE DATABASE_URL_FILE SESSION_PEPPER_FILE FIELD_ENCRYPTION_KEY_FILE BACKUP_DIR BACKUP_ENCRYPTION_KEY_FILE REHEARSAL_EVIDENCE OPERATOR_APPROVAL PRODUCTION_SESSION_FILE PRODUCTION_CANARY_STATE_DIR PRODUCTION_BASE_URL ROLLOUT_STATE_DIR EXPECTED_COMMIT EXPECTED_TREE EXPECTED_RELEASE_IMAGE_ID EXPECTED_RELEASE_IMAGE_DIGEST EXPECTED_EVIDENCE_SHA256)
 for name in "${required[@]}"; do [[ -n "${!name:-}" ]] || { echo "missing required environment: $name" >&2; exit 64; }; done
 repository=$(git rev-parse --show-toplevel)
 [[ "$BACKUP_DIR" = /* && "$BACKUP_DIR" != "$repository"* ]] || { echo "BACKUP_DIR must be absolute and outside checkout" >&2; exit 64; }
 [[ "$ROLLOUT_STATE_DIR" = /* && "$ROLLOUT_STATE_DIR" != "$repository"* ]] || { echo "ROLLOUT_STATE_DIR must be absolute and outside checkout" >&2; exit 64; }
+[[ "$PRODUCTION_CANARY_STATE_DIR" = /* && "$PRODUCTION_CANARY_STATE_DIR" != "$repository"* ]] || { echo "PRODUCTION_CANARY_STATE_DIR must be absolute and outside checkout" >&2; exit 64; }
+[[ "$PRODUCTION_SESSION_FILE" == "$PRODUCTION_CANARY_STATE_DIR/curl.config" ]] || { echo "PRODUCTION_SESSION_FILE must be the prepared IAM canary curl config" >&2; exit 64; }
 [[ -f "$COMPOSE_FILE" && ! -L "$COMPOSE_FILE" ]] || { echo "compose file must be a regular non-symlink file" >&2; exit 66; }
 for name in RELEASE_IMAGE POSTGRES_IMAGE; do [[ "${!name}" == *@sha256:* ]] || { echo "$name must be digest pinned" >&2; exit 64; }; done
 export EXTERNAL_SUBMISSION_ENABLED=false WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false
@@ -18,7 +20,7 @@ CHECKOUT_CLEAN=true
 ACTUAL_RELEASE_IMAGE_ID=$(docker image inspect "$RELEASE_IMAGE" --format '{{.Id}}')
 ACTUAL_RELEASE_IMAGE_REVISION=$(docker image inspect "$RELEASE_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
 ACTUAL_RELEASE_IMAGE_TREE=$(docker image inspect "$RELEASE_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source-tree"}}')
-node scripts/verify-rollout-binding.mjs
+VERIFY_ROLLOUT_BINDING_PHASE=pre-canary node scripts/verify-rollout-binding.mjs
 
 project=$COMPOSE_PROJECT_NAME
 state_dir="$ROLLOUT_STATE_DIR/${EXPECTED_COMMIT}-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -59,6 +61,11 @@ rollback() {
   trap - ERR INT TERM
   set +e
   emergency=0
+  node scripts/production-iam-canary.mjs cleanup
+  canary_cleanup_status=$?
+  node scripts/production-iam-canary.mjs verify-absence
+  canary_absence_status=$?
+  if (( canary_cleanup_status != 0 || canary_absence_status != 0 )); then echo "ROLLBACK_ERROR: IAM canary cleanup/absence proof failed" >&2; emergency=1; fi
   override="$state_dir/rollback-images.compose.yml"
   {
     printf 'services:\n'
@@ -99,6 +106,26 @@ rollback() {
   printf 'STATUS=ROLLBACK_VERIFIED\nORIGINAL_STATUS=%s\nEXTERNAL_SUBMISSION=false\n' "$original_status" >"$state_dir/rollback.status"
   exit "$original_status"
 }
+canary_prepared=false
+early_canary_cleanup() {
+  original_status=$?
+  trap - ERR INT TERM
+  set +e
+  if [[ "$canary_prepared" == true ]]; then
+    node scripts/production-iam-canary.mjs cleanup
+    cleanup_status=$?
+    node scripts/production-iam-canary.mjs verify-absence
+    absence_status=$?
+    if (( cleanup_status != 0 || absence_status != 0 )); then exit 91; fi
+  fi
+  exit "$original_status"
+}
+trap early_canary_cleanup ERR INT TERM
+node scripts/production-iam-canary.mjs dry-run
+node scripts/production-iam-canary.mjs prepare
+canary_prepared=true
+node scripts/verify-rollout-binding.mjs
+trap - ERR INT TERM
 trap rollback ERR INT TERM
 
 docker compose -p "$project" -f "$COMPOSE_FILE" run --rm -T \
@@ -114,6 +141,14 @@ for service in api worker scheduler; do
   docker inspect "$container" --format '{{.RestartCount}}' >"$state_dir/$service.post-cutover-restarts"
 done
 node deployment/production-live-http-gate.mjs | tee "$state_dir/live-http-gate.json"
+E2E_EMAIL_FILE="$PRODUCTION_CANARY_STATE_DIR/email" \
+  E2E_PASSWORD_FILE="$PRODUCTION_CANARY_STATE_DIR/password" \
+  E2E_TOTP_FILE="$PRODUCTION_CANARY_STATE_DIR/totp" \
+  TENDER_UI_BASE="${TENDER_UI_BASE:-/admin/ausschreibungen}" \
+  TENDER_API_BASE="${TENDER_API_BASE:-/api/tender}" \
+  node scripts/production-iam-browser-canary.mjs | tee "$state_dir/iam-browser-canary.json"
+node scripts/production-iam-canary.mjs cleanup | tee "$state_dir/iam-canary-cleanup.json"
+node scripts/production-iam-canary.mjs verify-absence | tee "$state_dir/iam-canary-absence.json"
 docker compose -p "$project" -f "$COMPOSE_FILE" exec -T api npm run gate:readiness
 for service in api worker scheduler; do
   container=$(docker compose -p "$project" -f "$COMPOSE_FILE" ps -q "$service")

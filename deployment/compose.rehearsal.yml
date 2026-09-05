@@ -34,6 +34,7 @@ services:
       PORTAL_CREDENTIAL_KEY_FILE: /run/secrets/portal_credential_key
       CAREER_DATABASE_PATH: /run/rehearsal/career.db
       TENDER_API_BASE: /api
+      TENDER_UI_BASE: /admin/ausschreibungen
       EXTERNAL_SUBMISSION_ENABLED: "false"
       WB_TENDER_ALLOW_EXTERNAL_SUBMISSION: "false"
       WB_TENDER_SAAS_ENABLED: "true"
@@ -86,6 +87,8 @@ services:
       E2E_EMAIL_FILE: /run/secrets/e2e_email
       E2E_PASSWORD_FILE: /run/secrets/e2e_password
       E2E_TOTP_FILE: /run/secrets/e2e_totp
+      E2E_UI_BASE: /admin/ausschreibungen
+      E2E_API_BASE: /api
     secrets: [e2e_email, e2e_password, e2e_totp]
   tls-proxy:
     image: ${RELEASE_IMAGE:?RELEASE_IMAGE must be digest pinned}
@@ -96,6 +99,7 @@ services:
       TLS_KEY_FILE: /run/secrets/tls_key
       TLS_CERT_FILE: /run/secrets/tls_cert
       TLS_PROXY_UPSTREAM: http://api:4240
+      TLS_PROXY_STRIP_UI_BASE: /admin/ausschreibungen
     secrets: [tls_key, tls_cert]
     healthcheck:
       test: ["CMD", "node", "-e", "process.env.NODE_TLS_REJECT_UNAUTHORIZED='0';fetch('https://localhost:4443/healthz').then(r=>{if(!r.ok)process.exit(1)})"]

@@ -6,6 +6,8 @@ const fail = (message, code = 65) => {
   console.error(message);
   process.exit(code);
 };
+const preCanaryPhase = process.env.VERIFY_ROLLOUT_BINDING_PHASE === "pre-canary";
+if (process.env.VERIFY_ROLLOUT_BINDING_PHASE && !preCanaryPhase) fail("VERIFY_ROLLOUT_BINDING_PHASE is invalid", 64);
 const required = (name) => {
   const value = String(process.env[name] || "").trim();
   if (!value) fail(`missing required environment: ${name}`, 64);
@@ -58,7 +60,8 @@ const applicationPrefix = /^(?:WB_|SAAS_|STRIPE_|E2E_|PORTAL_|DATABASE_|BACKUP_|
 const sensitiveSuffix = /(?:PASSWORD|TOKEN|SECRET|KEY|SESSION|CREDENTIAL|DATABASE_URL)$/;
 for (const [name, value] of Object.entries(process.env)) {
   if (value && applicationPrefix.test(name) && sensitiveSuffix.test(name) && !name.endsWith("_FILE")) fail(`inline secret is forbidden: ${name}`, 64);
-  if (value && applicationPrefix.test(name) && name.endsWith("_FILE") && /(?:PASSWORD|TOKEN|SECRET|KEY|SESSION|CREDENTIAL|DATABASE_URL)_FILE$/.test(name)) secureFile(name, { rootOnly: name === "PRODUCTION_SESSION_FILE" });
+  if (value && applicationPrefix.test(name) && name.endsWith("_FILE") && /(?:PASSWORD|TOKEN|SECRET|KEY|SESSION|CREDENTIAL|DATABASE_URL)_FILE$/.test(name)
+      && !(preCanaryPhase && name === "PRODUCTION_SESSION_FILE")) secureFile(name, { rootOnly: name === "PRODUCTION_SESSION_FILE" });
 }
 
 const expectedCommit = exactGit("EXPECTED_COMMIT");
@@ -71,7 +74,13 @@ if (!releaseImage.endsWith(`@${expectedImageDigest}`)) fail("RELEASE_IMAGE does 
 
 const evidencePath = secureFile("REHEARSAL_EVIDENCE");
 const approvalPath = secureFile("OPERATOR_APPROVAL", { rootOnly: true });
-for (const name of ["DATABASE_URL_FILE", "BACKUP_ENCRYPTION_KEY_FILE", "PRODUCTION_SESSION_FILE"] ) secureFile(name, { rootOnly: name === "PRODUCTION_SESSION_FILE" });
+for (const name of ["DATABASE_URL_FILE", "BACKUP_ENCRYPTION_KEY_FILE", ...(preCanaryPhase ? [] : ["PRODUCTION_SESSION_FILE"])] ) secureFile(name, { rootOnly: name === "PRODUCTION_SESSION_FILE" });
+const productionSessionLines = preCanaryPhase ? [] : fs.readFileSync(required("PRODUCTION_SESSION_FILE"), "utf8").split(/\r?\n/).filter(Boolean);
+if (!preCanaryPhase && (productionSessionLines.length !== 2
+    || !productionSessionLines.some((line) => /^cookie\s*=\s*"[^"\r\n]*wb_session=[^";\s]+[^"\r\n]*wb_csrf=[^";\s]+[^"\r\n]*"$/.test(line))
+    || !productionSessionLines.some((line) => /^header\s*=\s*"x-csrf-token: [A-Za-z0-9_-]{32,512}"$/i.test(line)))) {
+  fail("PRODUCTION_SESSION_FILE has an invalid exact two-line curl-config shape", 66);
+}
 
 const actualCommit = exactGit("ACTUAL_COMMIT");
 const actualTree = exactGit("ACTUAL_TREE");
@@ -115,4 +124,4 @@ for (const [key, value] of Object.entries({
 if (required("ACTUAL_RELEASE_IMAGE_ID") !== expectedImageId) fail("release image ID mismatch");
 if (required("ACTUAL_RELEASE_IMAGE_REVISION") !== expectedCommit) fail("release image revision label mismatch");
 if (required("ACTUAL_RELEASE_IMAGE_TREE") !== expectedTree) fail("release image tree label mismatch");
-console.log(JSON.stringify({ passed: true, commit: expectedCommit, tree: expectedTree, imageId: expectedImageId, imageDigest: expectedImageDigest, evidenceSha256: evidenceSha, externalSubmissionEnabled: false }));
+console.log(JSON.stringify({ passed: true, phase: preCanaryPhase ? "pre-canary" : "complete", canarySessionBound: !preCanaryPhase, commit: expectedCommit, tree: expectedTree, imageId: expectedImageId, imageDigest: expectedImageDigest, evidenceSha256: evidenceSha, externalSubmissionEnabled: false }));

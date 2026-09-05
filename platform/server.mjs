@@ -18,7 +18,7 @@ import { registerTenantPortalRoutes } from "./tenant-portal.mjs";
 import { SmtpEmailAdapter, StripeBillingAdapter, UnconfiguredBillingAdapter, UnconfiguredEmailAdapter } from "./saas-adapters.mjs";
 import { TenantFilesystemStorage, UnconfiguredTenantStorage } from "./tenant-storage.mjs";
 import { PostgresLoginStateStore, PostgresSaasSessionStore, SAAS_LOGIN_PATH, SaasOidcClient, registerSaasIamRoutes } from "./saas-iam.mjs";
-import { registerAdminAuth } from "./admin-auth.mjs";
+import { registerAdminAuth, tenderBasePath } from "./admin-auth.mjs";
 import { decoratePortalNavigation } from "./portal-navigation.mjs";
 import { loadTenderLinkEvidence } from "./tender-link-evidence.mjs";
 import { registerLiveSubmissionRoutes } from "./submission-live-routes.mjs";
@@ -42,8 +42,8 @@ const stripeProviderConfigured = process.env.SAAS_BILLING_ADAPTER === "stripe"
 // The commercial surface remains entirely dark unless the selected billing
 // provider has all configuration required for checkout and verified webhooks.
 const saasEnabled = saasRequested && stripeProviderConfigured;
-const uiBase = process.env.TENDER_UI_BASE || "/admin/ausschreibungen";
-const apiBase = process.env.TENDER_API_BASE || "/api/tender";
+const uiBase = tenderBasePath(process.env.TENDER_UI_BASE || "/admin/ausschreibungen", "tender_ui_base");
+const apiBase = tenderBasePath(process.env.TENDER_API_BASE || "/api/tender", "tender_api_base");
 const asset = (name) => readFileSync(new URL(`./assets/${name}`, import.meta.url));
 const inboxRegionsJs = asset("inbox-regions.js");
 const inboxRegionsCss = asset("inbox-regions.css");
@@ -122,6 +122,8 @@ registerAdminAuth(app, {
   sessionPepper,
   fieldEncryptionKey: Buffer.from(fieldEncryptionKeyHex, "hex"),
   secureCookies: process.env.ADMIN_COOKIE_SECURE !== "false",
+  uiBase,
+  apiBase,
 });
 app.addHook("onSend", async (_, reply, payload) => {
   reply.header("x-robots-tag", "noindex, nofollow");
@@ -142,8 +144,10 @@ async function auth(req, reply) {
   if (!identity) {
     const browserRequest = String(req.headers.accept || "").includes("text/html");
     if (browserRequest) {
-      const target = req.url.startsWith("/admin/ausschreibungen") ? req.url : `${uiBase}/`;
-      return reply.redirect(`/admin/login?returnTo=${encodeURIComponent(target)}`, 303);
+      const target = req.url === uiBase || req.url.startsWith(`${uiBase}/`)
+        ? req.url
+        : req.url === "/" ? `${uiBase}/` : `${uiBase}${req.url.startsWith("/") ? req.url : `/${req.url}`}`;
+      return reply.redirect(`${uiBase}/login?returnTo=${encodeURIComponent(target)}`, 303);
     }
     return reply.code(401).send({ error: "authentication_required" });
   }
@@ -846,10 +850,10 @@ app.get("/", uiAuth, tenderPage);
 // Keep the browser contract correct even when a reverse proxy accidentally
 // forwards the public prefix without stripping it. APIs continue to use their
 // normal JSON authentication contract.
-app.get("/admin/ausschreibungen", async (_, reply) =>
-  reply.redirect("/admin/ausschreibungen/", 308),
+app.get(uiBase, async (_, reply) =>
+  reply.redirect(`${uiBase}/`, 308),
 );
-app.get("/admin/ausschreibungen/", uiAuth, tenderPage);
+app.get(`${uiBase}/`, uiAuth, tenderPage);
 const autopilotPage=async (_, r) =>
   r
     .type("text/html")

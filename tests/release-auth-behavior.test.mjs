@@ -4,14 +4,23 @@ import test from "node:test";
 import argon2 from "argon2";
 import {
   decryptTotpSecret, encryptTotpSecret, hashTenderPassword,
-  safeAdminReturnTo, totpFor, verifyTenderPassword,
+  safeAdminReturnTo, tenderBasePath, totpFor, verifyTenderPassword,
 } from "../platform/admin-auth.mjs";
 
 test("safe admin return targets preserve local paths and reject redirect variants", () => {
   assert.equal(safeAdminReturnTo("/admin/ausschreibungen/?tab=tasks"), "/admin/ausschreibungen/?tab=tasks");
-  for (const unsafe of ["https://outside.invalid/admin/", "//outside.invalid/admin/", "/admin//outside.invalid", "/admin/login?returnTo=/admin/", "/admin/\\outside.invalid"]) {
-    assert.equal(safeAdminReturnTo(unsafe), "/admin/");
+  for (const unsafe of ["https://outside.invalid/admin/", "//outside.invalid/admin/", "/admin/", "/admin/login?returnTo=/admin/", "/admin/ausschreibungen/../login", "/admin/ausschreibungen/\\outside.invalid"]) {
+    assert.equal(safeAdminReturnTo(unsafe), "/admin/ausschreibungen/");
   }
+  assert.equal(safeAdminReturnTo("/tender/tasks?q=1", "/tender"), "/tender/tasks?q=1");
+  assert.equal(safeAdminReturnTo("/admin/ausschreibungen-other", "/admin/ausschreibungen"), "/admin/ausschreibungen/");
+});
+
+test("base paths reject ambiguous or non-path configuration", () => {
+  for (const invalid of ["", "/", "admin/tender", "/admin/tender/", "/admin//tender", "/admin/../tender", "/admin/tender?x=1", "/admin/%2f/tender"]) {
+    assert.throws(() => tenderBasePath(invalid, "test_base"), /test_base_invalid/);
+  }
+  assert.equal(tenderBasePath("/api/tender"), "/api/tender");
 });
 
 test("password verification supports the production Argon2id profile and bounded synthetic scrypt fixtures", async () => {

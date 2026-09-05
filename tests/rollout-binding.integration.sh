@@ -25,11 +25,13 @@ evidence="$artifacts/evidence" approval="$artifacts/approval"
 } >"$evidence"
 evidence_sha=$(sha256sum "$evidence" | cut -d' ' -f1)
 printf 'APPROVAL_VERSION=1\nAPPROVE_COMMIT=%s\nAPPROVE_TREE=%s\nAPPROVE_IMAGE_DIGEST=%s\nAPPROVE_EVIDENCE_SHA256=%s\nEXTERNAL_SUBMISSION_ENABLED=false\n' "$commit" "$tree" "$image_digest" "$evidence_sha" >"$approval"
-for file in database key session; do printf 'file-only\n' >"$artifacts/$file"; done
+for file in database key; do printf 'file-only\n' >"$artifacts/$file"; done
+printf 'cookie = "wb_session=%064d; wb_csrf=%064d"\nheader = "x-csrf-token: %064d"\n' 0 0 0 >"$artifacts/session"
 export EXPECTED_COMMIT="$commit" EXPECTED_TREE="$tree" EXPECTED_RELEASE_IMAGE_ID="$image_id" EXPECTED_RELEASE_IMAGE_DIGEST="$image_digest" EXPECTED_EVIDENCE_SHA256="$evidence_sha"
 export RELEASE_IMAGE="$release_image" REHEARSAL_EVIDENCE="$evidence" OPERATOR_APPROVAL="$approval" DATABASE_URL_FILE="$artifacts/database" BACKUP_ENCRYPTION_KEY_FILE="$artifacts/key" PRODUCTION_SESSION_FILE="$artifacts/session"
 export ACTUAL_COMMIT="$commit" ACTUAL_TREE="$tree" CHECKOUT_CLEAN=true ACTUAL_RELEASE_IMAGE_ID="$image_id" ACTUAL_RELEASE_IMAGE_REVISION="$commit" ACTUAL_RELEASE_IMAGE_TREE="$tree"
 node "$project/scripts/verify-rollout-binding.mjs" | grep -q '"passed":true'
+PRODUCTION_SESSION_FILE= VERIFY_ROLLOUT_BINDING_PHASE=pre-canary node "$project/scripts/verify-rollout-binding.mjs" | grep -q '"canarySessionBound":false'
 sed -i 's/RESULT=PASS/RESULT=FAIL/' "$evidence"
 set +e
 tamper_output=$(node "$project/scripts/verify-rollout-binding.mjs" 2>&1)

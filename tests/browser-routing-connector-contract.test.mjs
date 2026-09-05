@@ -6,9 +6,10 @@ const server = await readFile(new URL("../platform/server.mjs", import.meta.url)
 const routes = await readFile(new URL("../platform/autopilot-routes.mjs", import.meta.url), "utf8");
 
 test("canonical tender path redirects slash and browser authentication redirects to login", () => {
-  assert.match(server, /app\.get\("\/admin\/ausschreibungen"[\s\S]*?redirect\("\/admin\/ausschreibungen\/", 308\)/);
-  assert.match(server, /browserRequest[\s\S]*?\/admin\/login\?returnTo=/);
-  assert.match(server, /app\.get\("\/admin\/ausschreibungen\/", uiAuth, tenderPage\)/);
+  assert.match(server, /app\.get\(uiBase,[\s\S]*?redirect\(`\$\{uiBase\}\/`, 308\)/);
+  assert.match(server, /browserRequest[\s\S]*?redirect\(`\$\{uiBase\}\/login\?returnTo=/);
+  assert.match(server, /app\.get\(`\$\{uiBase\}\/`, uiAuth, tenderPage\)/);
+  assert.doesNotMatch(server, /redirect\(`?\/admin\/login/);
 });
 
 test("connector responses expose state and machine-readable causes", () => {
