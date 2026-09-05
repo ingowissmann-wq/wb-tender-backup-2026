@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 umask 077
 
-required=(COMPOSE_FILE COMPOSE_PROJECT_NAME RELEASE_IMAGE POSTGRES_IMAGE DATABASE_URL_FILE SESSION_PEPPER_FILE FIELD_ENCRYPTION_KEY_FILE BACKUP_DIR BACKUP_ENCRYPTION_KEY_FILE REHEARSAL_EVIDENCE OPERATOR_APPROVAL PRODUCTION_SESSION_FILE PRODUCTION_CANARY_STATE_DIR PRODUCTION_BASE_URL ROLLOUT_STATE_DIR EXPECTED_COMMIT EXPECTED_TREE EXPECTED_RELEASE_IMAGE_ID EXPECTED_RELEASE_IMAGE_DIGEST EXPECTED_EVIDENCE_SHA256)
+required=(COMPOSE_FILE COMPOSE_PROJECT_NAME RELEASE_IMAGE POSTGRES_IMAGE PRODUCTION_BROWSER_IMAGE DATABASE_URL_FILE SESSION_PEPPER_FILE FIELD_ENCRYPTION_KEY_FILE BACKUP_DIR BACKUP_ENCRYPTION_KEY_FILE REHEARSAL_EVIDENCE OPERATOR_APPROVAL PRODUCTION_SESSION_FILE PRODUCTION_CANARY_STATE_DIR PRODUCTION_BASE_URL ROLLOUT_STATE_DIR EXPECTED_COMMIT EXPECTED_TREE EXPECTED_RELEASE_IMAGE_ID EXPECTED_RELEASE_IMAGE_DIGEST EXPECTED_EVIDENCE_SHA256)
 for name in "${required[@]}"; do [[ -n "${!name:-}" ]] || { echo "missing required environment: $name" >&2; exit 64; }; done
 [[ "${TENDER_API_BASE:-/api/tender}" == /api/tender ]] || { echo "production TENDER_API_BASE must be /api/tender" >&2; exit 64; }
 export TENDER_API_BASE=/api/tender
@@ -12,7 +12,7 @@ repository=$(git rev-parse --show-toplevel)
 [[ "$PRODUCTION_CANARY_STATE_DIR" = /* && "$PRODUCTION_CANARY_STATE_DIR" != "$repository"* ]] || { echo "PRODUCTION_CANARY_STATE_DIR must be absolute and outside checkout" >&2; exit 64; }
 [[ "$PRODUCTION_SESSION_FILE" == "$PRODUCTION_CANARY_STATE_DIR/curl.config" ]] || { echo "PRODUCTION_SESSION_FILE must be the prepared IAM canary curl config" >&2; exit 64; }
 [[ -f "$COMPOSE_FILE" && ! -L "$COMPOSE_FILE" ]] || { echo "compose file must be a regular non-symlink file" >&2; exit 66; }
-for name in RELEASE_IMAGE POSTGRES_IMAGE; do [[ "${!name}" == *@sha256:* ]] || { echo "$name must be digest pinned" >&2; exit 64; }; done
+for name in RELEASE_IMAGE POSTGRES_IMAGE PRODUCTION_BROWSER_IMAGE; do [[ "${!name}" == *@sha256:* ]] || { echo "$name must be digest pinned" >&2; exit 64; }; done
 export EXTERNAL_SUBMISSION_ENABLED=false WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false
 export ACTUAL_COMMIT ACTUAL_TREE CHECKOUT_CLEAN ACTUAL_RELEASE_IMAGE_ID ACTUAL_RELEASE_IMAGE_REVISION ACTUAL_RELEASE_IMAGE_TREE
 ACTUAL_COMMIT=$(git rev-parse HEAD)
@@ -152,12 +152,9 @@ for service in api worker scheduler; do
   docker inspect "$container" --format '{{.RestartCount}}' >"$state_dir/$service.post-cutover-restarts"
 done
 TENDER_API_BASE="$TENDER_API_BASE" node deployment/production-live-http-gate.mjs | tee "$state_dir/live-http-gate.json"
-E2E_EMAIL_FILE="$PRODUCTION_CANARY_STATE_DIR/email" \
-  E2E_PASSWORD_FILE="$PRODUCTION_CANARY_STATE_DIR/password" \
-  E2E_TOTP_FILE="$PRODUCTION_CANARY_STATE_DIR/totp" \
-  TENDER_UI_BASE="${TENDER_UI_BASE:-/admin/ausschreibungen}" \
+TENDER_UI_BASE="${TENDER_UI_BASE:-/admin/ausschreibungen}" \
   TENDER_API_BASE="$TENDER_API_BASE" \
-  node scripts/production-iam-browser-canary.mjs | tee "$state_dir/iam-browser-canary.json"
+  deployment/run-production-browser-canary.sh | tee "$state_dir/iam-browser-canary.json"
 node scripts/production-iam-canary.mjs cleanup | tee "$state_dir/iam-canary-cleanup.json"
 node scripts/production-iam-canary.mjs verify-absence | tee "$state_dir/iam-canary-absence.json"
 docker compose -p "$project" -f "$COMPOSE_FILE" exec -T api npm run gate:readiness

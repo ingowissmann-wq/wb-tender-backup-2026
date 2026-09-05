@@ -8,6 +8,7 @@ import test from "node:test";
 const routes = await readFile(new URL("../platform/autopilot-routes.mjs", import.meta.url), "utf8");
 const migration = await readFile(new URL("../migrations/155_autopilot_overview_latest_lookup.sql", import.meta.url), "utf8");
 const rollout = await readFile(new URL("../deployment/production-rollout.sh", import.meta.url), "utf8");
+const productionBrowserRunner = await readFile(new URL("../deployment/run-production-browser-canary.sh", import.meta.url), "utf8");
 const runtimeDrain = await readFile(new URL("../deployment/drain-runtime-database-sessions.sh", import.meta.url), "utf8");
 const rolloutGuide = await readFile(new URL("../docs/production-rollout-hard-gates.md", import.meta.url), "utf8");
 const backup = await readFile(new URL("../deployment/create-encrypted-production-backup.sh", import.meta.url), "utf8");
@@ -56,7 +57,7 @@ test("production rollout is digest-pinned, rehearsed and fail-closed", () => {
   assert.match(rollout, /EXTERNAL_SUBMISSION_ENABLED=false/);
   assert.match(rollout, /WB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false/);
   assert.match(rollout, /trap rollback ERR INT TERM/);
-  assert.match(rollout, /production-iam-browser-canary\.mjs/);
+  assert.match(productionBrowserRunner, /production-iam-browser-canary\.mjs/);
   assert.match(rollout, /production-iam-canary\.mjs cleanup/);
   assert.match(rollout, /production-iam-canary\.mjs verify-absence/);
   assert.doesNotMatch(rollout, /(?:password|token|secret)=['"][^'"]+['"]/i);
@@ -113,6 +114,15 @@ test("production IAM canary is IAM-only, file-secret-only and revocation-first",
   assert.doesNotMatch(canary, /(?:INSERT INTO|UPDATE|DELETE FROM)\s+(?:tender|saas|cms)\./i);
   assert.match(browserCanary, /passwordMfaReturnTo/);
   assert.match(browserCanary, /businessWrites: 0/);
+  assert.match(rollout, /PRODUCTION_BROWSER_IMAGE/);
+  assert.match(rollout, /run-production-browser-canary\.sh/);
+  assert.doesNotMatch(rollout, /node scripts\/production-iam-browser-canary\.mjs/);
+  assert.match(productionBrowserRunner, /PRODUCTION_BROWSER_IMAGE.*@sha256/);
+  assert.match(productionBrowserRunner, /--read-only/);
+  assert.match(productionBrowserRunner, /--cap-drop ALL/);
+  assert.match(productionBrowserRunner, /PRODUCTION_CANARY_STATE_DIR:\/run\/canary:ro/);
+  assert.match(productionBrowserRunner, /PLAYWRIGHT_BROWSERS_PATH=\/ms-playwright/);
+  assert.doesNotMatch(productionBrowserRunner, /(?:password|token|secret)=['"][^'"]+['"]/i);
 });
 
 test("rehearsal applies IAM migrations before starting the API as the production-like login", () => {

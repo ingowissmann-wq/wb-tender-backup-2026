@@ -133,7 +133,7 @@ test("production live HTTP gate uses one exact configured Tender API base and se
 test("production rollout entry points reject a conflicting Tender API base before side effects", async () => {
   const root = path.dirname(path.dirname(gate.pathname));
   const requiredRollout = {
-    COMPOSE_FILE: "unused", COMPOSE_PROJECT_NAME: "unused", RELEASE_IMAGE: "unused", POSTGRES_IMAGE: "unused",
+    COMPOSE_FILE: "unused", COMPOSE_PROJECT_NAME: "unused", RELEASE_IMAGE: "unused", POSTGRES_IMAGE: "unused", PRODUCTION_BROWSER_IMAGE: "unused",
     DATABASE_URL_FILE: "unused", SESSION_PEPPER_FILE: "unused", FIELD_ENCRYPTION_KEY_FILE: "unused", BACKUP_DIR: "unused",
     BACKUP_ENCRYPTION_KEY_FILE: "unused", REHEARSAL_EVIDENCE: "unused", OPERATOR_APPROVAL: "unused", PRODUCTION_SESSION_FILE: "unused",
     PRODUCTION_CANARY_STATE_DIR: "unused", PRODUCTION_BASE_URL: "https://example.invalid", ROLLOUT_STATE_DIR: "unused",

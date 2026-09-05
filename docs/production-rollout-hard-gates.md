@@ -4,7 +4,7 @@
 
 ## Immutable inputs
 
-The checkout must be clean and exactly match `EXPECTED_COMMIT` and `EXPECTED_TREE`. `RELEASE_IMAGE` and `POSTGRES_IMAGE` must be registry-digest references. The release image ID must equal `EXPECTED_RELEASE_IMAGE_ID`, and its OCI `org.opencontainers.image.revision` and `org.opencontainers.image.source-tree` labels must equal the approved commit and tree.
+The checkout must be clean and exactly match `EXPECTED_COMMIT` and `EXPECTED_TREE`. `RELEASE_IMAGE`, `POSTGRES_IMAGE`, and `PRODUCTION_BROWSER_IMAGE` must be registry-digest references. The release image ID must equal `EXPECTED_RELEASE_IMAGE_ID`, and its OCI `org.opencontainers.image.revision` and `org.opencontainers.image.source-tree` labels must equal the approved commit and tree. The browser image must be the reviewed Playwright runtime used by rehearsal and must already be present locally by its exact digest.
 
 `REHEARSAL_EVIDENCE` has a closed field set enforced by `scripts/verify-rollout-binding.mjs`; unknown, missing, duplicate, malformed, or non-PASS fields fail the rollout. Its exact SHA-256 is supplied as `EXPECTED_EVIDENCE_SHA256`.
 
@@ -49,7 +49,7 @@ The wrapper binds `PRODUCTION_SESSION_FILE` to the future two-line `curl.config`
 
 The stage-one session is prepared before migration/cutover without requiring `iam.tender_login_challenges`, which migration 157 has not created yet. Immediately after cutover it is used only for the authenticated, payload-free public HTTP 423 probe.
 
-Stage two occurs immediately after migration 157 and candidate cutover, while automatic rollback is still armed: real Chromium opens `${TENDER_UI_BASE}/login` on `PRODUCTION_BASE_URL`, performs password → MFA → same-navigation `returnTo` without a reload, verifies the two authentication requests used `${TENDER_API_BASE}/iam/*`, and performs only an authenticated health read. Any failure enters the existing exact-image/reverse-migration rollback.
+Stage two occurs immediately after migration 157 and candidate cutover, while automatic rollback is still armed: real Chromium in the digest-pinned `PRODUCTION_BROWSER_IMAGE` opens `${TENDER_UI_BASE}/login` on `PRODUCTION_BASE_URL`, performs password → MFA → same-navigation `returnTo` without a reload, verifies the two authentication requests used `${TENDER_API_BASE}/iam/*`, and performs only an authenticated health read. The browser container receives the clean checkout and canary directory as read-only mounts, has all Linux capabilities dropped, and receives no business-action payload. This avoids host-browser drift while preserving the same reviewed browser runtime as rehearsal. Any failure enters the existing exact-image/reverse-migration rollback.
 
 The stage-one curl config has exactly two lines and no other curl directives:
 
