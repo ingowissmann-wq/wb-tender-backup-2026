@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 const SETTINGS_RESET =
-  "RESET app.company_ids; RESET app.tenant_ids; RESET app.configuration_tenant_id; RESET app.actor_user_id";
+  "RESET app.company_ids; RESET app.tenant_ids; RESET app.tenant_id; RESET app.configuration_tenant_id; RESET app.actor_user_id";
 
 export function createRequestScopedPool(rawPool) {
   const storage = new AsyncLocalStorage();
@@ -81,8 +81,8 @@ export function createRequestScopedPool(rawPool) {
           tenantIds = [];
         }
         await client.query(
-          "SELECT set_config('app.company_ids',$1,false),set_config('app.tenant_ids',$2,false),set_config('app.configuration_tenant_id',$3,false),set_config('app.actor_user_id',$4,false)",
-          [companyIds.join(","), tenantIds.join(","), tenantIds.length === 1 ? tenantIds[0] : "", String(identity?.userId || "")],
+          "SELECT set_config('app.company_ids',$1,false),set_config('app.tenant_ids',$2,false),set_config('app.tenant_id',$3,false),set_config('app.configuration_tenant_id',$4,false),set_config('app.actor_user_id',$5,false)",
+          [companyIds.join(","), tenantIds.join(","), tenantIds.length === 1 ? tenantIds[0] : "", tenantIds.length === 1 ? tenantIds[0] : "", String(identity?.userId || "")],
         );
         context.identityBound = true;
       } catch (error) {
