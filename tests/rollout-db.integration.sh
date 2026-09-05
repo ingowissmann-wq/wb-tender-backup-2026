@@ -18,6 +18,16 @@ psql "$url" -v ON_ERROR_STOP=1 -c 'ALTER ROLE tender_api_runtime NOLOGIN' >/dev/
 psql "$url" -v ON_ERROR_STOP=1 -f "$root/tests/fixtures/rollout-minimal.sql" >/dev/null
 mkdir "$temporary/before" "$temporary/after"
 STATE_OUTPUT_DIR="$temporary/before" "$root/deployment/capture-rollout-db-state.sh"
+mkdir "$temporary/trusted"
+printf '*:*:*:*:unused\n' >"$temporary/pgpass"
+chmod 0600 "$temporary/pgpass"
+PGHOST="${ROLLOUT_TEST_ADMIN_PGHOST:-127.0.0.1}" \
+PGPORT="${ROLLOUT_TEST_ADMIN_PGPORT:-5432}" PGUSER=postgres PGDATABASE=postgres \
+PGPASSFILE="$temporary/pgpass" ROLLOUT_DATABASE_ADMIN_TRUSTED=true \
+STATE_OUTPUT_DIR="$temporary/trusted" "$root/deployment/capture-rollout-db-state.sh"
+for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger.sha256 migration-snapshots.present migration-snapshots.sha256; do
+  cmp -s "$temporary/before/$item" "$temporary/trusted/$item"
+done
 RELEASE_ID=0000000000000000000000000000000000000001 "$root/deployment/apply-release-migrations.sh" | tee "$temporary/migrations.log"
 [[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/migrations.log")" -eq 5 ]]
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT count(*) FROM tender.release_migrations")" == 5 ]]
