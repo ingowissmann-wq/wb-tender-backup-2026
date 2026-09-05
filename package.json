@@ -13,6 +13,7 @@
     "test:business-suite-rehearsal": "node scripts/business-suite-rehearsal.mjs",
     "test:business-suite-rollback": "node scripts/business-suite-rehearsal-rollback.mjs",
     "test:iam-canary": "bash tests/production-iam-canary.integration.sh",
+    "test:production-live-http-gate": "node --test tests/production-live-http-gate.integration.test.mjs",
     "test:auth-browser": "node tests/tender-auth-browser.integration.mjs",
     "sbom": "node scripts/generate-sbom.mjs",
     "start": "node platform/server.mjs",

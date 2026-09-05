@@ -61,6 +61,7 @@ const required = [
   "tests/fixtures/rollout-minimal.sql",
   "tests/rollout-db.integration.sh",
   "tests/production-iam-canary.integration.sh",
+  "tests/production-live-http-gate.integration.test.mjs",
   "tests/tender-auth-basepath-routing.test.mjs",
   "tests/tender-auth-browser.integration.mjs",
   "deployment/verify-rehearsal-prerequisites.sh",

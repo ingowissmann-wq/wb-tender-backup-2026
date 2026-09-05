@@ -33,6 +33,8 @@ Tender does not own `/admin/` or `/admin/login`; those remain WB Admin routes. I
 
 Production Nginx strips `/admin/ausschreibungen` to the Tender application's root and `/api/tender` to the application's `/api` subtree. Rehearsal forwards `/api` unstripped and its TLS proxy strips the configured UI root. The application registers the stripped auth routes and the exact configured direct routes so a proxy mismatch does not silently turn the login into a WB Admin request. The executable Fastify contract covers both forms, and Chromium records the exact configured authentication request paths.
 
+The production wrapper and rollout bind `TENDER_API_BASE` to `/api/tender` and reject any conflicting value. The public live gate validates `PRODUCTION_BASE_URL` as an HTTPS origin only, then uses that same configured Tender API base for both `${TENDER_API_BASE}/healthz` and the authenticated, payload-free `${TENDER_API_BASE}/tools/action/transmit` lock probe. Rehearsal remains independently bound to its unstripped `/api` base.
+
 ## Two-stage production IAM proof
 
 The production canary is deliberately IAM-only. It creates one unique synthetic `iam.users` row, one dedicated role, the minimum `tender.submission.approve` role binding, one short-lived session, and—only if explicitly requested—one identity scope referencing an existing company selected read-only. It never inserts or modifies tenant, tender, document, task, pricing, submission, receipt, or other business-workflow rows. Password, TOTP, session, and CSRF material is random, file-only, root-owned mode 0600, and never printed. Existing users and credentials are neither selected for impersonation nor changed.
