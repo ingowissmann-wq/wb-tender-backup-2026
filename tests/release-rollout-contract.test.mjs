@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 const routes = await readFile(new URL("../platform/autopilot-routes.mjs", import.meta.url), "utf8");
@@ -16,6 +19,7 @@ const rehearsal = await readFile(new URL("../deployment/rehearse-release.sh", im
 const rehearsalCompose = await readFile(new URL("../deployment/compose.rehearsal.yml", import.meta.url), "utf8");
 const isolatedRestore = await readFile(new URL("../deployment/verify-fresh-backup-restore.sh", import.meta.url), "utf8");
 const rehearsalFixture = await readFile(new URL("../scripts/release-rehearsal-fixture.mjs", import.meta.url), "utf8");
+const rollbackRuntimeWriter = new URL("../deployment/write-rollback-runtime-override.mjs", import.meta.url);
 
 test("overview resolves latest rows set-wise before joining", () => {
   assert.match(routes, /selected AS MATERIALIZED/);
@@ -58,7 +62,7 @@ test("production rollout is digest-pinned, rehearsed and fail-closed", () => {
   assert.doesNotMatch(rollout, /(?:password|token|secret)=['"][^'"]+['"]/i);
 });
 
-test("rollback stops services and drains only the runtime role before reversing migrations", () => {
+test("rollback stops services, drains only the runtime role, and restores exact image-command pairs", async () => {
   assert.match(runtimeDrain, /RUNTIME_DATABASE_ROLE:-wb_tender_api_login/);
   assert.match(runtimeDrain, /pg_terminate_backend\(pid\)/);
   assert.match(runtimeDrain, /usename=:'runtime_role'/);
@@ -68,11 +72,37 @@ test("rollback stops services and drains only the runtime role before reversing 
   const reverse = rollout.indexOf('rollback-applied-release-migrations.sh');
   const restore = rollout.indexOf('up -d --no-deps --force-recreate api worker scheduler', reverse);
   assert.ok(stop > 0 && stop < drain && drain < reverse && reverse < restore);
+  assert.match(rollout, /\.Config\.Cmd/);
+  assert.match(rollout, /write-rollback-runtime-override\.mjs/);
+  assert.match(rollout, /was not restored to its exact previous image and command/);
   const rehearsalStop = rehearsal.indexOf('stop -t 30 api worker scheduler');
   const rehearsalDrain = rehearsal.indexOf('drain-runtime-database-sessions.sh');
   const rehearsalReverse = rehearsal.indexOf('rollback-probe.sh');
   assert.ok(rehearsalStop > 0 && rehearsalStop < rehearsalDrain && rehearsalDrain < rehearsalReverse);
-  assert.match(rolloutGuide, /sessions belonging exactly to `wb_tender_api_login`[\s\S]*reverse order[\s\S]*prior image IDs are restored only after/);
+  assert.match(rolloutGuide, /sessions belonging exactly to `wb_tender_api_login`[\s\S]*reverse order[\s\S]*prior image-and-command pairs are restored only after/);
+
+  const directory = await mkdtemp(path.join(tmpdir(), "wb-tender-rollback-runtime-"));
+  try {
+    const commands = {
+      api: ["node", "platform/server.mjs"],
+      worker: ["node", "platform/autopilot-pipeline-worker.mjs"],
+      scheduler: ["node", "platform/source-ingestion.mjs"],
+    };
+    for (const [service, command] of Object.entries(commands)) {
+      await writeFile(path.join(directory, `${service}.image-id`), `sha256:${service.charCodeAt(0).toString(16).padStart(64, "0")}\n`);
+      await writeFile(path.join(directory, `${service}.command.json`), `${JSON.stringify(command)}\n`);
+    }
+    const output = path.join(directory, "rollback-runtime.compose.json");
+    const result = spawnSync(process.execPath, [rollbackRuntimeWriter.pathname, directory, output], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(await readFile(output, "utf8"));
+    for (const [service, command] of Object.entries(commands)) {
+      assert.deepEqual(parsed.services[service].command, command);
+      assert.match(parsed.services[service].image, /^sha256:[0-9a-f]{64}$/);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("production IAM canary is IAM-only, file-secret-only and revocation-first", () => {
