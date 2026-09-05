@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { loadFieldEncryptionKey } from "./field-encryption-key.mjs";
+import { createRequestScopedPool } from "./request-scoped-pool.mjs";
 import { hashSession, loadIdentity, mayView } from "./auth.mjs";
 import { registerAutopilotRoutes } from "./autopilot-routes.mjs";
 import { registerConfigurationAdmin } from "./configuration-admin.mjs";
@@ -85,10 +86,12 @@ const secret = (name) => {
   return value;
 };
 const readOnlyCandidate = process.env.WB_TENDER_READ_ONLY_CANDIDATE === "true";
-const pool = new pg.Pool({
+const rawPool = new pg.Pool({
   connectionString: secret("DATABASE_URL"),
   ...(readOnlyCandidate ? { options: "-c default_transaction_read_only=on" } : {}),
 });
+const requestDatabase = createRequestScopedPool(rawPool);
+const pool = requestDatabase.pool;
 const sectors = enabled ? new DatabaseSync(process.env.CAREER_DATABASE_PATH, {
   readOnly: true,
 }) : null;
@@ -96,6 +99,9 @@ const app = Fastify({
   logger: { redact: ["req.headers.cookie", "req.body"] },
   trustProxy: true,
 });
+app.addHook("onRequest", (_request, _reply, done) => requestDatabase.runRequest(done));
+app.addHook("onResponse", async () => requestDatabase.releaseRequest());
+app.addHook("onError", async () => requestDatabase.releaseRequest());
 await app.register(cookie);
 const sessionPepper = secret("SESSION_PEPPER");
 const fieldEncryptionKeyHex = loadFieldEncryptionKey();
@@ -170,6 +176,15 @@ async function auth(req, reply) {
       .all(identity.userId)
       .map((row) => row.sector_id);
     identity.sectorIds = [...new Set([...identity.sectorIds, ...careerSectorIds])];
+  }
+  await requestDatabase.bindIdentity(identity);
+  if (identity.companyIds.length) {
+    identity.sectorSlugs = (
+      await pool.query(
+        "SELECT DISTINCT sector_slug FROM tender.enterprise_company_links WHERE company_id=ANY($1::uuid[]) AND sector_slug IS NOT NULL",
+        [identity.companyIds],
+      )
+    ).rows.map((row) => row.sector_slug);
   }
   req.identity = identity;
 }
