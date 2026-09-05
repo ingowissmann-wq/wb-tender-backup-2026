@@ -6,6 +6,7 @@ const routes = await readFile(new URL("../platform/autopilot-routes.mjs", import
 const migration = await readFile(new URL("../migrations/155_autopilot_overview_latest_lookup.sql", import.meta.url), "utf8");
 const rollout = await readFile(new URL("../deployment/production-rollout.sh", import.meta.url), "utf8");
 const runtimeDrain = await readFile(new URL("../deployment/drain-runtime-database-sessions.sh", import.meta.url), "utf8");
+const rolloutGuide = await readFile(new URL("../docs/production-rollout-hard-gates.md", import.meta.url), "utf8");
 const backup = await readFile(new URL("../deployment/create-encrypted-production-backup.sh", import.meta.url), "utf8");
 const encryptedCatalog = await readFile(new URL("../deployment/lib/encrypted-pg-archive.sh", import.meta.url), "utf8");
 const plans = await readFile(new URL("../migrations/156_approved_tender_commercial_plans.sql", import.meta.url), "utf8");
@@ -70,6 +71,7 @@ test("rollback stops services and drains only the runtime role before reversing 
   const rehearsalDrain = rehearsal.indexOf('drain-runtime-database-sessions.sh');
   const rehearsalReverse = rehearsal.indexOf('rollback-probe.sh');
   assert.ok(rehearsalStop > 0 && rehearsalStop < rehearsalDrain && rehearsalDrain < rehearsalReverse);
+  assert.match(rolloutGuide, /sessions belonging exactly to `wb_tender_api_login`[\s\S]*reverse order[\s\S]*prior image IDs are restored only after/);
 });
 
 test("production IAM canary is IAM-only, file-secret-only and revocation-first", () => {
