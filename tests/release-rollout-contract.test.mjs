@@ -5,6 +5,7 @@ import test from "node:test";
 const routes = await readFile(new URL("../platform/autopilot-routes.mjs", import.meta.url), "utf8");
 const migration = await readFile(new URL("../migrations/155_autopilot_overview_latest_lookup.sql", import.meta.url), "utf8");
 const rollout = await readFile(new URL("../deployment/production-rollout.sh", import.meta.url), "utf8");
+const runtimeDrain = await readFile(new URL("../deployment/drain-runtime-database-sessions.sh", import.meta.url), "utf8");
 const backup = await readFile(new URL("../deployment/create-encrypted-production-backup.sh", import.meta.url), "utf8");
 const encryptedCatalog = await readFile(new URL("../deployment/lib/encrypted-pg-archive.sh", import.meta.url), "utf8");
 const plans = await readFile(new URL("../migrations/156_approved_tender_commercial_plans.sql", import.meta.url), "utf8");
@@ -53,6 +54,22 @@ test("production rollout is digest-pinned, rehearsed and fail-closed", () => {
   assert.match(rollout, /production-iam-canary\.mjs cleanup/);
   assert.match(rollout, /production-iam-canary\.mjs verify-absence/);
   assert.doesNotMatch(rollout, /(?:password|token|secret)=['"][^'"]+['"]/i);
+});
+
+test("rollback stops services and drains only the runtime role before reversing migrations", () => {
+  assert.match(runtimeDrain, /RUNTIME_DATABASE_ROLE:-wb_tender_api_login/);
+  assert.match(runtimeDrain, /pg_terminate_backend\(pid\)/);
+  assert.match(runtimeDrain, /usename=:'runtime_role'/);
+  assert.doesNotMatch(runtimeDrain, /WHERE\s+pid\s*<>\s*pg_backend_pid\(\)\s*;?/);
+  const stop = rollout.indexOf('stop -t 30 api worker scheduler');
+  const drain = rollout.indexOf('drain-runtime-database-sessions.sh');
+  const reverse = rollout.indexOf('rollback-applied-release-migrations.sh');
+  const restore = rollout.indexOf('up -d --no-deps --force-recreate api worker scheduler', reverse);
+  assert.ok(stop > 0 && stop < drain && drain < reverse && reverse < restore);
+  const rehearsalStop = rehearsal.indexOf('stop -t 30 api worker scheduler');
+  const rehearsalDrain = rehearsal.indexOf('drain-runtime-database-sessions.sh');
+  const rehearsalReverse = rehearsal.indexOf('rollback-probe.sh');
+  assert.ok(rehearsalStop > 0 && rehearsalStop < rehearsalDrain && rehearsalDrain < rehearsalReverse);
 });
 
 test("production IAM canary is IAM-only, file-secret-only and revocation-first", () => {
