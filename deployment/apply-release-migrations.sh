@@ -13,7 +13,7 @@ CREATE SCHEMA IF NOT EXISTS tender;
 CREATE TABLE IF NOT EXISTS tender.release_migrations(name text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS tender.release_plan_snapshots(release_id text PRIMARY KEY, rows jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
 SQL
-for migration in migrations/155_autopilot_overview_latest_lookup.sql migrations/156_approved_tender_commercial_plans.sql migrations/157_release_auth_and_commercial_enforcement.sql; do
+for migration in migrations/155_autopilot_overview_latest_lookup.sql migrations/156_approved_tender_commercial_plans.sql migrations/157_release_auth_and_commercial_enforcement.sql migrations/158_tender_login_challenge_runtime_grants.sql; do
   name=${migration##*/}; checksum=$(sha256sum "$migration" | cut -d' ' -f1)
   known=$(psql "${database[@]}" -Atv ON_ERROR_STOP=1 -v name="$name" <<'SQL'
 SELECT checksum FROM tender.release_migrations WHERE name=:'name';

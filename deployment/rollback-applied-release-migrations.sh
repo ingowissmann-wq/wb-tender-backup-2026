@@ -14,13 +14,15 @@ for name in "${applied[@]}"; do
   [[ -z "${seen[$name]:-}" ]] || { echo "duplicate applied migration record: $name" >&2; exit 65; }
   seen[$name]=1
   case "$name" in
-    155_autopilot_overview_latest_lookup.sql|156_approved_tender_commercial_plans.sql|157_release_auth_and_commercial_enforcement.sql) ;;
+    155_autopilot_overview_latest_lookup.sql|156_approved_tender_commercial_plans.sql|157_release_auth_and_commercial_enforcement.sql|158_tender_login_challenge_runtime_grants.sql) ;;
     *) echo "refusing unknown rollback migration: $name" >&2; exit 65 ;;
   esac
 done
 for (( index=${#applied[@]}-1; index>=0; index-- )); do
   name=${applied[$index]}
   case "$name" in
+    158_tender_login_challenge_runtime_grants.sql)
+      psql "$url" -v ON_ERROR_STOP=1 -f migrations/158_tender_login_challenge_runtime_grants.down.sql ;;
     157_release_auth_and_commercial_enforcement.sql)
       psql "$url" -v ON_ERROR_STOP=1 -f deployment/rollback-release-auth-and-commercial-enforcement.sql ;;
     156_approved_tender_commercial_plans.sql)
