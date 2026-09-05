@@ -59,6 +59,7 @@ const required = [
   "deployment/drain-runtime-database-sessions.sh",
   "deployment/production-live-http-gate.mjs",
   "deployment/production-rollout-with-iam-canary.sh",
+  "deployment/write-rollback-runtime-override.mjs",
   "scripts/verify-rollout-binding.mjs",
   "docs/production-rollout-hard-gates.md",
   "tests/fixtures/rollout-minimal.sql",

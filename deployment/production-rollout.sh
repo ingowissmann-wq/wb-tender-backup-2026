@@ -44,6 +44,7 @@ for service in api worker scheduler; do
   container=$(docker compose -p "$project" -f "$COMPOSE_FILE" ps -q "$service")
   [[ -n "$container" ]] || { echo "previous service is absent: $service" >&2; exit 78; }
   docker inspect "$container" --format '{{.Image}}' >"$state_dir/before/$service.image-id"
+  docker inspect "$container" --format '{{json .Config.Cmd}}' >"$state_dir/before/$service.command.json"
   docker inspect "$container" --format '{{.RestartCount}}' >"$state_dir/before/$service.restart-count"
   docker inspect "$container" --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' >"$state_dir/before/$service.state"
 done
@@ -86,11 +87,8 @@ rollback() {
     migration_rollback_status=$?
   fi
   if (( migration_rollback_status != 0 )); then echo "ROLLBACK_ERROR: reverse migration failed" >&2; emergency=1; fi
-  override="$state_dir/rollback-images.compose.yml"
-  {
-    printf 'services:\n'
-    for service in api worker scheduler; do printf '  %s:\n    image: %s\n' "$service" "$(cat "$state_dir/before/$service.image-id")"; done
-  } >"$override"
+  override="$state_dir/rollback-runtime.compose.json"
+  node deployment/write-rollback-runtime-override.mjs "$state_dir/before" "$override"
   docker compose -p "$project" -f "$COMPOSE_FILE" -f "$override" up -d --no-deps --force-recreate api worker scheduler
   service_restore_status=$?
   if (( service_restore_status != 0 )); then echo "ROLLBACK_ERROR: exact service image restoration failed" >&2; emergency=1; fi
@@ -106,8 +104,8 @@ rollback() {
   fi
   for service in api worker scheduler; do
     container=$(docker compose -p "$project" -f "$COMPOSE_FILE" ps -q "$service")
-    if [[ -z "$container" || "$(docker inspect "$container" --format '{{.Image}}')" != "$(cat "$state_dir/before/$service.image-id")" || "$(docker inspect "$container" --format '{{.State.Status}}')" != running ]]; then
-      echo "ROLLBACK_ERROR: $service was not restored to its exact previous image" >&2; emergency=1
+    if [[ -z "$container" || "$(docker inspect "$container" --format '{{.Image}}')" != "$(cat "$state_dir/before/$service.image-id")" || "$(docker inspect "$container" --format '{{json .Config.Cmd}}')" != "$(cat "$state_dir/before/$service.command.json")" || "$(docker inspect "$container" --format '{{.State.Status}}')" != running ]]; then
+      echo "ROLLBACK_ERROR: $service was not restored to its exact previous image and command" >&2; emergency=1
     fi
   done
   set -e
