@@ -5,7 +5,6 @@ import fsp from "node:fs/promises";
 import https from "node:https";
 import net from "node:net";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import sanitizeHtml from "sanitize-html";
 import { z } from "zod";
 import { pool, query } from "./db.js";
@@ -197,12 +196,13 @@ function sanitized(value) {
         transformTags: { a: (_tag, attrs) => ({ tagName: "a", attribs: { ...attrs, ...(attrs.target === "_blank" ? { rel: "noopener noreferrer" } : {}) } }) }
     });
 }
-async function importImage(urlValue, privateRoot) {
+async function importImage(urlValue, privateRoot, tenantId) {
     if (!urlValue)
         return;
     const downloaded = await fetchImage(urlValue), sha256 = digest(downloaded.bytes);
     const client = await pool.connect();
-    let created = false, storageName, previousDeletedAt, target, previousReferenceCount = 0;
+    await client.query("SELECT set_config('app.tenant_id',$1,false)", [tenantId]);
+    let created = false, repairedBinary = false, storageName, previousDeletedAt, previousBinary, target, previousReferenceCount = 0;
     try {
         await client.query("BEGIN");
         await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`autoseo-media:${sha256}:${downloaded.bytes.length}`]);
@@ -214,8 +214,13 @@ async function importImage(urlValue, privateRoot) {
             if (path.basename(file.rows[0].storage_name) !== file.rows[0].storage_name || !existingTarget.startsWith(path.resolve(privateRoot) + path.sep))
                 throw new Error("image_storage_path_invalid");
             const existingBytes = await fsp.readFile(existingTarget).catch(() => undefined);
-            if (!existingBytes || existingBytes.length !== downloaded.bytes.length || digest(existingBytes) !== sha256)
-                throw new Error("image_stored_binary_invalid");
+            if (!existingBytes || existingBytes.length !== downloaded.bytes.length || digest(existingBytes) !== sha256) {
+                previousBinary = existingBytes;
+                target = existingTarget;
+                storageName = file.rows[0].storage_name;
+                await fsp.writeFile(target, downloaded.bytes, { mode: 0o600 });
+                repairedBinary = true;
+            }
             if (file.rows[0].deleted_at) {
                 previousDeletedAt = new Date(file.rows[0].deleted_at).toISOString();
                 file = await client.query("UPDATE files.objects SET deleted_at=NULL,missing_binary=false,verified=true WHERE id=$1 RETURNING id,storage_name", [file.rows[0].id]);
@@ -233,15 +238,21 @@ async function importImage(urlValue, privateRoot) {
             created = true;
         }
         await client.query("COMMIT");
-        return { fileId: file.rows[0].id, url: `/cms-media/${file.rows[0].id}`, sourceUrl: downloaded.finalUrl, sha256, mimeType: downloaded.mimeType, size: downloaded.bytes.length, created, storageName, previousDeletedAt, previousReferenceCount };
+        const mediaOrigin = (process.env.AUTOSEO_MEDIA_ORIGIN || process.env.AUTOSEO_CMS_API_ORIGIN || process.env.PUBLIC_ORIGIN || "https://www.enwi.online").replace(/\/$/, "");
+        return { fileId: file.rows[0].id, url: `${mediaOrigin}/api/public/v1/autoseo/media/${file.rows[0].id}`, sourceUrl: downloaded.finalUrl, sha256, mimeType: downloaded.mimeType, size: downloaded.bytes.length, created, repairedBinary, storageName, previousDeletedAt, previousBinary, previousReferenceCount };
     }
     catch (error) {
         await client.query("ROLLBACK").catch(() => undefined);
-        if (target)
-            await fsp.unlink(target).catch(() => undefined);
+        if (target) {
+            if (repairedBinary && previousBinary)
+                await fsp.writeFile(target, previousBinary, { mode: 0o600 }).catch(() => undefined);
+            else
+                await fsp.unlink(target).catch(() => undefined);
+        }
         throw error;
     }
     finally {
+        await client.query("RESET app.tenant_id").catch(() => undefined);
         client.release();
     }
 }
@@ -254,9 +265,13 @@ export async function validateAutoSeoConfiguration() {
     await secret();
     const databasePath = process.env.CAREER_DATABASE_PATH || "/career-data/wb-cms.sqlite";
     await fsp.access(databasePath, fs.constants.R_OK | fs.constants.W_OK);
-    const origin = new URL(process.env.AUTOSEO_PUBLIC_SITE_ORIGIN || "https://www.wb-holding.ag");
-    if (!["http:", "https:"].includes(origin.protocol))
-        throw new Error("autoseo_public_origin_invalid");
+    const origins = [
+        process.env.AUTOSEO_PUBLIC_SITE_ORIGIN || "https://www.wb-holding.ag",
+        process.env.AUTOSEO_CMS_API_ORIGIN || process.env.PUBLIC_ORIGIN || "https://www.enwi.online",
+        process.env.AUTOSEO_MEDIA_ORIGIN || process.env.AUTOSEO_CMS_API_ORIGIN || process.env.PUBLIC_ORIGIN || "https://www.enwi.online"
+    ].map(value => new URL(value));
+    if (origins.some(origin => !["http:", "https:"].includes(origin.protocol)))
+        throw new Error("autoseo_origin_invalid");
 }
 async function uniqueSlug(client, requested, resourceId, externalId) {
     const base = slugify(requested), suffix = digest(externalId).slice(0, 8);
@@ -282,67 +297,28 @@ function publicItem(row) {
         seoTitle: data.seoTitle || row.title, focusKeyword: data.focusKeyword || "", publicationDate: data.publishedAt || data.publicationDate || row.created_at,
         updatedAt: data.updatedAt || row.updated_at, author: data.author || "WB Holding AG", category: data.category || "Fachbeitrag" };
 }
-function publicCmsDatabase() {
-    const databasePath = process.env.CAREER_DATABASE_PATH || "/career-data/wb-cms.sqlite";
-    const db = new DatabaseSync(databasePath);
-    db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;");
-    return db;
-}
 function publicCmsPayload(row) {
     const item = publicItem(row);
     return { ...item, _id: item._id, status: "published", active: true, published: true };
 }
-function publishToPublicCms(row) {
-    const db = publicCmsDatabase(), id = String(row.data.slug), now = new Date().toISOString();
-    try {
-        const existing = db.prepare("SELECT collection,id,payload,status,sort_order,created_at,updated_at FROM content_items WHERE collection='blogposts' AND id=?").get(id);
-        const snapshot = existing ? { collection: existing.collection, id: existing.id, payload: existing.payload, status: existing.status, sortOrder: existing.sort_order, createdAt: existing.created_at, updatedAt: existing.updated_at } : null;
-        db.prepare(`INSERT INTO content_items(collection,id,payload,status,sort_order,created_at,updated_at)
-   VALUES('blogposts',?,?,'published',NULL,?,?)
-   ON CONFLICT(collection,id) DO UPDATE SET payload=excluded.payload,status='published',updated_at=excluded.updated_at`)
-            .run(id, jsonb(publicCmsPayload(row)), existing?.created_at || now, now);
-        return snapshot;
-    }
-    finally {
-        db.close();
-    }
-}
-function restorePublicCms(slug, snapshot) {
-    const db = publicCmsDatabase();
-    try {
-        db.exec("BEGIN IMMEDIATE");
-        if (snapshot)
-            db.prepare(`INSERT INTO content_items(collection,id,payload,status,sort_order,created_at,updated_at)
-   VALUES(?,?,?,?,?,?,?) ON CONFLICT(collection,id) DO UPDATE SET payload=excluded.payload,status=excluded.status,
-   sort_order=excluded.sort_order,created_at=excluded.created_at,updated_at=excluded.updated_at`)
-                .run(snapshot.collection, snapshot.id, snapshot.payload, snapshot.status, snapshot.sortOrder, snapshot.createdAt, snapshot.updatedAt);
-        else
-            db.prepare("DELETE FROM content_items WHERE collection='blogposts' AND id=?").run(slug);
-        db.exec("COMMIT");
-    }
-    catch (error) {
-        try {
-            db.exec("ROLLBACK");
-        }
-        catch { }
-        throw error;
-    }
-    finally {
-        db.close();
-    }
-}
-async function compensateImportedImages(images, privateRoot) {
+async function compensateImportedImages(images, privateRoot, tenantId) {
     for (const image of images) {
-        if (!image || (!image.created && !image.previousDeletedAt))
+        if (!image || (!image.created && !image.previousDeletedAt && !image.repairedBinary))
             continue;
-        const referenced = await query("SELECT count(*)::int count FROM app.resource_files WHERE file_id=$1", [image.fileId]);
+        const referenced = await query("SELECT count(*)::int count FROM app.resource_files WHERE file_id=$1 AND tenant_id=$2", [image.fileId, tenantId]);
         if (Number(referenced.rows[0]?.count || 0) > image.previousReferenceCount)
             throw new Error("autoseo_compensation_file_still_referenced");
         if (image.previousDeletedAt)
-            await query("UPDATE files.objects SET deleted_at=$2 WHERE id=$1 AND deleted_at IS NULL", [image.fileId, image.previousDeletedAt]);
-        else
-            await query("DELETE FROM files.objects WHERE id=$1", [image.fileId]);
-        if (image.storageName) {
+            await query("UPDATE files.objects SET deleted_at=$2 WHERE id=$1 AND tenant_id=$3 AND deleted_at IS NULL", [image.fileId, image.previousDeletedAt, tenantId]);
+        else if (image.created)
+            await query("DELETE FROM files.objects WHERE id=$1 AND tenant_id=$2", [image.fileId, tenantId]);
+        if (image.storageName && image.repairedBinary && image.previousBinary) {
+            const target = path.resolve(privateRoot, image.storageName);
+            if (path.basename(image.storageName) !== image.storageName || !target.startsWith(path.resolve(privateRoot) + path.sep))
+                throw new Error("image_storage_path_invalid");
+            await fsp.writeFile(target, image.previousBinary, { mode: 0o600 });
+        }
+        else if (image.storageName) {
             const target = path.resolve(privateRoot, image.storageName);
             if (path.basename(image.storageName) !== image.storageName || !target.startsWith(path.resolve(privateRoot) + path.sep))
                 throw new Error("image_storage_path_invalid");
@@ -351,26 +327,26 @@ async function compensateImportedImages(images, privateRoot) {
         }
     }
 }
-async function importArticleImages(inputs, privateRoot) {
+async function importArticleImages(inputs, privateRoot, tenantId) {
     const images = [];
     try {
         for (let index = 0; index < inputs.length; index++) {
-            images[index] = await importImage(inputs[index].sourceUrl, privateRoot);
+            images[index] = await importImage(inputs[index].sourceUrl, privateRoot, tenantId);
             inputs[index].imported = images[index];
         }
         return images;
     }
     catch (error) {
-        await compensateImportedImages(images, privateRoot);
+        await compensateImportedImages(images, privateRoot, tenantId);
         throw error;
     }
 }
-async function publicationClient(images, privateRoot) {
+async function publicationClient(images, privateRoot, tenantId) {
     try {
         return await pool.connect();
     }
     catch (error) {
-        await compensateImportedImages(images, privateRoot);
+        await compensateImportedImages(images, privateRoot, tenantId);
         throw error;
     }
 }
@@ -389,18 +365,18 @@ async function restoreResource(client, snapshot, currentId) {
         return;
     }
     const row = snapshot.resource;
-    await client.query(`UPDATE app.resources SET domain=$1,resource_type=$2,title=$3,status=$4,data=$5,raw_source=$6,source_system=$7,
+    await client.query(`UPDATE app.resources SET domain=$1,resource_type=$2,title=$3,status=$4,data=$5::jsonb,raw_source=$6::jsonb,source_system=$7,
   external_id=$8,source_hash=$9,owner_id=$10,version=$11,deleted_at=$12,created_at=$13,updated_at=$14,deleted_by=$15,
   delete_reason=$16,deletion_status=$17,previous_status=$18,restored_at=$19,restored_by=$20,scheduled_permanent_deletion_at=$21,
-  legal_hold=$22,retention_until=$23,permanent_deletion_status=$24,original_area=$25 WHERE id=$26`, [row.domain, row.resource_type, row.title, row.status, row.data, row.raw_source, row.source_system, row.external_id, row.source_hash, row.owner_id, row.version,
+  legal_hold=$22,retention_until=$23,permanent_deletion_status=$24,original_area=$25 WHERE id=$26`, [row.domain, row.resource_type, row.title, row.status, jsonb(row.data), jsonb(row.raw_source), row.source_system, row.external_id, row.source_hash, row.owner_id, row.version,
         row.deleted_at, row.created_at, row.updated_at, row.deleted_by, row.delete_reason, row.deletion_status, row.previous_status, row.restored_at, row.restored_by,
         row.scheduled_permanent_deletion_at, row.legal_hold, row.retention_until, row.permanent_deletion_status, row.original_area, row.id]);
     await client.query("DELETE FROM app.resource_files WHERE resource_id=$1", [row.id]);
     for (const item of snapshot.files)
-        await client.query("INSERT INTO app.resource_files(resource_id,file_id,kind,metadata,created_at) VALUES($1,$2,$3,$4,$5)", [item.resource_id, item.file_id, item.kind, item.metadata, item.created_at]);
+        await client.query("INSERT INTO app.resource_files(resource_id,file_id,kind,metadata,created_at) VALUES($1,$2,$3,$4::jsonb,$5)", [item.resource_id, item.file_id, item.kind, jsonb(item.metadata), item.created_at]);
     await client.query("DELETE FROM cms.seo_metadata WHERE resource_id=$1", [row.id]);
     for (const item of snapshot.seo)
-        await client.query("INSERT INTO cms.seo_metadata(id,resource_id,title,description,canonical_url,robots,structured_data,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)", [item.id, item.resource_id, item.title, item.description, item.canonical_url, item.robots, item.structured_data, item.created_at, item.updated_at]);
+        await client.query("INSERT INTO cms.seo_metadata(id,resource_id,title,description,canonical_url,robots,structured_data,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9)", [item.id, item.resource_id, item.title, item.description, item.canonical_url, item.robots, jsonb(item.structured_data), item.created_at, item.updated_at]);
     await client.query("DELETE FROM cms.publication_events WHERE id=$1", [snapshot.publicationEventId || null]);
     await client.query("DELETE FROM cms.content_revisions WHERE id=$1", [snapshot.revisionId || null]);
 }
@@ -457,12 +433,14 @@ async function verifyPublication(slug, images, requestId, expected) {
                 lastError = "public_blog_api_unavailable";
                 continue;
             }
-            const apiPayload = await api.json(), matches = (Array.isArray(apiPayload?.items) ? apiPayload.items : []).filter((item) => item?.slug === slug);
+            const apiPayload = await api.json(), matches = (Array.isArray(apiPayload?.items) ? apiPayload.items : []).filter((item) => (item?.slug || item?.data?.slug) === slug);
             if (matches.length !== 1) {
                 lastError = "public_blog_api_missing";
                 continue;
             }
-            const actual = matches[0];
+            const match = matches[0], actual = match?.data && typeof match.data === "object"
+                ? { ...match.data, title: match.title || match.data.title, fullContent: match.data.fullContent || match.data.content_html || "", content: match.data.content || match.data.content_markdown || "" }
+                : match;
             const exactFields = ["title", "shortDescription", "fullContent", "content", "author", "category", "heroImageAlt", "heroImageTitle", "infographicImageAlt", "infographicImageTitle", "seoTitle", "focusKeyword"];
             if (exactFields.some(field => text(actual[field]) !== text(expected[field])) || jsonb(actual.images || []) !== jsonb(expected.images || [])) {
                 lastError = "public_blog_api_mismatch";
@@ -492,7 +470,7 @@ async function verifyPublication(slug, images, requestId, expected) {
             for (const image of images) {
                 if (!image)
                     continue;
-                const response = await fetch(`${origin}${image.url}`, { method: "HEAD", headers: { "cache-control": "no-cache", "x-wb-request-id": requestId }, signal: AbortSignal.timeout(15_000) });
+                const response = await fetch(image.url, { method: "HEAD", headers: { "cache-control": "no-cache", "x-wb-request-id": requestId }, signal: AbortSignal.timeout(15_000) });
                 if (!response.ok || !text(response.headers.get("content-type")).startsWith("image/")) {
                     mediaOk = false;
                     lastError = "public_media_unavailable";
@@ -510,16 +488,25 @@ async function verifyPublication(slug, images, requestId, expected) {
 }
 export function registerAutoSeoRoutes(app, ctx) {
     app.post("/api/integrations/autoseo/webhook", { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (req, reply) => {
-        const rawBody = req.rawBody, authorization = text(req.headers.authorization), delivery = text(req.headers["x-autoseo-delivery"]), signatureHeader = text(req.headers["x-autoseo-signature"]);
+        // WB_AUTOSEO_URL_AUTH_CANARY
+        // WB_AUTOSEO_BODY_COMPAT_CANARY
+        const rawBody = Buffer.isBuffer(req.rawBody)
+            ? req.rawBody
+            : Buffer.from(typeof req.body === "string" ? req.body : JSON.stringify(req.body ?? {}));
+        const authorization = text(req.headers.authorization), signatureHeader = text(req.headers["x-autoseo-signature"]);
+        let delivery = text(req.headers["x-autoseo-delivery"]);
         const credentials = await secret(), bearer = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
         const match = signaturePattern.exec(signatureHeader);
-        if (!bearer || !match)
-            return reply.code(401).send({ error: "unauthorized", correlationId: req.id });
         if (!rawBody)
             return reply.code(400).send({ error: "invalid_request", correlationId: req.id });
         const expected = crypto.createHmac("sha256", credentials.token).update(rawBody).digest("hex");
-        if (!constantEqual(bearer, credentials.token) || !constantEqual(match[1].toLowerCase(), expected))
+        const signedRequest = Boolean(bearer && match && constantEqual(bearer, credentials.token) && constantEqual(match[1].toLowerCase(), expected));
+        const endpointKey = crypto.createHmac("sha256", credentials.token).update("autoseo-endpoint-v2").digest("hex");
+        const urlRequest = constantEqual(text(req.query?.key), endpointKey);
+        if (!signedRequest && !urlRequest)
             return reply.code(401).send({ error: "unauthorized", correlationId: req.id });
+        if (!delivery && urlRequest)
+            delivery = `autoseo-url-${digest(rawBody)}`;
         if (!deliveryPattern.test(delivery))
             return reply.code(400).send({ error: "invalid_request", correlationId: req.id });
         const envelope = eventSchema.safeParse(req.body);
@@ -529,19 +516,26 @@ export function registerAutoSeoRoutes(app, ctx) {
         const headerEvent = text(req.headers["x-autoseo-event"]);
         if (headerEvent && bodyEvent && headerEvent !== bodyEvent)
             return reply.code(422).send({ error: "event_type_mismatch", correlationId: req.id });
-        const eventType = headerEvent || bodyEvent;
+        const articleCandidate = envelope.data.article || envelope.data.data || envelope.data.payload || envelope.data;
+        const eventType = headerEvent || bodyEvent || (text(articleCandidate.id) && text(articleCandidate.title) ? "article.published" : undefined);
         if (!["article.published", "article.updated", "test"].includes(eventType || ""))
             return reply.code(422).send({ error: "event_type_invalid", correlationId: req.id });
         if (!eventType)
             return reply.code(422).send({ error: "event_type_missing", correlationId: req.id });
         if (eventType === "test")
             return { url: "https://www.wb-holding.ag/blog", status: "ok" };
+        // WB_AUTOSEO_TENANT_CONTEXT_CANARY
+        // WB_AUTOSEO_TENANT_RESOLUTION_V2_CANARY
+        const tenantResult = await query("SELECT tenant_id,count(*)::int AS total FROM files.objects WHERE tenant_id IS NOT NULL GROUP BY tenant_id ORDER BY total DESC");
+        const tenantId = tenantResult.rows.length === 1 ? tenantResult.rows[0].tenant_id : undefined;
+        if (!tenantId)
+            return reply.code(503).send({ error: "tenant_context_unavailable", correlationId: req.id });
         const payloadSha256 = digest(rawBody), articleValue = envelope.data.article || envelope.data.data || envelope.data.payload || envelope.data;
         const externalId = text(articleValue.id);
         let inserted;
         try {
-            inserted = await query(`INSERT INTO integration.autoseo_deliveries(delivery_id,event_type,external_id,payload_sha256,status)
-    VALUES($1,$2,$3,$4,'processing') ON CONFLICT(delivery_id) DO NOTHING RETURNING *`, [delivery, eventType, externalId, payloadSha256]);
+            inserted = await query(`INSERT INTO integration.autoseo_deliveries(delivery_id,event_type,external_id,payload_sha256,status,tenant_id)
+    VALUES($1,$2,$3,$4,'processing',$5) ON CONFLICT(delivery_id) DO NOTHING RETURNING *`, [delivery, eventType, externalId, payloadSha256, tenantId]);
         }
         catch (error) {
             return reply.code(503).send({ error: publicationErrorCode(error), correlationId: req.id });
@@ -549,7 +543,7 @@ export function registerAutoSeoRoutes(app, ctx) {
         if (!inserted.rowCount) {
             let waitedForProcessing = false;
             for (let attempt = 0; attempt < 400; attempt++) {
-                const current = await query("SELECT * FROM integration.autoseo_deliveries WHERE delivery_id=$1", [delivery]);
+                const current = await query("SELECT * FROM integration.autoseo_deliveries WHERE delivery_id=$1 AND tenant_id=$2", [delivery, tenantId]);
                 if (!current.rowCount) {
                     await new Promise(resolve => setTimeout(resolve, 100));
                     continue;
@@ -563,7 +557,7 @@ export function registerAutoSeoRoutes(app, ctx) {
                     if (waitedForProcessing)
                         return reply.code(503).send({ error: publicationErrorCode(new Error(prior.last_error_code)), correlationId: req.id });
                     const claimed = await query(`UPDATE integration.autoseo_deliveries SET status='processing',attempts=attempts+1,last_error_code=NULL
-      WHERE delivery_id=$1 AND status='failed' RETURNING delivery_id`, [delivery]);
+      WHERE delivery_id=$1 AND tenant_id=$2 AND status='failed' RETURNING delivery_id`, [delivery, tenantId]);
                     if (claimed.rowCount)
                         break;
                 }
@@ -574,9 +568,27 @@ export function registerAutoSeoRoutes(app, ctx) {
                     return reply.code(503).send({ error: "delivery_processing_timeout", correlationId: req.id });
             }
         }
-        const parsed = articleSchema.safeParse(articleValue);
+        const compatibleArticle = {
+            ...articleValue,
+            shortDescription: articleValue.shortDescription ?? articleValue.short_description ?? articleValue.description,
+            metaDescription: articleValue.metaDescription ?? articleValue.meta_description ?? articleValue.description,
+            seoTitle: articleValue.seoTitle ?? articleValue.seo_title ?? articleValue.metaTitle ?? articleValue.meta_title,
+            focusKeyword: articleValue.focusKeyword ?? articleValue.focus_keyword,
+            content_html: articleValue.content_html ?? articleValue.html ?? articleValue.contentHtml,
+            content_markdown: articleValue.content_markdown ?? articleValue.markdown ?? articleValue.contentMarkdown,
+            heroImageUrl: articleValue.heroImageUrl ?? articleValue.hero_image_url ?? articleValue.cover_image_url ?? articleValue.coverImageUrl,
+            heroImageAlt: articleValue.heroImageAlt ?? articleValue.hero_image_alt ?? articleValue.cover_image_alt,
+            heroImageTitle: articleValue.heroImageTitle ?? articleValue.hero_image_title ?? articleValue.cover_image_title,
+            infographicImageUrl: articleValue.infographicImageUrl ?? articleValue.infographic_image_url,
+            infographicImageAlt: articleValue.infographicImageAlt ?? articleValue.infographic_image_alt,
+            infographicImageTitle: articleValue.infographicImageTitle ?? articleValue.infographic_image_title,
+            keywords: articleValue.keywords ?? articleValue.tags,
+            publishedAt: articleValue.publishedAt ?? articleValue.published_at ?? articleValue.created_at,
+            updatedAt: articleValue.updatedAt ?? articleValue.updated_at
+        };
+        const parsed = articleSchema.safeParse(compatibleArticle);
         if (!parsed.success) {
-            await query("UPDATE integration.autoseo_deliveries SET status='failed',last_error_code='article_schema_invalid' WHERE delivery_id=$1", [delivery]);
+            await query("UPDATE integration.autoseo_deliveries SET status='failed',last_error_code='article_schema_invalid' WHERE delivery_id=$1 AND tenant_id=$2", [delivery, tenantId]);
             return reply.code(422).send({ error: "article_schema_invalid", correlationId: req.id });
         }
         let faqStructuredData;
@@ -584,7 +596,7 @@ export function registerAutoSeoRoutes(app, ctx) {
             faqStructuredData = structuredData(parsed.data.faqSchema);
         }
         catch (error) {
-            await query("UPDATE integration.autoseo_deliveries SET status='failed',last_error_code=$1 WHERE delivery_id=$2", [text(error.message).slice(0, 120) || "faq_schema_invalid", delivery]);
+            await query("UPDATE integration.autoseo_deliveries SET status='failed',last_error_code=$1 WHERE delivery_id=$2 AND tenant_id=$3", [text(error.message).slice(0, 120) || "faq_schema_invalid", delivery, tenantId]);
             return reply.code(422).send({ error: "article_schema_invalid", correlationId: req.id });
         }
         try {
@@ -597,16 +609,15 @@ export function registerAutoSeoRoutes(app, ctx) {
                     : { kind: `gallery-${index + 1}`, sourceUrl: value.url, alt: value.alt || "", title: value.title || "" })
             ];
             if (articleImages.length > 4) {
-                await query("UPDATE integration.autoseo_deliveries SET status='failed',last_error_code='article_image_limit_exceeded' WHERE delivery_id=$1", [delivery]);
+                await query("UPDATE integration.autoseo_deliveries SET status='failed',last_error_code='article_image_limit_exceeded' WHERE delivery_id=$1 AND tenant_id=$2", [delivery, tenantId]);
                 return reply.code(422).send({ error: "article_image_limit_exceeded", correlationId: req.id });
             }
-            const importedImages = await importArticleImages(articleImages, ctx.privateRoot);
+            const importedImages = await importArticleImages(articleImages, ctx.privateRoot, tenantId);
             const hero = articleImages.find(image => image.kind === "hero")?.imported, infographic = articleImages.find(image => image.kind === "infographic")?.imported;
-            const client = await publicationClient(importedImages, ctx.privateRoot);
+            const client = await publicationClient(importedImages, ctx.privateRoot, tenantId);
+            await client.query("SELECT set_config('app.tenant_id',$1,false)", [tenantId]);
             let resourceId = "";
             let finalSlug = "";
-            let publicSnapshot = null;
-            let publicCmsWritten = false;
             let transactionOpen = false, mutationCommitted = false;
             const compensation = { article: { resource: null, files: [], seo: [] }, media: [], redirect: null };
             try {
@@ -628,10 +639,11 @@ export function registerAutoSeoRoutes(app, ctx) {
                     await client.query("INSERT INTO cms.slug_redirects(old_slug,resource_id) VALUES($1,$2) ON CONFLICT(old_slug) DO UPDATE SET resource_id=EXCLUDED.resource_id", [previous.data.slug, previous.id]);
                 }
                 const replaceUrls = (value) => articleImages.reduce((result, image) => result.replaceAll(image.sourceUrl, image.imported?.url || ""), value);
+                const renderedHtml = replaceUrls(html), renderedMarkdown = article.content_markdown || "";
                 const data = { id: article.id, autoseoId: article.id, title: article.title, slug: finalSlug, shortDescription: article.shortDescription ?? article.metaDescription ?? "", metaDescription: article.metaDescription || "",
                     seoTitle: article.seoTitle ?? article.title, focusKeyword: article.focusKeyword ?? "", author: article.author ?? "WB Holding AG", category: article.category ?? "Fachbeitrag",
-                    content_html: replaceUrls(html), content_markdown: article.content_markdown || "",
-                    heroImageUrl: article.heroImageUrl || null, heroImageLocalUrl: hero?.url || null, heroImageAlt: article.heroImageAlt || "", heroImageTitle: article.heroImageTitle || "",
+                    content_html: renderedHtml, fullContent: renderedHtml, content_markdown: renderedMarkdown, content: renderedMarkdown,
+                    heroImageUrl: article.heroImageUrl || null, heroImageLocalUrl: hero?.url || null, coverImage: hero?.url || null, heroImageAlt: article.heroImageAlt || "", heroImageTitle: article.heroImageTitle || "",
                     infographicImageUrl: article.infographicImageUrl || null, infographicImageLocalUrl: infographic?.url || null,
                     infographicImageAlt: article.infographicImageAlt || "", infographicImageTitle: article.infographicImageTitle || "",
                     images: articleImages.filter(image => image.kind.startsWith("gallery-")).map(image => ({ url: image.sourceUrl, localUrl: image.imported?.url, alt: image.alt, title: image.title })),
@@ -657,7 +669,7 @@ export function registerAutoSeoRoutes(app, ctx) {
                     const mediaSnapshot = await snapshotResource(client, mediaBefore.rows[0] || null);
                     const media = await client.query(`INSERT INTO app.resources(domain,resource_type,title,status,data,source_system,external_id,source_hash)
       VALUES('cms','media',$1,'published',$2,'autoseo',$3,$4)
-      ON CONFLICT(source_system,resource_type,external_id) DO UPDATE SET title=EXCLUDED.title,status='published',data=EXCLUDED.data,source_hash=EXCLUDED.source_hash,
+      ON CONFLICT(tenant_id,source_system,resource_type,external_id) WHERE external_id IS NOT NULL DO UPDATE SET title=EXCLUDED.title,status='published',data=EXCLUDED.data,source_hash=EXCLUDED.source_hash,
       deleted_at=NULL,deletion_status='active',delete_reason=NULL,scheduled_permanent_deletion_at=NULL,updated_at=now() RETURNING id`, [title || `AutoSEO ${kind} ${article.title}`, jsonb({ fileId: image.fileId, altText: alt, title, sourceUrl: image.sourceUrl, sha256: image.sha256 }), `${article.id}:${kind}`, image.sha256]);
                     mediaSnapshot.currentId = media.rows[0].id;
                     compensation.media.push(mediaSnapshot);
@@ -670,13 +682,11 @@ export function registerAutoSeoRoutes(app, ctx) {
                 await client.query("COMMIT");
                 transactionOpen = false;
                 mutationCommitted = true;
-                publicSnapshot = publishToPublicCms(saved.rows[0]);
-                publicCmsWritten = true;
                 const publishedUrl = await verifyPublication(finalSlug, importedImages, req.id, publicCmsPayload(saved.rows[0]));
                 await client.query("BEGIN");
                 transactionOpen = true;
-                await client.query("UPDATE integration.autoseo_deliveries SET status='published',resource_id=$1,published_url=$2,processed_at=now(),last_error_code=NULL WHERE delivery_id=$3", [resourceId, publishedUrl, delivery]);
-                await client.query("INSERT INTO audit.events(action,object_type,object_id,changed_fields,request_id,metadata) VALUES('autoseo_publish','blogposts',$1,$2,$3,$4::jsonb)", [resourceId, ["title", "slug", "status", "media"], req.id, jsonb({ eventType, externalId: article.id, deliveryHash: digest(delivery), hasHero: Boolean(hero), hasInfographic: Boolean(infographic), publicCms: "sqlite" })]);
+                await client.query("UPDATE integration.autoseo_deliveries SET status='published',resource_id=$1,published_url=$2,processed_at=now(),last_error_code=NULL WHERE delivery_id=$3 AND tenant_id=$4", [resourceId, publishedUrl, delivery, tenantId]);
+                await client.query("INSERT INTO audit.events(action,object_type,object_id,changed_fields,request_id,metadata) VALUES('autoseo_publish','blogposts',$1,$2,$3,$4::jsonb)", [resourceId, ["title", "slug", "status", "media"], req.id, jsonb({ eventType, externalId: article.id, deliveryHash: digest(delivery), hasHero: Boolean(hero), hasInfographic: Boolean(infographic), publicCms: "postgresql-source-of-truth" })]);
                 await client.query("COMMIT");
                 transactionOpen = false;
                 return { url: publishedUrl, published_url: publishedUrl, status: "published" };
@@ -688,12 +698,10 @@ export function registerAutoSeoRoutes(app, ctx) {
                 }
                 let compensationError;
                 try {
-                    if (publicCmsWritten)
-                        restorePublicCms(finalSlug, publicSnapshot);
                     if (mutationCommitted)
                         await compensateCommittedPublication(client, compensation, resourceId);
-                    await compensateImportedImages(importedImages, ctx.privateRoot);
-                    await query("INSERT INTO audit.events(action,object_type,object_id,changed_fields,request_id,metadata) VALUES('autoseo_publish_compensated','blogposts',$1,$2,$3,$4::jsonb)", [resourceId || null, ["publicCms", "media", "idempotency"], req.id, jsonb({ eventType, externalId: article.id, deliveryHash: digest(delivery), reason: text(error.message).slice(0, 120) })]);
+                    await compensateImportedImages(importedImages, ctx.privateRoot, tenantId);
+                    await query("INSERT INTO audit.events(action,object_type,object_id,changed_fields,request_id,metadata,tenant_id) VALUES('autoseo_publish_compensated','blogposts',$1,$2,$3,$4::jsonb,$5)", [resourceId || null, ["cmsSource", "publicRenderer", "media", "idempotency"], req.id, jsonb({ eventType, externalId: article.id, deliveryHash: digest(delivery), reason: text(error.message).slice(0, 120) }), tenantId]);
                 }
                 catch (compensation) {
                     compensationError = compensation;
@@ -703,12 +711,13 @@ export function registerAutoSeoRoutes(app, ctx) {
                 throw error;
             }
             finally {
+                await client.query("RESET app.tenant_id").catch(() => undefined);
                 client.release();
             }
         }
         catch (error) {
             const errorCode = publicationErrorCode(error);
-            await query("UPDATE integration.autoseo_deliveries SET status='failed',last_error_code=$1 WHERE delivery_id=$2", [errorCode, delivery]).catch(() => undefined);
+            await query("UPDATE integration.autoseo_deliveries SET status='failed',last_error_code=$1 WHERE delivery_id=$2 AND tenant_id=$3", [errorCode, delivery, tenantId]).catch(() => undefined);
             return reply.code(503).send({ error: errorCode, correlationId: req.id });
         }
     });
@@ -746,7 +755,7 @@ export function registerAutoSeoRoutes(app, ctx) {
         if (!file.rowCount)
             return reply.code(404).send({ error: "not_found" });
         const item = file.rows[0], target = ctx.assertStoragePath(item.storage_name);
-        reply.header("content-type", item.mime_type).header("content-length", item.size_bytes).header("cache-control", "public,max-age=31536000,immutable").header("x-content-type-options", "nosniff");
+        reply.header("content-type", item.mime_type).header("content-length", item.size_bytes).header("cache-control", "public,max-age=31536000,immutable").header("cross-origin-resource-policy", "cross-origin").header("x-content-type-options", "nosniff");
         return reply.send(fs.createReadStream(target));
     });
 }
