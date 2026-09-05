@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -13,8 +13,28 @@ const gate = new URL("../deployment/production-live-http-gate.mjs", import.meta.
 test("production live HTTP gate uses one exact configured Tender API base and sends no payload", async (t) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "wb-live-http-gate-test-"));
   const sessionFile = path.join(temporary, "curl.config");
+  const runsAsRoot = process.getuid() === 0;
+  let sessionOwnedByRoot = runsAsRoot;
+  const sudo = async (...args) => execFileAsync("sudo", ["-n", ...args], { env: { PATH: process.env.PATH } });
+  t.after(async () => {
+    if (!runsAsRoot && sessionOwnedByRoot) {
+      try {
+        await sudo("chown", `${process.getuid()}:${process.getgid()}`, "--", sessionFile);
+        sessionOwnedByRoot = false;
+      } catch {
+        await sudo("rm", "--", sessionFile);
+        sessionOwnedByRoot = false;
+      }
+    }
+    await rm(temporary, { recursive: true, force: true });
+  });
   await writeFile(sessionFile, `cookie = "wb_session=${"s".repeat(43)}; wb_csrf=${"c".repeat(43)}"\nheader = "x-csrf-token: ${"x".repeat(43)}"\n`);
   await chmod(sessionFile, 0o600);
+  if (!runsAsRoot) {
+    await sudo("chown", "0:0", "--", sessionFile);
+    sessionOwnedByRoot = true;
+    await sudo("chmod", "0600", "--", sessionFile);
+  }
 
   const requests = [];
   let actionStatus = 423;
@@ -37,19 +57,26 @@ test("production live HTTP gate uses one exact configured Tender API base and se
   await new Promise((resolve, reject) => server.listen(0, "127.0.0.1", resolve).once("error", reject));
   t.after(async () => {
     await new Promise((resolve) => server.close(resolve));
-    await rm(temporary, { recursive: true, force: true });
   });
   const origin = `http://127.0.0.1:${server.address().port}`;
   const environment = (overrides = {}) => ({
-    PATH: process.env.PATH,
-    TMPDIR: temporary,
-    ALLOW_LOOPBACK_HTTP: "true",
     PRODUCTION_BASE_URL: origin,
-    PRODUCTION_SESSION_FILE: sessionFile,
     TENDER_API_BASE: "/api/tender",
+    PRODUCTION_SESSION_FILE: sessionFile,
+    ALLOW_LOOPBACK_HTTP: "true",
     ...overrides,
   });
-  const runGate = async (overrides = {}) => execFileAsync(process.execPath, [gate.pathname], { env: environment(overrides) });
+  const runGate = async (overrides = {}) => {
+    const env = environment(overrides);
+    if (runsAsRoot) return execFileAsync(process.execPath, [gate.pathname], { env });
+    return sudo(
+      "env",
+      "-i",
+      ...Object.entries(env).map(([name, value]) => `${name}=${value}`),
+      process.execPath,
+      gate.pathname,
+    );
+  };
   const rejection = async (overrides) => {
     try {
       await runGate(overrides);
