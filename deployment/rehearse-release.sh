@@ -63,6 +63,7 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=tls-proxy \
 chmod 0600 "$secret_dir/tls_key" "$secret_dir/tls_cert"
 export DATABASE_URL_FILE="$secret_dir/database_url"
 export RUNTIME_DATABASE_URL_FILE="$secret_dir/runtime_database_url"
+export API_RUNTIME_DATABASE_URL_FILE="$secret_dir/api_runtime_database_url"
 export SESSION_PEPPER_FILE="$secret_dir/session_pepper"
 export FIELD_ENCRYPTION_KEY_FILE="$secret_dir/field_encryption_key"
 export PORTAL_CREDENTIAL_KEY_FILE="$secret_dir/portal_credential_key"
@@ -78,12 +79,14 @@ docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" up -d db
 docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" exec -T db sh -c 'until pg_isready -U postgres -d wb_rehearsal; do sleep 1; done'
 decrypt_archive | docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" exec -T db pg_restore -U postgres --exit-on-error --clean --if-exists --no-owner --no-acl -d wb_rehearsal
 docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" run --rm -T -e REHEARSAL_DATABASE_TRUSTED=true tools deployment/verify-rehearsal-prerequisites.sh
+docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" run --rm -T -v "$secret_dir:/run/rehearsal:ro" -e REHEARSAL_SECRET_DIR=/run/rehearsal tools node scripts/release-rehearsal-fixture.mjs prepare-runtime
 
 before=$(docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" exec -T db psql -U postgres -At -d wb_rehearsal -c "SELECT encode(digest(coalesce(jsonb_agg(to_jsonb(p) ORDER BY code)::text,''),'sha256'),'hex') FROM saas.plans p WHERE code IN ('CORE','NORMAL','PROFESSIONAL','ENTERPRISE')")
 ledger_before=$(docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" exec -T db psql -U postgres -At -d wb_rehearsal -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='tender' AND table_name='release_migrations'")
 snapshot_table_before=$(docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" exec -T db psql -U postgres -At -d wb_rehearsal -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='tender' AND table_name='release_plan_snapshots'")
 docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" run --rm -T -e REHEARSAL_DATABASE_TRUSTED=true -e RELEASE_ID="$commit" tools deployment/apply-release-migrations.sh
-docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" run --rm -T -v "$secret_dir:/run/rehearsal:ro" -e REHEARSAL_SECRET_DIR=/run/rehearsal tools node scripts/release-rehearsal-fixture.mjs prepare-runtime
+runtime_role_contract=$(docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" exec -T db psql -U postgres -At -d wb_rehearsal -c "SELECT pg_has_role('wb_tender_api_login','tender_api_runtime','member') AND NOT EXISTS(SELECT 1 FROM pg_auth_members WHERE member='wb_tender_api_login'::regrole AND roleid<>'tender_api_runtime'::regrole) AND has_table_privilege('wb_tender_api_login','iam.tender_login_challenges','SELECT,INSERT,DELETE') AND NOT has_table_privilege('wb_tender_api_login','iam.tender_login_challenges','UPDATE,TRUNCATE,REFERENCES,TRIGGER')")
+[[ "$runtime_role_contract" == t ]] || { echo "rehearsal API runtime role contract failed" >&2; exit 1; }
 iam_snapshot_sql="SELECT encode(digest(concat_ws('|',(SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY id)::text,'') FROM iam.users x),(SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY id)::text,'') FROM iam.roles x),(SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY user_id,role_id)::text,'') FROM iam.user_roles x),(SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY role_id,permission_id)::text,'') FROM iam.role_permissions x),(SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY user_id,scope_type,scope_id)::text,'') FROM iam.tender_identity_scopes x),(SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY id_hash)::text,'') FROM iam.sessions x),(SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY id)::text,'') FROM iam.login_attempts x),(SELECT coalesce(jsonb_agg(to_jsonb(x) ORDER BY challenge_hash)::text,'') FROM iam.tender_login_challenges x)),'sha256'),'hex')"
 iam_before=$(docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" exec -T db psql -U postgres -At -d wb_rehearsal -c "$iam_snapshot_sql")
 docker compose -p "$project" -f "$REHEARSAL_COMPOSE_FILE" run --rm -T \

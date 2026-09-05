@@ -9,7 +9,7 @@ import { approvalBinding, manifestHash } from "../platform/bid-workflow.mjs";
 const mode = process.argv[2];
 const directory = process.env.REHEARSAL_SECRET_DIR;
 if (!directory || !path.isAbsolute(directory)) throw new Error("rehearsal_secret_dir_absolute_required");
-const files = Object.freeze({ database: "database_url", runtimeDatabase: "runtime_database_url", pepper: "session_pepper", fieldKey: "field_encryption_key", email: "e2e_email", password: "e2e_password", totp: "e2e_totp", portalKey: "portal_credential_key", careerDb: "career.db" });
+const files = Object.freeze({ database: "database_url", runtimeDatabase: "runtime_database_url", apiRuntimeDatabase: "api_runtime_database_url", pepper: "session_pepper", fieldKey: "field_encryption_key", email: "e2e_email", password: "e2e_password", totp: "e2e_totp", portalKey: "portal_credential_key", careerDb: "career.db" });
 const file = (key) => path.join(directory, files[key]);
 const read = (key) => readFileSync(file(key), "utf8").trim();
 const write = (key, value) => writeFileSync(file(key), `${value}\n`, { mode: 0o600, flag: "wx" });
@@ -35,13 +35,17 @@ const randomBase32 = () => {
 };
 const prepareRuntimeRole = async (client) => {
   await client.query(`DO $$BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='wb_rehearsal_runtime') THEN CREATE ROLE wb_rehearsal_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; END IF; END$$`);
-  await client.query("GRANT CONNECT ON DATABASE wb_rehearsal TO wb_rehearsal_runtime");
-  for (const schema of ["saas", "tenant_portal", "app", "files", "crm", "audit", "integration", "communication", "tender", "iam"]) {
-    if (!(await client.query("SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname=$1) present", [schema])).rows[0].present) continue;
-    await client.query(`GRANT USAGE ON SCHEMA ${schema} TO wb_rehearsal_runtime`);
-    await client.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA ${schema} TO wb_rehearsal_runtime`);
-    await client.query(`GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO wb_rehearsal_runtime`);
-    await client.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${schema} TO wb_rehearsal_runtime`);
+  await client.query(`DO $$BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='tender_api_runtime') THEN CREATE ROLE tender_api_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS; END IF; END$$`);
+  await client.query(`DO $$BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='wb_tender_api_login') THEN CREATE ROLE wb_tender_api_login LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS IN ROLE tender_api_runtime; END IF; END$$`);
+  for (const role of ["wb_rehearsal_runtime", "tender_api_runtime"]) {
+    await client.query(`GRANT CONNECT ON DATABASE wb_rehearsal TO ${role}`);
+    for (const schema of ["saas", "tenant_portal", "app", "files", "crm", "audit", "integration", "communication", "tender", "iam"]) {
+      if (!(await client.query("SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname=$1) present", [schema])).rows[0].present) continue;
+      await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
+      await client.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${role}`);
+      await client.query(`GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO ${role}`);
+      await client.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${schema} TO ${role}`);
+    }
   }
 };
 
@@ -49,6 +53,7 @@ if (mode === "generate") {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   write("database", ["postgresql:", "", "postgres@db", "wb_rehearsal"].join("/"));
   write("runtimeDatabase", ["postgresql:", "", "wb_rehearsal_runtime@db", "wb_rehearsal"].join("/"));
+  write("apiRuntimeDatabase", ["postgresql:", "", "wb_tender_api_login@db", "wb_rehearsal"].join("/"));
   write("pepper", crypto.randomBytes(48).toString("base64url"));
   write("fieldKey", crypto.randomBytes(32).toString("hex"));
   write("email", "wb-release-rehearsal-20260904@example.invalid");

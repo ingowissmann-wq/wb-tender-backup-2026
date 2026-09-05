@@ -28,7 +28,7 @@ services:
     environment: &runtime
       NODE_ENV: test
       TENDER_ENABLED: "true"
-      DATABASE_URL_FILE: /run/secrets/database_url
+      DATABASE_URL_FILE: /run/secrets/api_runtime_database_url
       SESSION_PEPPER_FILE: /run/secrets/session_pepper
       FIELD_ENCRYPTION_KEY_FILE: /run/secrets/field_encryption_key
       PORTAL_CREDENTIAL_KEY_FILE: /run/secrets/portal_credential_key
@@ -45,7 +45,7 @@ services:
         source: ${REHEARSAL_SECRET_DIR:?REHEARSAL_SECRET_DIR is required}
         target: /run/rehearsal
         read_only: true
-    secrets: [database_url, session_pepper, field_encryption_key, portal_credential_key]
+    secrets: [api_runtime_database_url, session_pepper, field_encryption_key, portal_credential_key]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:4240/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 3s
@@ -57,7 +57,7 @@ services:
     depends_on:
       api: { condition: service_healthy }
     environment: *runtime
-    secrets: [database_url, session_pepper, field_encryption_key, portal_credential_key]
+    secrets: [api_runtime_database_url, session_pepper, field_encryption_key, portal_credential_key]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:4240/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 3s
@@ -69,7 +69,7 @@ services:
     depends_on:
       api: { condition: service_healthy }
     environment: *runtime
-    secrets: [database_url, session_pepper, field_encryption_key, portal_credential_key]
+    secrets: [api_runtime_database_url, session_pepper, field_encryption_key, portal_credential_key]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:4240/healthz').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 3s
@@ -112,6 +112,7 @@ services:
 secrets:
   database_url: { file: "${DATABASE_URL_FILE:?DATABASE_URL_FILE is required}" }
   runtime_database_url: { file: "${RUNTIME_DATABASE_URL_FILE:?RUNTIME_DATABASE_URL_FILE is required}" }
+  api_runtime_database_url: { file: "${API_RUNTIME_DATABASE_URL_FILE:?API_RUNTIME_DATABASE_URL_FILE is required}" }
   session_pepper: { file: "${SESSION_PEPPER_FILE:?SESSION_PEPPER_FILE is required}" }
   field_encryption_key: { file: "${FIELD_ENCRYPTION_KEY_FILE:?FIELD_ENCRYPTION_KEY_FILE is required}" }
   portal_credential_key: { file: "${PORTAL_CREDENTIAL_KEY_FILE:?PORTAL_CREDENTIAL_KEY_FILE is required}" }
