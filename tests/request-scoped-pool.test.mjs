@@ -38,7 +38,9 @@ test("request database context binds RLS scope and never leaks pooled settings",
   assert.equal(events.filter((event) => event.release && event.destroy).length, 0);
   const settings = events.filter((event) => String(event.text).includes("set_config('app.company_ids'"));
   assert.deepEqual(settings.map((event) => event.values[0]).sort(), ["company-a", "company-b"]);
+  assert.deepEqual(settings.map((event) => event.values[2]).sort(), ["tenant-a", "tenant-b"]);
   assert.equal(events.filter((event) => String(event.text).includes("RESET app.company_ids")).length, 2);
+  assert.equal(events.filter((event) => String(event.text).includes("RESET app.tenant_id;")).length, 2);
 });
 
 test("request database context resolves all background scope only for tender admin", async () => {
