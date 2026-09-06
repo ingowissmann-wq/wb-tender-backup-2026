@@ -24,7 +24,7 @@ chmod 0600 "$temporary/pgpass"
 PGHOST="${ROLLOUT_TEST_ADMIN_PGHOST:-127.0.0.1}" \
 PGPORT="${ROLLOUT_TEST_ADMIN_PGPORT:-5432}" PGUSER=postgres PGDATABASE=postgres \
 PGPASSFILE="$temporary/pgpass" ROLLOUT_DATABASE_ADMIN_TRUSTED=true \
-STATE_OUTPUT_DIR="$temporary/trusted" "$root/deployment/capture-rollout-db-state.sh"
+STATE_OUTPUT_DIR="$temporary/trusted" sh -s <"$root/deployment/capture-rollout-db-state.sh"
 for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger.sha256 migration-snapshots.present migration-snapshots.sha256; do
   cmp -s "$temporary/before/$item" "$temporary/trusted/$item"
 done
