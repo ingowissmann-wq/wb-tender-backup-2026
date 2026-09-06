@@ -28,6 +28,8 @@ project=$COMPOSE_PROJECT_NAME
 state_dir="$ROLLOUT_STATE_DIR/${EXPECTED_COMMIT}-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -m 0700 -p "$state_dir/before" "$state_dir/after-rollback"
 printf 'EXTERNAL_SUBMISSION_ENABLED=false\nWB_TENDER_ALLOW_EXTERNAL_SUBMISSION=false\n' >"$state_dir/safety.env"
+docker compose -p "$project" -f "$COMPOSE_FILE" config --format json >"$state_dir/candidate-compose.json"
+chmod 0600 "$state_dir/candidate-compose.json"
 
 backup_result=$(COMPOSE_FILE="$COMPOSE_FILE" COMPOSE_PROJECT_NAME="$project" BACKUP_DIR="$BACKUP_DIR" BACKUP_ENCRYPTION_KEY_FILE="$BACKUP_ENCRYPTION_KEY_FILE" deployment/create-encrypted-production-backup.sh)
 backup=$(printf '%s\n' "$backup_result" | sed -n 's/^BACKUP_FILE=//p')
@@ -45,6 +47,7 @@ for service in api worker scheduler; do
   [[ -n "$container" ]] || { echo "previous service is absent: $service" >&2; exit 78; }
   docker inspect "$container" --format '{{.Image}}' >"$state_dir/before/$service.image-id"
   docker inspect "$container" --format '{{json .Config.Cmd}}' >"$state_dir/before/$service.command.json"
+  docker inspect "$container" --format '{{json .Config.Env}}' >"$state_dir/before/$service.environment.json"
   docker inspect "$container" --format '{{.RestartCount}}' >"$state_dir/before/$service.restart-count"
   docker inspect "$container" --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' >"$state_dir/before/$service.state"
 done
@@ -87,8 +90,8 @@ rollback() {
     migration_rollback_status=$?
   fi
   if (( migration_rollback_status != 0 )); then echo "ROLLBACK_ERROR: reverse migration failed" >&2; emergency=1; fi
-  override="$state_dir/rollback-runtime.compose.json"
-  node deployment/write-rollback-runtime-override.mjs "$state_dir/before" "$override"
+  override="$state_dir/rollback-runtime.compose.yml"
+  node deployment/write-rollback-runtime-override.mjs "$state_dir/before" "$override" "$state_dir/candidate-compose.json"
   docker compose -p "$project" -f "$COMPOSE_FILE" -f "$override" up -d --no-deps --force-recreate api worker scheduler
   service_restore_status=$?
   if (( service_restore_status != 0 )); then echo "ROLLBACK_ERROR: exact service image restoration failed" >&2; emergency=1; fi
@@ -104,8 +107,16 @@ rollback() {
   fi
   for service in api worker scheduler; do
     container=$(docker compose -p "$project" -f "$COMPOSE_FILE" ps -q "$service")
-    if [[ -z "$container" || "$(docker inspect "$container" --format '{{.Image}}')" != "$(cat "$state_dir/before/$service.image-id")" || "$(docker inspect "$container" --format '{{json .Config.Cmd}}')" != "$(cat "$state_dir/before/$service.command.json")" || "$(docker inspect "$container" --format '{{.State.Status}}')" != running ]]; then
-      echo "ROLLBACK_ERROR: $service was not restored to its exact previous image and command" >&2; emergency=1
+    if [[ -z "$container" ]]; then
+      echo "ROLLBACK_ERROR: $service was not restored to its exact previous image, command, environment and health" >&2; emergency=1
+      continue
+    fi
+    docker inspect "$container" --format '{{json .Config.Env}}' >"$state_dir/after-rollback/$service.environment.json"
+    environment_matches=false
+    node -e 'const fs=require("fs"),[a,b]=process.argv.slice(1);const normalize=p=>JSON.parse(fs.readFileSync(p,"utf8")).slice().sort();process.exit(JSON.stringify(normalize(a))===JSON.stringify(normalize(b))?0:1)' \
+      "$state_dir/before/$service.environment.json" "$state_dir/after-rollback/$service.environment.json" && environment_matches=true
+    if [[ "$(docker inspect "$container" --format '{{.Image}}')" != "$(cat "$state_dir/before/$service.image-id")" || "$(docker inspect "$container" --format '{{json .Config.Cmd}}')" != "$(cat "$state_dir/before/$service.command.json")" || "$(docker inspect "$container" --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')" != "$(cat "$state_dir/before/$service.state")" || "$environment_matches" != true ]]; then
+      echo "ROLLBACK_ERROR: $service was not restored to its exact previous image, command, environment and health" >&2; emergency=1
     fi
   done
   set -e

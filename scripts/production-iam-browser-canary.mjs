@@ -53,9 +53,10 @@ try {
   });
   const returnTo = `${uiBase}/?productionIamCanary=1`;
   await page.goto(`${baseUrl}${uiBase}/login?returnTo=${encodeURIComponent(returnTo)}`, { waitUntil: "domcontentloaded" });
-  await page.getByLabel("E-Mail").fill(email);
-  await page.getByLabel("Passwort").fill(password);
-  await page.getByRole("button", { name: "Weiter" }).click();
+  const loginForm = page.locator("#login-form");
+  await loginForm.getByLabel("E-Mail").fill(email);
+  await loginForm.getByLabel("Passwort").fill(password);
+  await loginForm.getByRole("button", { name: "Weiter" }).click();
   await page.getByLabel("Authenticator-Code").waitFor({ state: "visible" });
   assert.equal((await context.cookies()).some((cookie) => cookie.name === "wb_session"), false, "password step created a session before MFA");
   await page.getByLabel("Authenticator-Code").fill(totp());
