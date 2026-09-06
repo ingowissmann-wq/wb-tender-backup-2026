@@ -160,7 +160,8 @@ trap rollback ERR INT TERM
 
 docker compose -p "$project" -f "$COMPOSE_FILE" run --rm -T \
   -v "$DATABASE_URL_FILE:/run/secrets/database_url:ro" -e DATABASE_URL_FILE=/run/secrets/database_url \
-  -e RELEASE_ID="$EXPECTED_COMMIT" tools deployment/apply-release-migrations.sh | tee "$state_dir/migrations.log"
+  -e MIGRATION_OWNER_ROLE=restore_admin -e RELEASE_ID="$EXPECTED_COMMIT" \
+  tools deployment/apply-release-migrations.sh | tee "$state_dir/migrations.log"
 docker compose -p "$project" -f "$COMPOSE_FILE" up -d --no-deps --force-recreate --wait --wait-timeout 180 api worker scheduler
 for service in api worker scheduler; do
   container=$(docker compose -p "$project" -f "$COMPOSE_FILE" ps -q "$service")

@@ -11,6 +11,7 @@ const rollout = await readFile(new URL("../deployment/production-rollout.sh", im
 const productionBrowserRunner = await readFile(new URL("../deployment/run-production-browser-canary.sh", import.meta.url), "utf8");
 const runtimeDrain = await readFile(new URL("../deployment/drain-runtime-database-sessions.sh", import.meta.url), "utf8");
 const rolloutStateCapture = await readFile(new URL("../deployment/capture-rollout-db-state.sh", import.meta.url), "utf8");
+const migrationRunner = await readFile(new URL("../deployment/apply-release-migrations.sh", import.meta.url), "utf8");
 const rolloutGuide = await readFile(new URL("../docs/production-rollout-hard-gates.md", import.meta.url), "utf8");
 const backup = await readFile(new URL("../deployment/create-encrypted-production-backup.sh", import.meta.url), "utf8");
 const encryptedCatalog = await readFile(new URL("../deployment/lib/encrypted-pg-archive.sh", import.meta.url), "utf8");
@@ -72,6 +73,17 @@ test("production host runtime dependencies fail before the expensive backup and 
   assert.match(rollout, /await import\('pg'\)/);
   assert.match(rollout, /scripts\/production-iam-canary\.mjs/);
   assert.match(rolloutGuide, /npm ci --omit=dev --audit=false --fund=false/);
+});
+
+test("production migrations activate the durable owner role before running DDL", () => {
+  assert.match(rollout, /-e MIGRATION_OWNER_ROLE=restore_admin/);
+  assert.match(migrationRunner, /MIGRATION_OWNER_ROLE/);
+  assert.match(migrationRunner, /export PGOPTIONS="-c role=\$MIGRATION_OWNER_ROLE"/);
+  assert.match(migrationRunner, /SELECT current_user/);
+  assert.match(migrationRunner, /\^\[a-z_\]\[a-z0-9_\]\*\$/);
+  const ownerActivation = migrationRunner.indexOf("migration owner role activation failed");
+  const firstDdl = migrationRunner.indexOf("CREATE SCHEMA IF NOT EXISTS tender");
+  assert.ok(ownerActivation > 0 && ownerActivation < firstDdl);
 });
 
 test("rollback stops services, drains only the runtime role, and restores exact runtime configuration", async () => {
