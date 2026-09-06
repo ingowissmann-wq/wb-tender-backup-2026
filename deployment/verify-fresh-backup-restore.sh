@@ -12,6 +12,14 @@ for file in "$BACKUP_FILE" "$BACKUP_MANIFEST" "$BACKUP_MANIFEST_SHA256" "$BACKUP
 done
 [[ ! -e "$ISOLATED_RESTORE_RESULT_FILE" ]] || { echo "isolated restore result already exists" >&2; exit 65; }
 
+# Prove that the immutable release image contains both its reviewed source and
+# production dependencies before spending time and disk on the full restore.
+# Never mount the host checkout over /app: doing so masks image node_modules and
+# makes the gate depend on undeclared host state.
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  "$RELEASE_IMAGE" node --input-type=module -e \
+  "await import('pg'); const { access } = await import('node:fs/promises'); await Promise.all(['deployment/apply-release-migrations.sh','scripts/tenant-isolation-integration.mjs','scripts/admin-real-tenant-integration.mjs'].map((file) => access(new URL(file, 'file:///app/'))));"
+
 repository=$(git rev-parse --show-toplevel)
 suffix="${RELEASE_ID:0:12}-$$"
 network="wb-tender-restore-$suffix"
@@ -74,7 +82,6 @@ docker exec -i "$database_container" psql -U postgres -d wb_restore -v ON_ERROR_
 
 run_tools() {
   docker run --rm --network "$network" --network-alias tools \
-    -v "$repository:/app:ro" \
     -v "$database_url_file:/run/secrets/database_url:ro" \
     -v "$database_admin_url_file:/run/secrets/test_database_admin_url:ro" \
     -w /app -e DATABASE_URL_FILE=/run/secrets/database_url -e TEST_DATABASE_ADMIN_URL_FILE=/run/secrets/test_database_admin_url \

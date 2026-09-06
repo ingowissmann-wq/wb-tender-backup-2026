@@ -175,11 +175,18 @@ test("restore readiness waits for the final PostgreSQL PID 1 instead of the temp
 test("database-only restore recreates the least-privilege release runtime role before migrations", () => {
   const restore = isolatedRestore.indexOf("pg_restore -U postgres");
   const prepareRole = isolatedRestore.indexOf("prepare-isolated-restore-runtime-role.sql");
-  const migrate = isolatedRestore.indexOf("deployment/apply-release-migrations.sh");
+  const migrate = isolatedRestore.indexOf('run_tools env RELEASE_ID="$RELEASE_ID" deployment/apply-release-migrations.sh');
   assert.ok(restore >= 0 && restore < prepareRole && prepareRole < migrate);
   assert.match(isolatedRestoreRuntimeRole, /CREATE ROLE tender_api_runtime/);
   assert.match(isolatedRestoreRuntimeRole, /NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS NOLOGIN/);
   assert.match(isolatedRestoreRuntimeRole, /existing tender_api_runtime role is not least privilege/);
   assert.match(isolatedRestore, /has_table_privilege\('tender_api_runtime','iam\.tender_login_challenges','SELECT,INSERT,DELETE'\)/);
   assert.match(isolatedRestore, /NOT has_table_privilege\('tender_api_runtime','iam\.tender_login_challenges','UPDATE,TRUNCATE,REFERENCES,TRIGGER'\)/);
+});
+
+test("isolated restore gates execute the digest-bound release image without masking its runtime dependencies", () => {
+  assert.match(isolatedRestore, /docker run --rm --network none --read-only --cap-drop ALL/);
+  assert.match(isolatedRestore, /await import\('pg'\)/);
+  assert.doesNotMatch(isolatedRestore, /-v "\$repository:\/app:ro"/);
+  assert.match(isolatedRestore, /"\$RELEASE_IMAGE" "\$@"/);
 });
