@@ -7,6 +7,12 @@ else
   : "${DATABASE_URL_FILE:?DATABASE_URL_FILE is required}"
   [[ -r "$DATABASE_URL_FILE" ]] || { echo "database secret file is unreadable" >&2; exit 66; }
   database=("$(cat "$DATABASE_URL_FILE")")
+  if [[ -n "${MIGRATION_OWNER_ROLE:-}" ]]; then
+    [[ "$MIGRATION_OWNER_ROLE" =~ ^[a-z_][a-z0-9_]*$ ]] || { echo "invalid migration owner role" >&2; exit 64; }
+    export PGOPTIONS="-c role=$MIGRATION_OWNER_ROLE"
+    [[ "$(psql "${database[@]}" -Atv ON_ERROR_STOP=1 -c 'SELECT current_user')" == "$MIGRATION_OWNER_ROLE" ]] \
+      || { echo "migration owner role activation failed" >&2; exit 77; }
+  fi
 fi
 psql "${database[@]}" -v ON_ERROR_STOP=1 <<'SQL'
 CREATE SCHEMA IF NOT EXISTS tender;
