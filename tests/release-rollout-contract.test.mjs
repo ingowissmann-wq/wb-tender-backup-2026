@@ -108,12 +108,16 @@ test("rollback stops services, drains only the runtime role, and restores exact 
   }
 });
 
-test("production state snapshots use the existing restore-admin database client", () => {
+test("production state snapshots use the existing restore-admin database client through POSIX sh", () => {
   assert.match(rollout, /ROLLOUT_DATABASE_ADMIN_TRUSTED=true/);
   assert.match(rollout, /db sh -s <deployment\/capture-rollout-db-state\.sh/);
   assert.doesNotMatch(rollout.slice(rollout.indexOf("capture_db_state()"), rollout.indexOf("ledger_existed=")), /DATABASE_URL_FILE/);
   assert.match(rolloutStateCapture, /ROLLOUT_DATABASE_ADMIN_TRUSTED/);
   for (const name of ["PGHOST", "PGUSER", "PGDATABASE", "PGPASSFILE"]) assert.match(rolloutStateCapture, new RegExp(name));
+  assert.match(rolloutStateCapture, /^#!\/bin\/sh\n/);
+  assert.doesNotMatch(rolloutStateCapture, /\[\[|\]\]|\w+=\(\)|\$\{![^}]+\}|\b(?:declare|local)\b/);
+  const syntax = spawnSync("sh", ["-n"], { input: rolloutStateCapture, encoding: "utf8" });
+  assert.equal(syntax.status, 0, syntax.stderr);
 });
 
 test("production IAM canary is IAM-only, file-secret-only and revocation-first", () => {
