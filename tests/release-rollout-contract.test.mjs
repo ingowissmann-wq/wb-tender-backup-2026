@@ -65,6 +65,15 @@ test("production rollout is digest-pinned, rehearsed and fail-closed", () => {
   assert.doesNotMatch(rollout, /(?:password|token|secret)=['"][^'"]+['"]/i);
 });
 
+test("production host runtime dependencies fail before the expensive backup and restore gates", () => {
+  const hostPreflight = rollout.indexOf("HOST_RELEASE_RUNTIME_PRECHECK=PASS");
+  const backup = rollout.indexOf("create-encrypted-production-backup.sh");
+  assert.ok(hostPreflight > 0 && hostPreflight < backup);
+  assert.match(rollout, /await import\('pg'\)/);
+  assert.match(rollout, /scripts\/production-iam-canary\.mjs/);
+  assert.match(rolloutGuide, /npm ci --omit=dev --audit=false --fund=false/);
+});
+
 test("rollback stops services, drains only the runtime role, and restores exact runtime configuration", async () => {
   assert.match(runtimeDrain, /RUNTIME_DATABASE_ROLE:-wb_tender_api_login/);
   assert.match(runtimeDrain, /pg_terminate_backend\(pid\)/);

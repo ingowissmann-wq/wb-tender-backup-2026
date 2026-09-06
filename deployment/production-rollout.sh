@@ -24,6 +24,14 @@ ACTUAL_RELEASE_IMAGE_REVISION=$(docker image inspect "$RELEASE_IMAGE" --format '
 ACTUAL_RELEASE_IMAGE_TREE=$(docker image inspect "$RELEASE_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.source-tree"}}')
 VERIFY_ROLLOUT_BINDING_PHASE=pre-canary node scripts/verify-rollout-binding.mjs
 
+# Host-side IAM preparation and the read-only browser runner intentionally use
+# this exact clean checkout. Prove their lockfile-installed runtime is complete
+# before generating a large backup or restore clone.
+npm ls --omit=dev --depth=0 >/dev/null
+node --input-type=module -e \
+  "await import('pg'); await import('playwright'); const { access } = await import('node:fs/promises'); await Promise.all(['scripts/production-iam-canary.mjs','scripts/production-iam-browser-canary.mjs'].map((file) => access(file)));"
+echo HOST_RELEASE_RUNTIME_PRECHECK=PASS
+
 project=$COMPOSE_PROJECT_NAME
 state_dir="$ROLLOUT_STATE_DIR/${EXPECTED_COMMIT}-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -m 0700 -p "$state_dir/before" "$state_dir/after-rollback"
