@@ -107,14 +107,15 @@ test("approved registration creates only pending, verification-bound records", a
     if (String(sql).startsWith("SELECT 1 FROM saas.plans")) return { rowCount: 1, rows: [{ ok: 1 }] };
     return { rowCount: 1, rows: [] };
   } };
-  const created = await registerPendingTenant(client, { email: "owner@example.invalid", company: "Isolated GmbH", plan: "NORMAL" }, { verificationPepper: "isolated-verification-pepper-over-thirty-two-characters" });
+  const secureInput = { email: "owner@example.invalid", company: "Isolated GmbH", plan: "NORMAL", passwordHash: "scrypt$16384$8$1$salt$hash", mfaSecretEncrypted: "encrypted-mfa-material-over-thirty-two-characters" };
+  const created = await registerPendingTenant(client, secureInput, { verificationPepper: "isolated-verification-pepper-over-thirty-two-characters" });
   assert.equal(created.plan, "NORMAL");
   assert.ok(created.token.length >= 32);
   assert.deepEqual(calls.find(([sql]) => sql.startsWith("SELECT 1 FROM saas.plans"))[1], ["NORMAL", 99_000]);
-  assert.deepEqual(calls.map(([sql]) => sql === "BEGIN" || sql === "COMMIT" ? sql : sql.split(/\s+/).slice(0, 3).join(" ")), ["BEGIN", "SELECT 1 FROM", "SELECT set_config('app.tenant_id',$1,true)", "INSERT INTO saas.tenants(id,slug,display_name,customer_identity_hash)", "INSERT INTO saas.pending_registrations(tenant_id,email,requested_plan_code,verification_token_hash,verification_expires_at,request_ip_hash,request_user_agent_hash)", "INSERT INTO saas.subscriptions(tenant_id,plan_code,status)", "SELECT tenant_portal.provision_empty_tenant($1,$2)", "INSERT INTO saas.audit_events(tenant_id,action,target_type,target_id,metadata)", "COMMIT"]);
+  assert.deepEqual(calls.map(([sql]) => sql === "BEGIN" || sql === "COMMIT" ? sql : sql.split(/\s+/).slice(0, 3).join(" ")), ["BEGIN", "SELECT 1 FROM", "SELECT set_config('app.tenant_id',$1,true)", "INSERT INTO saas.tenants(id,slug,display_name,customer_identity_hash)", "INSERT INTO saas.pending_registrations(tenant_id,email,requested_plan_code,verification_token_hash,verification_expires_at,request_ip_hash,request_user_agent_hash,password_hash,mfa_secret_encrypted)", "INSERT INTO saas.subscriptions(tenant_id,plan_code,status)", "SELECT tenant_portal.provision_empty_tenant($1,$2)", "INSERT INTO saas.audit_events(tenant_id,action,target_type,target_id,metadata)", "COMMIT"]);
 
   const unavailable = { async query(sql) { if (sql === "BEGIN" || sql === "ROLLBACK") return { rowCount: 0, rows: [] }; return { rowCount: 0, rows: [] }; } };
-  await assert.rejects(registerPendingTenant(unavailable, { email: "owner@example.invalid", company: "Isolated GmbH", plan: "NORMAL" }, { verificationPepper: "isolated-verification-pepper-over-thirty-two-characters" }), /plan_not_available/);
+  await assert.rejects(registerPendingTenant(unavailable, secureInput, { verificationPepper: "isolated-verification-pepper-over-thirty-two-characters" }), /plan_not_available/);
 });
 
 test("verified registration proceeds directly to idempotent Stripe checkout and paid access waits only for OIDC self-service", async () => {

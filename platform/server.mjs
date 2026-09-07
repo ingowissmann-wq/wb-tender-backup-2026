@@ -151,7 +151,7 @@ async function auth(req, reply) {
   if (!identity) {
     const browserRequest = String(req.headers.accept || "").includes("text/html");
     if (browserRequest) {
-      const target = req.url === uiBase || req.url.startsWith(`${uiBase}/`)
+      const target = req.url === uiBase || req.url.startsWith(`${uiBase}/`) || req.url === "/saas" || req.url.startsWith("/saas/")
         ? req.url
         : req.url === "/" ? `${uiBase}/` : `${uiBase}${req.url.startsWith("/") ? req.url : `/${req.url}`}`;
       return reply.redirect(`${uiBase}/login?returnTo=${encodeURIComponent(target)}`, 303);
@@ -753,20 +753,21 @@ const saasIamClient = saasIamConfigured ? new SaasOidcClient({
 const unavailableSaasAuth = async (_,reply) => reply.code(503).send({error:"saas_iam_not_configured"});
 const unavailableSaasCsrf = async (_,reply) => reply.code(403).send({error:"csrf_invalid"});
 const saasIamRoutes = saasIamClient ? registerSaasIamRoutes(app,{client:saasIamClient,enabled:saasEnabled}) : null;
-const saasAuthenticate = saasIamRoutes?.authenticate || unavailableSaasAuth;
-const saasCsrf = saasIamRoutes?.csrf || unavailableSaasCsrf;
+const saasAuthenticate = saasIamRoutes?.authenticate || auth;
+const saasCsrf = saasIamRoutes?.csrf || csrf;
 registerSaasRoutes(app, {
   pool,
   enabled: saasEnabled,
   verificationPepper: saasEnabled ? secret("SAAS_VERIFICATION_PEPPER") : "disabled-not-used-disabled-not-used",
   invitationPepper: saasEnabled ? optionalSecret("SAAS_INVITATION_PEPPER") : "",
+  fieldEncryptionKey: Buffer.from(fieldEncryptionKeyHex, "hex"),
   loadInternalIdentity: saasAuthenticate,
   requireInternalAdmin: requirePermission("tender.admin"),
   csrf,
   saasCsrf,
   emailAdapter,
   billingAdapter,
-  loginUrl: saasIamConfigured ? SAAS_LOGIN_PATH : "",
+  loginUrl: saasIamConfigured ? SAAS_LOGIN_PATH : `${uiBase}/login?returnTo=/saas/app/tender-scout`,
   upgradeUrl: /^https:\/\//.test(String(process.env.SAAS_UPGRADE_URL || "")) ? process.env.SAAS_UPGRADE_URL : "",
 });
 registerTenantPortalRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf, storage: tenantStorage, invitationPepper: optionalSecret("SAAS_INVITATION_PEPPER"), emailAdapter });
