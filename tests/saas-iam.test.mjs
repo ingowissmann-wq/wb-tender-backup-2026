@@ -133,6 +133,18 @@ test("IAM subject bindings use forced RLS and a narrow runtime resolver", async 
   assert.match(migration, /GRANT EXECUTE ON FUNCTION saas\.resolve_iam_subject_binding/);
 });
 
+test("paid verified customers receive one exact OIDC-bound owner identity without admin provisioning", async () => {
+  const migration = await readFile(new URL("../migrations/161_saas_self_service_checkout_and_oidc.sql", import.meta.url), "utf8");
+  const serverSource = await readFile(new URL("../platform/server.mjs", import.meta.url), "utf8");
+  assert.match(migration, /pr\.status='IAM_PROVISIONING_PENDING'/);
+  assert.match(migration, /s\.status IN\('TRIAL_ACTIVE','ACTIVE'\)/);
+  assert.match(migration, /EXISTS\(SELECT 1 FROM iam\.users u WHERE lower\(u\.email\)=lower\(p_email\)\)/);
+  assert.match(migration, /VALUES\(lower\(p_email\),'!oidc-only',true,true,0,NULL\)/);
+  assert.match(migration, /'OWNER','ACTIVE'/);
+  assert.match(migration, /REVOKE ALL ON FUNCTION saas\.provision_pending_oidc_identity/);
+  assert.match(serverSource, /binding\.length === 0[\s\S]*saas\.provision_pending_oidc_identity/);
+});
+
 test("IAM sessions use forced RLS and narrow create/get/revoke functions", async () => {
   const migration = await readFile(new URL("../migrations/088_saas_iam_session_rls.sql", import.meta.url), "utf8");
   const runtime = await readFile(new URL("../platform/saas-iam.mjs", import.meta.url), "utf8");
