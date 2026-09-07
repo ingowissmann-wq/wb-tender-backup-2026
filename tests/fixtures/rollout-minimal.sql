@@ -164,3 +164,6 @@ DROP TRIGGER IF EXISTS saas_membership_plan_limit ON saas.tenant_memberships;
 CREATE TRIGGER saas_membership_plan_limit BEFORE INSERT OR UPDATE OF status ON saas.tenant_memberships FOR EACH ROW EXECUTE FUNCTION saas.enforce_plan_limits();
 DROP TRIGGER IF EXISTS saas_company_plan_limit ON saas.tenant_companies;
 CREATE TRIGGER saas_company_plan_limit BEFORE INSERT OR UPDATE OF status ON saas.tenant_companies FOR EACH ROW EXECUTE FUNCTION saas.enforce_plan_limits();
+
+CREATE TABLE tender.tender_versions(id uuid PRIMARY KEY,tender_id uuid,version integer,created_at timestamptz);
+CREATE TABLE tender.tender_portal_resolutions(tender_id uuid,tender_version_id uuid,portal_id uuid,resolution_status text);
