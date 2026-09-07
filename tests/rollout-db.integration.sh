@@ -29,8 +29,10 @@ for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger
   cmp -s "$temporary/before/$item" "$temporary/trusted/$item"
 done
 RELEASE_ID=0000000000000000000000000000000000000001 "$root/deployment/apply-release-migrations.sh" | tee "$temporary/migrations.log"
-[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/migrations.log")" -eq 10 ]]
-[[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT count(*) FROM tender.release_migrations")" == 10 ]]
+[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/migrations.log")" -eq 11 ]]
+[[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT count(*) FROM tender.release_migrations")" == 11 ]]
+psql "$url" -v ON_ERROR_STOP=1 -f "$root/tests/saas-usage-limits.integration.sql" >/dev/null
+bash "$root/tests/saas-usage-concurrency.integration.sh"
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT string_agg(display_name||':'||recommended_monthly_price_minor,',' ORDER BY code) FROM saas.plans WHERE code IN ('NORMAL','PROFESSIONAL','ENTERPRISE')")" == 'Enterprise:249000,Pro:99000,Business:149000' ]]
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT has_table_privilege('wb_tender_api_login','iam.tender_login_challenges','SELECT,INSERT,DELETE') AND NOT has_table_privilege('wb_tender_api_login','iam.tender_login_challenges','UPDATE,TRUNCATE,REFERENCES,TRIGGER')")" == t ]]
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT NOT rolsuper AND NOT rolbypassrls AND NOT rolcreaterole AND NOT rolcreatedb AND NOT rolcanlogin AND rolinherit AND NOT EXISTS(SELECT 1 FROM pg_auth_members WHERE member='tender_api_runtime'::regrole) FROM pg_roles WHERE rolname='tender_api_runtime'")" == t ]]
@@ -60,7 +62,7 @@ for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger
 # would hide a lossy rollback of the later 161 price metadata update.
 export RELEASE_ID=0000000000000000000000000000000000000002
 "$root/deployment/apply-release-migrations.sh" >"$temporary/prefix-seed.log"
-sed -n '/^ROLLBACK_MIGRATION=16[0-4]_/p' "$temporary/prefix-seed.log" >"$temporary/prefix-tail.log"
+sed -n '/^ROLLBACK_MIGRATION=16[0-5]_/p' "$temporary/prefix-seed.log" >"$temporary/prefix-tail.log"
 APPLIED_MIGRATIONS_FILE="$temporary/prefix-tail.log" LEDGER_EXISTED_BEFORE=true SNAPSHOT_EXISTED_BEFORE=true "$root/deployment/rollback-applied-release-migrations.sh"
 psql "$url" -v ON_ERROR_STOP=1 <<'SQL'
 CREATE OR REPLACE VIEW tender.current_tender_portal_mapping_truth AS
@@ -77,9 +79,9 @@ SQL
 mkdir "$temporary/prefix-before" "$temporary/prefix-after"
 STATE_OUTPUT_DIR="$temporary/prefix-before" "$root/deployment/capture-rollout-db-state.sh"
 "$root/deployment/apply-release-migrations.sh" >"$temporary/production-pending.log"
-[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/production-pending.log")" == 5 ]]
+[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/production-pending.log")" == 6 ]]
 APPLIED_MIGRATIONS_FILE="$temporary/production-pending.log" LEDGER_EXISTED_BEFORE=true SNAPSHOT_EXISTED_BEFORE=true "$root/deployment/rollback-applied-release-migrations.sh"
 STATE_OUTPUT_DIR="$temporary/prefix-after" "$root/deployment/capture-rollout-db-state.sh"
 for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger.sha256 migration-snapshots.present migration-snapshots.sha256; do cmp -s "$temporary/prefix-before/$item" "$temporary/prefix-after/$item"; done
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT description FROM app.schema_migrations WHERE version='0160-critical-region-portal-resolution'")" == 'Preserve pre-existing application marker' ]]
-printf '{"passed":true,"isolatedPostgres":true,"pendingMigrations":10,"productionPrefixPendingMigrations":5,"runtimeLoginInheritedLeastPrivilege":true,"runtimeSessionsDrainedBeforeRollback":true,"exactReverseRollback":true,"schemaLedgerSnapshotPlansRestored":true,"installedViewAndPriceMetadataPreserved":true}\n'
+printf '{"passed":true,"isolatedPostgres":true,"pendingMigrations":11,"productionPrefixPendingMigrations":6,"runtimeLoginInheritedLeastPrivilege":true,"runtimeSessionsDrainedBeforeRollback":true,"exactReverseRollback":true,"schemaLedgerSnapshotPlansRestored":true,"installedViewAndPriceMetadataPreserved":true}\n'
