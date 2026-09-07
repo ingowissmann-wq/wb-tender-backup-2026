@@ -127,7 +127,7 @@ export function resolveEffectiveParameters(rows, {asOf = new Date()} = {}) {
     candidates.sort((a, b) => Number(b.version_no || 0) - Number(a.version_no || 0) || new Date(b.activated_at || b.created_at || 0) - new Date(a.activated_at || a.created_at || 0) || String(b.id).localeCompare(String(a.id)));
     const winner = candidates[0];
     if (candidates.length > 1 && Number(candidates[0].version_no || 0) === Number(candidates[1].version_no || 0)) ambiguities.push({key, candidateIds: candidates.map(x => x.id)});
-    parameters[winner.parameter_key] = {value: winner.new_value, parameterId: winner.id, sourceVersionId: winner.version_id, sourceVersion: winner.version_no, validFrom: winner.valid_from || null, validUntil: winner.valid_until || null, activatedAt: winner.activated_at || null};
+    parameters[winner.parameter_key] = {value: winner.new_value, unit: winner.unit, parameterId: winner.id, sourceVersionId: winner.version_id, sourceVersion: winner.version_no, validFrom: winner.valid_from || null, validUntil: winner.valid_until || null, activatedAt: winner.activated_at || null};
   }
   const revision = snapshotHash({parameters, ambiguities});
   const snapshot = {asOf: new Date(asOf).toISOString(), revision, parameters, ambiguities};
@@ -136,7 +136,7 @@ export function resolveEffectiveParameters(rows, {asOf = new Date()} = {}) {
 
 export function buildCalculationInput({profileSnapshot, tenderFields = [], requiredFields = []} = {}) {
   const values = {}, provenance = {}, missing = [];
-  for (const [key, item] of Object.entries(profileSnapshot?.parameters || {})) { values[key] = item.value; provenance[key] = {source: "COMPANY_PROFILE", snapshotId: profileSnapshot.snapshotId, parameterId: item.parameterId, sourceVersionId: item.sourceVersionId}; }
+  for (const [key, item] of Object.entries(profileSnapshot?.parameters || {})) { values[key] = item.value; provenance[key] = {source: "COMPANY_PROFILE", snapshotId: profileSnapshot.snapshotId, parameterId: item.parameterId, sourceVersionId: item.sourceVersionId, unit: item.unit, validFrom: item.validFrom, validUntil: item.validUntil}; }
   for (const item of tenderFields) if (item?.key && isExplicitlySupplied(item.value)) { values[item.key] = item.value; provenance[item.key] = {source: "TENDER_DOCUMENT", documentId: item.documentId, page: item.page, table: item.table, cell: item.cell, hash: item.hash}; }
   for (const requirement of requiredFields) if (!isExplicitlySupplied(values[requirement.key])) missing.push({field: requirement.key, category: requirement.source === "profile" ? "MISSING_COMPANY_PARAMETER" : "MISSING_TENDER_INFORMATION", source: requirement.source, requiredFor: requirement.requiredFor || "CALCULATION"});
   if (profileSnapshot?.ambiguities?.length) for (const ambiguity of profileSnapshot.ambiguities) missing.push({field: ambiguity.key.split(":").at(-1), category: "AMBIGUOUS_PROFILE_MAPPING", source: "profile", candidateIds: ambiguity.candidateIds});

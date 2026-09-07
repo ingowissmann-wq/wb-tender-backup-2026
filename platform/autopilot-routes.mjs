@@ -36,7 +36,6 @@ import {
   extractRequirements,
   validateDocument,
 } from "./document-analysis.mjs";
-import { calculateScenario, sensitivity } from "./calculation.mjs";
 import { prepareDocument } from "./offer-documents.mjs";
 import {
   prepareExternalAction,
@@ -7457,9 +7456,9 @@ export function registerAutopilotRoutes(
   app.post(
     "/api/tools/calculation",
     { preHandler: [requirePermission("tender.calculation.create"), csrf] },
-    async (req) => ({
-      result: calculateScenario(req.body?.input || {}, req.body?.config || {}),
-      sensitivity: sensitivity(req.body?.input || {}, req.body?.config || {}),
+    async (_req, reply) => reply.code(409).send({
+      error: "calculation_requires_versioned_company_profile",
+      message: "Die Kalkulation erfolgt im Ausschreibungsworkflow mit freigegebenem Gesellschaftsprofil und losbezogenen Quellen.",
     }),
   );
   app.post(

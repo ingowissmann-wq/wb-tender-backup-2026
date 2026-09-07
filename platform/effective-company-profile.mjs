@@ -25,7 +25,7 @@ export function buildEffectiveCompanyProfile({companyId, serviceArea, parameters
   const normalized = {};
   for (const [key, parameter] of Object.entries(parameters)) {
     const value = normalizeProfileValue(parameter?.value);
-    normalized[key] = {...value, parameterId:parameter?.parameterId||null, sourceVersionId:parameter?.sourceVersionId||null, sourceVersion:parameter?.sourceVersion||null, validFrom:parameter?.validFrom||null, validUntil:parameter?.validUntil||null};
+    normalized[key] = {...value, unit:parameter?.unit||null, parameterId:parameter?.parameterId||null, sourceVersionId:parameter?.sourceVersionId||null, sourceVersion:parameter?.sourceVersion||null, validFrom:parameter?.validFrom||null, validUntil:parameter?.validUntil||null};
   }
   const capabilities=companyProfile?.capabilities||{};
   const derived={
@@ -65,5 +65,5 @@ export function buildEffectiveCompanyProfile({companyId, serviceArea, parameters
 }
 
 export function profileParameterRows(snapshot) {
-  return Object.entries(snapshot?.parameters||{}).map(([parameter_key,item])=>({parameter_key,new_value:item.value,status:item.status,parameter_id:item.parameterId,source_version_id:item.sourceVersionId,source_version:item.sourceVersion,valid_from:item.validFrom,valid_until:item.validUntil}));
+  return Object.entries(snapshot?.parameters||{}).map(([parameter_key,item])=>({parameter_key,new_value:item.value,unit:item.unit,status:item.status,parameter_id:item.parameterId,source_version_id:item.sourceVersionId,source_version:item.sourceVersion,valid_from:item.validFrom,valid_until:item.validUntil}));
 }
