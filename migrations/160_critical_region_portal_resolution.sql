@@ -26,7 +26,11 @@ END $$;
 -- portal; TED notice/login links can therefore never shadow the bidder portal.
 CREATE OR REPLACE VIEW tender.current_tender_portal_mapping_truth
 WITH (security_barrier=true) AS
-WITH current_enrichment AS (
+WITH latest_version AS (
+  SELECT DISTINCT ON(version.tender_id) version.id,version.tender_id
+  FROM tender.tender_versions version
+  ORDER BY version.tender_id,version.version DESC,version.created_at DESC,version.id DESC
+), current_enrichment AS (
   SELECT DISTINCT ON(version.tender_id) version.id,version.tender_id
   FROM tender.enrichment_versions version
   WHERE version.historical=false
@@ -36,6 +40,11 @@ WITH current_enrichment AS (
   FROM current_enrichment current
   JOIN tender.enrichment_documents document ON document.enrichment_version_id=current.id
   WHERE nullif(document.provenance->>'portalId','') IS NOT NULL
+  UNION ALL
+  SELECT resolution.tender_id,resolution.portal_id::text portal_key
+  FROM tender.tender_portal_resolutions resolution
+  JOIN latest_version ON latest_version.tender_id=resolution.tender_id AND latest_version.id=resolution.tender_version_id
+  WHERE resolution.resolution_status='UNIQUE_EVIDENCE' AND resolution.portal_id IS NOT NULL
 ), evidenced_targets AS (
   SELECT DISTINCT link.tender_id,portal.id::text portal_key
   FROM tender.tender_external_links link
