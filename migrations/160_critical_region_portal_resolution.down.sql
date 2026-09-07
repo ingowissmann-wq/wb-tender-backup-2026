@@ -29,5 +29,7 @@ WITH active_bindings AS (
 SELECT mapping.tender_id,mapping.portal_id,binding.company_id,binding.credential_id,binding.active_credential_count,mapping.mapping_status
 FROM tender.current_tender_portal_mapping_truth mapping JOIN active_bindings binding ON binding.portal_id=mapping.portal_id
 WHERE mapping.mapping_status='UNIQUE_CANONICAL_PROFILE';
+COMMENT ON VIEW tender.current_registered_tender_company_portals IS
+ 'Fail-closed exact tender/company/portal scope. Typed credentials additionally require exact host binding and BID_SUBMISSION capability; notice/discovery accounts never constitute bidder registration.';
 DELETE FROM app.schema_migrations WHERE version='0160-critical-region-portal-resolution';
 COMMIT;
