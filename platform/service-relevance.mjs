@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 
+export const SERVICE_CLASSIFIER_VERSION="wb-company-lot-classifier/2.0.0";
 export const RELEVANCE_STATUSES=Object.freeze(["RELEVANT","POTENTIALLY_RELEVANT","MANUAL_CLASSIFICATION_REQUIRED","NOT_RELEVANT","EXCLUDED","NOT_APPLICABLE"]);
 export const TERMINAL_RELEVANCE=new Set(["NOT_RELEVANT","EXCLUDED","NOT_APPLICABLE"]);
 export const PROCESSABLE_RELEVANCE=new Set(["RELEVANT","POTENTIALLY_RELEVANT","MANUAL_CLASSIFICATION_REQUIRED"]);
@@ -33,13 +34,14 @@ const cpvMatch=(allowed,actual)=>allowed.some(prefix=>actual.some(code=>normaliz
 const termHits=(terms,text)=>unique(terms.map(normalize).filter(term=>term&&text.includes(term)));
 const activeParameterMap=parameters=>Object.fromEntries((parameters||[]).filter(row=>!row.status||["ACTIVE","PROVIDED","VERIFIED","NONE_DECLARED","NOT_APPLICABLE","NOT_REQUIRED"].includes(String(row.status).toUpperCase())).map(row=>[row.parameter_key,row.new_value]));
 const sectorFor=company=>company.sector_slug||({"wb-cleaning":"cleaning","wb-security":"security","wb-facilitys":"facility-management","wb-sicherheitstechnik":"sicherheitstechnik","wb-emergency-service":"emergency-services"}[company.technical_key]||([["cleaning","cleaning"],["security","security"],["facilitys","facility-management"],["sicherheitstechnik","sicherheitstechnik"],["emergency","emergency-services"]].find(([needle])=>normalize(company.legal_name).includes(needle))?.[1]||""));
-const sourceText=({tender,lot,enrichment})=>normalize([tender.title,tender.description,tender.procurement_subject,tender.contract_type,lot?.title,lot?.description,enrichment?.structured_data?.title,enrichment?.structured_data?.description,enrichment?.structured_data?.scope,enrichment?.structured_data?.categories].map(x=>typeof x==="object"?JSON.stringify(x):x).filter(Boolean).join(" "));
-const sourceTitle=({tender,lot,enrichment})=>normalize([tender.title,lot?.title,enrichment?.structured_data?.title].filter(Boolean).join(" "));
-const sourceCpvs=({tender,lot,enrichment})=>unique([...(tender.cpv_codes||[]),...(lot?.cpv_codes||lot?.structured_data?.cpvCodes||[]),...(enrichment?.structured_data?.cpvCodes||[])]).map(x=>String(x).replace(/\D/g,""));
+// Lot decisions use only that lot's evidence, never CPVs or text from sibling lots.
+const sourceText=({tender,lot,enrichment})=>normalize((lot?[lot.title,lot.description,lot.structured_data?.title,lot.structured_data?.description]:[tender.title,tender.description,tender.procurement_subject,tender.contract_type,enrichment?.structured_data?.title,enrichment?.structured_data?.description,enrichment?.structured_data?.scope,enrichment?.structured_data?.categories]).map(x=>typeof x==="object"?JSON.stringify(x):x).filter(Boolean).join(" "));
+const sourceTitle=({tender,lot,enrichment})=>normalize((lot?[lot.title,lot.structured_data?.title]:[tender.title,enrichment?.structured_data?.title]).filter(Boolean).join(" "));
+const sourceCpvs=({tender,lot,enrichment})=>unique(lot?(lot.cpv_codes||lot.cpvCodes||lot.structured_data?.cpvCodes||[]):[...(tender.cpv_codes||[]),...(enrichment?.structured_data?.cpvCodes||[])]).map(x=>String(x).replace(/\D/g,""));
 const configuredTerms=(p,key,names)=>values(p[key],names);
 
 export function classifyCompanyService({tender,lot=null,enrichment=null,company,parameters=[],profile=null}){
-  let sector=sectorFor(company),taxonomy=TAXONOMY[sector];const p=activeParameterMap(parameters),text=sourceText({tender,lot,enrichment}),titleText=sourceTitle({tender,lot,enrichment}),cpvCodes=sourceCpvs({tender,lot,enrichment});if(!taxonomy){const inferred=Object.entries(TAXONOMY).map(([key,value])=>({key,value,score:termHits(value.keywords,titleText).length+(cpvMatch(value.cpv,cpvCodes)?2:0)})).sort((a,b)=>b.score-a.score)[0];if(inferred?.score>0){sector=inferred.key;taxonomy=inferred.value}}
+  let sector=sectorFor(company),taxonomy=TAXONOMY[sector];const p=activeParameterMap(parameters),text=sourceText({tender,lot,enrichment}),titleText=sourceTitle({tender,lot,enrichment}),cpvCodes=sourceCpvs({tender,lot,enrichment});
   const configuredPositive=unique([...configuredTerms(p,"A01",["activeServices","services","scope"]),...configuredTerms(p,"A05",["keywords"]),...configuredTerms(p,"A06",["synonyms"])]);
   const configuredCpvs=configuredTerms(p,"A03",["cpvCodes","codes"]);
   const configuredExcluded=unique([...configuredTerms(p,"A02",["inactiveServices","excluded","services"]),...configuredTerms(p,"A07",["exclusions","excluded","keywords"]),...configuredTerms(p,"A14",["exclusions","excluded","objects","customers"])]);
@@ -50,7 +52,8 @@ export function classifyCompanyService({tender,lot=null,enrichment=null,company,
   const positives=termHits(positiveTerms,text),titlePositives=termHits(positiveTerms,titleText),exclusions=termHits(exclusionTerms,text),globalExclusions=termHits(GLOBAL_NEGATIVE,text),positiveCpv=cpvMatch(positiveCpvs,cpvCodes),excludedCpv=cpvMatch(excludedCpvs,cpvCodes),strongText=titlePositives.length>0||positives.length>=2;
   const protect=company.technical_key==="wb-protect-service"||company.sector_status==="manual-sector-approval-required",explicitA15=values(p.A15,["primaryCompanies","alternativeCompanies","allowedCompanies","assignments"]).map(normalize),a15Allowed=explicitA15.some(value=>value.includes(normalize(company.legal_name))||value.includes(normalize(company.technical_key))),titleProjectConflicts=termHits(SUPPLY_OR_PROJECT_TITLE_TERMS,titleText),serviceSpecificTitleConflicts=termHits(SERVICE_TITLE_CONFLICTS[sector]||[],titleText),serviceOnlyConflict=(["emergency-services","facility-management"].includes(sector)&&titleProjectConflicts.length>0)||serviceSpecificTitleConflicts.length>0;
   let status,gate,reason;
-  if(protect&&!a15Allowed){status="NOT_APPLICABLE";gate="FAILED_NOT_RELEVANT";reason="Für WB-Protect & Service fehlt eine aktive eigene A15-Sektor- und Erlaubnisfreigabe."}
+  if(!taxonomy){status="MANUAL_CLASSIFICATION_REQUIRED";gate="REVIEW_REQUIRED";reason="Kein bestätigter Leistungsbereich für die Gesellschaft vorhanden."}
+  else if(protect&&!a15Allowed){status="NOT_APPLICABLE";gate="FAILED_NOT_RELEVANT";reason="Für WB-Protect & Service fehlt eine aktive eigene A15-Sektor- und Erlaubnisfreigabe."}
   else if(serviceOnlyConflict){status="EXCLUDED";gate="FAILED_EXCLUDED";reason=`Titel enthält einen geprüften fachlichen Konflikt zur operativen ${taxonomy?.label||sector}-Dienstleistung: ${unique([...titleProjectConflicts,...serviceSpecificTitleConflicts]).join(", ")}.`}
   else if(excludedCpv||exclusions.length){status="EXCLUDED";gate="FAILED_EXCLUDED";reason=`Aktiver Ausschluss für ${company.legal_name}: ${unique([...exclusions,...(excludedCpv?["A04-CPV"]:[])]).join(", ")}.`}
   else if(globalExclusions.length&&!strongText&&!positiveCpv){status="NOT_RELEVANT";gate="FAILED_NOT_RELEVANT";reason=`Fachfremder Vergabegegenstand: ${globalExclusions.join(", ")}.`}
@@ -63,6 +66,11 @@ export function classifyCompanyService({tender,lot=null,enrichment=null,company,
 
 export function classifyTenderServices({tender,lot=null,enrichment=null,companies=[]}){
   const evaluations=companies.map(item=>classifyCompanyService({tender,lot,enrichment,...item})),eligible=evaluations.filter(x=>x.relevanceStatus==="RELEVANT").sort((a,b)=>b.score-a.score||a.companyName.localeCompare(b.companyName,"de"));
+  if(eligible.length>1){
+    const reason="Mehrere Gesellschaften passen zum Leistungsumfang; eine ausdrückliche Gesellschafts- und Regionsprüfung ist erforderlich.";
+    for(const evaluation of evaluations){evaluation.primaryCompany=false;evaluation.alternativeCompany=false;if(eligible.includes(evaluation)){evaluation.relevanceStatus='MANUAL_CLASSIFICATION_REQUIRED';evaluation.serviceScopeGate='REVIEW_REQUIRED';evaluation.reason=reason;}}
+    return {evaluations,primary:null,alternatives:[],overallStatus:'MANUAL_CLASSIFICATION_REQUIRED',decision:{wbRelevanceStatus:'REVIEW_REQUIRED',serviceLine:null,confidence:'REVIEW',basis:'AMBIGUOUS_COMPANY',ruleId:'WB_AMBIGUOUS_COMPANY_REVIEW',reason,score:0}};
+  }
   const primary=eligible[0]||null;
   for(const evaluation of evaluations){evaluation.primaryCompany=Boolean(primary&&evaluation.companyId===primary.companyId);evaluation.alternativeCompany=false;if(primary&&evaluation!==primary&&!(["EXCLUDED","NOT_RELEVANT"].includes(evaluation.relevanceStatus)))evaluation.relevanceStatus="NOT_APPLICABLE",evaluation.serviceScopeGate="FAILED_NOT_RELEVANT",evaluation.reason=`Primärgesellschaft ist ${primary.companyName}; keine aktive A15-Alternativfreigabe für ${evaluation.companyName}.`,evaluation.processable=false}
   if(primary){
