@@ -223,7 +223,7 @@ export class SmtpEmailAdapter {
     if (Boolean(user) !== Boolean(password)) throw new Error("smtp_authentication_incomplete");
     if (!/^https:\/\//.test(verificationBaseUrl)) throw new Error("verification_base_url_must_be_https");
     this.from = from; this.verificationBaseUrl = verificationBaseUrl.replace(/\/$/, "");
-    this.transport = nodemailer.createTransport({ host, port: Number(port), secure: Boolean(secure), ...(user && password ? { auth: { user, pass: password } } : {}), pool: true, disableFileAccess: true, disableUrlAccess: true });
+    this.transport = nodemailer.createTransport({ host, port: Number(port), secure: Boolean(secure), ...(user && password ? { auth: { user, pass: password } } : {}), pool: true, connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 45000, disableFileAccess: true, disableUrlAccess: true });
   }
   get configured() { return true; }
   verificationUrl(token) {
@@ -241,6 +241,22 @@ export class SmtpEmailAdapter {
     const result = await this.transport.sendMail({ from: this.from, to, subject: "WB Business Suite – E-Mail bestätigen", text: `Bestätigen Sie Ihre E-Mail-Adresse: ${url}\n\nDie 14-Tage-Testphase beginnt erst nach bestätigter Zahlung.`, html: `<p>Bestätigen Sie Ihre E-Mail-Adresse:</p><p><a href="${url}">E-Mail bestätigen</a></p><p>Die 14-Tage-Testphase beginnt erst nach bestätigter Zahlung.</p>` });
     if (!result.accepted?.length) throw new Error("smtp_recipient_rejected");
     return { accepted: true, messageId: result.messageId };
+  }
+  async sendBookingConfirmation({ to, bookingId, purchaseKind, planName, amountSubtotal, billingPath, periodEnd }) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(to || "")) || /[\r\n]/.test(to)) throw new Error("smtp_recipient_invalid");
+    if (!["TRIAL","PACKAGE"].includes(purchaseKind) || !Number.isSafeInteger(Number(amountSubtotal)) || Number(amountSubtotal)<=0 || !bookingId) throw new Error("booking_confirmation_invalid");
+    const amount = new Intl.NumberFormat("de-DE",{style:"currency",currency:"EUR"}).format(Number(amountSubtotal)/100);
+    const terms = purchaseKind === "TRIAL"
+      ? "Ihr Testzugang endet automatisch nach exakt 14 Tagen. Keine automatische Verlängerung und keine Umwandlung in ein Paket. Pakete können Sie separat und ausdrücklich buchen."
+      : billingPath === "AUTO_CARD"
+        ? "Das separat gebuchte Paket wird entsprechend Ihrer ausdrücklichen Buchung monatlich per Karte abgerechnet."
+        : "Sie haben einen Nutzungsmonat bezahlt. Weitere Monate buchen und bezahlen Sie gesondert im Kundenkonto. Ohne erneute Zahlung endet der Zugang.";
+    const end = periodEnd ? new Date(periodEnd).toISOString() : "siehe Kundenkonto";
+    const result = await this.transport.sendMail({ from:this.from, to, messageId:`<wb-booking-${bookingId}@wb-tender.com>`,
+      subject:"WB-Tender – Buchung bestätigt",
+      text:`Ihre Zahlung wurde bestätigt.\nAngebot: ${planName}\nBezahlter Nettobetrag: ${amount} zuzüglich Umsatzsteuer laut Stripe-Beleg.\nAktueller Zugangszeitraum bis: ${end}\n\n${terms}\n\nKundenkonto: ${this.verificationBaseUrl}/saas/account\nBuchungsreferenz: ${bookingId}` });
+    if (!result.accepted?.length) throw new Error("smtp_recipient_rejected");
+    return {accepted:true,messageId:result.messageId};
   }
   async sendInvitation({ to, email, tenantId, token, role = "MEMBER" }) {
     to = String(to || email || "").trim();

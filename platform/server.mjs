@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import {startBookingEmailWorker} from "./saas-email-worker.mjs";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
@@ -711,6 +712,8 @@ app.addHook("onClose",async()=>{regionRecalculationWorker?.stop()});
 const emailAdapter = saasEnabled && process.env.SAAS_EMAIL_ADAPTER === "smtp"
   ? new SmtpEmailAdapter({ host: fileOnlySecret("SAAS_SMTP_HOST"), port: fileOnlySecret("SAAS_SMTP_PORT") || 587, secure: fileOnlySecret("SAAS_SMTP_SECURE") === "true", user: fileOnlySecret("SAAS_SMTP_USER"), password: fileOnlySecret("SAAS_SMTP_PASSWORD"), from: fileOnlySecret("SAAS_SMTP_FROM"), verificationBaseUrl: process.env.SAAS_PUBLIC_BASE_URL || process.env.WB_TENDER_PUBLIC_BASE_URL })
   : new UnconfiguredEmailAdapter();
+const bookingEmailWorker = saasEnabled && emailAdapter.configured ? startBookingEmailWorker(rawPool,emailAdapter,{logger:app.log}) : null;
+app.addHook("onClose",async()=>{await bookingEmailWorker?.stop();});
 const stripeSecretKey = saasEnabled && process.env.SAAS_BILLING_ADAPTER === "stripe" ? optionalSecret("STRIPE_SECRET_KEY") : "";
 const stripeWebhookSecret = saasEnabled && process.env.SAAS_BILLING_ADAPTER === "stripe" ? optionalSecret("STRIPE_WEBHOOK_SECRET") : "";
 const stripePublicBaseUrl = process.env.WB_TENDER_PUBLIC_BASE_URL || "";
