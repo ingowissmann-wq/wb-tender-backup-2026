@@ -11,3 +11,16 @@ test('monitor fails on a foreign project, divergent images, restarts and submiss
  const unsafe=healthy();unsafe.api.flags.EXTERNAL_SUBMISSION_ENABLED='true';assert.ok(assess(unsafe).includes('api:external_submission'));
  assert.ok(assess({}).length>0);
 });
+
+test('backup checksum selection binds to the manifest filename in a combined checksum file',()=>{
+ const script=`import importlib.util,tempfile,pathlib,hashlib
+s=importlib.util.spec_from_file_location('monitor','deployment/production-monitor.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m)
+with tempfile.TemporaryDirectory() as directory:
+ p=pathlib.Path(directory)/'database.dump.gpg.manifest';p.write_text('synthetic manifest\\n')
+ checksum=pathlib.Path(str(p)+'.sha256'); digest=hashlib.sha256(p.read_bytes()).hexdigest()
+ checksum.write_text('0'*64+'  '+str(p.parent/'database.dump.gpg')+'\\n'+digest+'  '+str(p)+'\\n')
+ assert m.manifest_checksum_verified(p)
+ p.write_text('changed manifest');assert not m.manifest_checksum_verified(p)
+print('PASS')`;
+ assert.equal(execFileSync('python3',['-B','-c',script],{encoding:'utf8'}).trim(),'PASS');
+});
