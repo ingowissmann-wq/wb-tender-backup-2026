@@ -11,7 +11,7 @@ const worker=readFileSync(new URL("../platform/autopilot-pipeline-worker.mjs",im
 const ui=readFileSync(new URL("../platform/assets/inbox-regions.js",import.meta.url),"utf8");
 const migration=readFileSync(new URL("../migrations/106_ted_lot_document_context.sql",import.meta.url),"utf8");
 
-const exactLot={lot_key:"LOT-0000",lot_id:"11111111-1111-4111-8111-111111111111",lifecycle_status:"ACTIVE",participation_status:"ELIGIBLE",deadline_quality:"EXACT",offer_deadline:"2026-09-07T10:00:00.000Z",deadline_evidence_id:"22222222-2222-4222-8222-222222222222"};
+const exactLot={lot_key:"LOT-0000",lot_id:"11111111-1111-4111-8111-111111111111",lifecycle_status:"ACTIVE",participation_status:"ELIGIBLE",deadline_quality:"EXACT",offer_deadline:"2099-09-07T10:00:00.000Z",deadline_evidence_id:"22222222-2222-4222-8222-222222222222"};
 
 test("one exact future eligible lot is bound automatically and a choice is required for several",()=>{
   assert.equal(resolveLotChoice({eligibleLots:[exactLot]}).source,"SINGLE_ELIGIBLE_LOT");
