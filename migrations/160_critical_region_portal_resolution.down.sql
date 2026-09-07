@@ -1,35 +1,5 @@
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-CREATE SCHEMA tender;
-CREATE SCHEMA saas;
-CREATE SCHEMA iam;
-CREATE SCHEMA app;
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='wb_tender_api_login') THEN
-    CREATE ROLE wb_tender_api_login LOGIN IN ROLE tender_api_runtime;
-  END IF;
-END $$;
-GRANT USAGE ON SCHEMA iam TO tender_api_runtime;
-CREATE TABLE tender.autopilot_results(tender_id uuid,company_id uuid,lot_key text,result_version integer);
-CREATE TABLE tender.autopilot_queue(tender_id uuid,company_id uuid,lot_key text,created_at timestamptz,action_type text);
-CREATE TABLE tender.enrichment_versions(id uuid PRIMARY KEY,tender_id uuid,version integer,historical boolean,created_at timestamptz);
-CREATE TABLE tender.enrichment_documents(enrichment_version_id uuid,provenance jsonb);
-CREATE TABLE tender.tender_external_links(
-  tender_id uuid,role text,final_host text,original_host text,
-  verification_status text,evidence jsonb
-);
-CREATE TABLE tender.portal_registry(
-  id uuid PRIMARY KEY,canonical_domain text,authentication_domains text[]
-);
-CREATE TABLE tender.portal_credential_secrets(
-  id uuid PRIMARY KEY,portal_id uuid,status text,revoked_at timestamptz,
-  valid_until timestamptz,account_type text,bound_host text,
-  authorized_capabilities text[]
-);
-CREATE TABLE tender.portal_credential_companies(credential_id uuid,company_id uuid,active boolean);
-CREATE TABLE tender.enterprise_company_links(company_id uuid PRIMARY KEY,active boolean);
-CREATE TABLE app.schema_migrations(version text PRIMARY KEY,description text);
-CREATE VIEW tender.current_tender_portal_mapping_truth
+BEGIN;
+CREATE OR REPLACE VIEW tender.current_tender_portal_mapping_truth
 WITH (security_barrier=true) AS
 WITH current_enrichment AS (
  SELECT DISTINCT ON(version.tender_id) version.id,version.tender_id FROM tender.enrichment_versions version
@@ -45,7 +15,7 @@ SELECT mapping.tender_id,CASE WHEN mapping.portal_mapping_count=1 THEN portal.id
  mapping.portal_mapping_count,CASE WHEN mapping.portal_mapping_count<>1 THEN 'AMBIGUOUS' WHEN portal.id IS NULL THEN 'UNKNOWN_PROFILE' ELSE 'UNIQUE_CANONICAL_PROFILE' END mapping_status
 FROM mapping_count mapping LEFT JOIN tender.portal_registry portal ON portal.id::text=mapping.portal_key;
 
-CREATE VIEW tender.current_registered_tender_company_portals
+CREATE OR REPLACE VIEW tender.current_registered_tender_company_portals
 WITH (security_barrier=true) AS
 WITH active_bindings AS (
  SELECT credential.portal_id,scope.company_id,count(DISTINCT credential.id)::int active_credential_count,min(credential.id::text)::uuid credential_id
@@ -61,22 +31,5 @@ FROM tender.current_tender_portal_mapping_truth mapping JOIN active_bindings bin
 WHERE mapping.mapping_status='UNIQUE_CANONICAL_PROFILE';
 COMMENT ON VIEW tender.current_registered_tender_company_portals IS
  'Fail-closed exact tender/company/portal scope. Typed credentials additionally require exact host binding and BID_SUBMISSION capability; notice/discovery accounts never constitute bidder registration.';
-CREATE TABLE saas.plans(
-  code text PRIMARY KEY,
-  display_name text NOT NULL,
-  description text NOT NULL,
-  seat_limit integer,
-  company_limit integer,
-  recommended_monthly_price_minor bigint,
-  price_status text NOT NULL,
-  active boolean NOT NULL,
-  metadata jsonb NOT NULL DEFAULT '{}',
-  updated_at timestamptz NOT NULL DEFAULT '2026-09-04T00:00:00Z'
-);
-INSERT INTO saas.plans(code,display_name,description,seat_limit,company_limit,recommended_monthly_price_minor,price_status,active) VALUES
-('CORE','Previous Core','Synthetic pre-rollout row',1,1,100,'PLACEHOLDER',true),
-('NORMAL','Previous Normal','Synthetic pre-rollout row',1,1,200,'PLACEHOLDER',false),
-('PROFESSIONAL','Previous Professional','Synthetic pre-rollout row',1,1,300,'PLACEHOLDER',false),
-('ENTERPRISE','Previous Enterprise','Synthetic pre-rollout row',1,1,400,'PLACEHOLDER',false);
-CREATE TABLE iam.users(id uuid PRIMARY KEY);
-INSERT INTO iam.users(id) VALUES ('00000000-0000-0000-0000-000000000001');
+DELETE FROM app.schema_migrations WHERE version='0160-critical-region-portal-resolution';
+COMMIT;

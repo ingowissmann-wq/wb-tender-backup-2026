@@ -1,0 +1,7 @@
+# Kundenhandbuch: rechtsverbindliche Angebotsabgabe
+
+Eine Angebotsabgabe ist möglich, wenn für die konkrete Ausschreibung und das ausgewählte Los alle Pflichtdokumente fachlich validiert und unveränderlich im angezeigten Paket-Hash gebunden sind. Das System verwendet ausschließlich den eindeutig zugeordneten, gesellschaftsbezogenen Portalzugang. Die Veröffentlichungsquelle (beispielsweise TED) ist nicht automatisch das Teilnahme- oder Abgabeportal. Eine mehrdeutige Zuordnung bleibt gesperrt und wird als Prüfbedarf angezeigt.
+
+Die erste Person bereitet die versionsgebundene Freigabe vor. Eine zweite berechtigte Person bestätigt sie mit frischer WB-MFA. Eine davon verschiedene dritte ausführende Person gibt anschließend mit frischer WB-MFA den exakten, ausschreibungsspezifischen Bestätigungstext ein. Erst dann darf ein produktiv validierter, global und portalbezogen freigegebener Adapter den Versand beginnen. Kill-Switch und Provider-Allowlist können den Vorgang jederzeit vor dem Portal-Commit stoppen.
+
+Der Status **RECEIPT_CONFIRMED** bedeutet, dass ein verifizierter Eingangsbeleg mit Portalreferenz und Prüfsumme vorliegt. **SUBMISSION_UNCERTAIN (Unknown Outcome)** bedeutet, dass nach möglichem Portal-Commit kein verifizierter Beleg ermittelt werden konnte. In diesem Fall sendet das System niemals automatisch erneut, sondern gleicht den Portalstatus nur lesend ab und fordert gegebenenfalls eine manuelle Prüfung. **REJECTED_BY_PORTAL** bezeichnet eine nachgewiesene Ablehnung durch das Portal; ein interner Status allein gilt nicht als Eingangsbeleg.
