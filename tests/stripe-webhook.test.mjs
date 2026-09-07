@@ -29,6 +29,7 @@ async function webhookApp({ adapter = stripeAdapter(), enabled = true, withRawBo
   if (withRawBody) await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
   const client = { release() {} };
   const pool = { connect: async () => client };
+  if (adapter instanceof StripeBillingAdapter) adapter.prepareCheckoutCompletion = async () => ({ prepared: true });
   registerBillingWebhookRoute(app, { pool, enabled, billingAdapter: adapter, applyEvent });
   await app.ready();
   return app;
@@ -44,6 +45,7 @@ const checkoutEvent = (overrides = {}) => ({
     client_reference_id: TENANT_ID,
     customer: "cus_test",
     subscription: "sub_test",
+    metadata: { plan_code: "NORMAL" },
     ...overrides,
   } },
 });
@@ -58,7 +60,7 @@ test("Stripe webhook verifies the exact raw body and reports duplicate processin
     return { idempotent: false };
   } });
   t.after(() => app.close());
-  const body = Buffer.from(`{\n  "id": "evt_checkout_paid", "type": "checkout.session.completed",\n  "data": {"object":{"id":"cs_test_paid","mode":"subscription","payment_status":"paid","client_reference_id":"${TENANT_ID}","customer":"cus_test","subscription":"sub_test"}}\n}`);
+  const body = Buffer.from(`{\n  "id": "evt_checkout_paid", "type": "checkout.session.completed",\n  "data": {"object":{"id":"cs_test_paid","mode":"subscription","payment_status":"paid","client_reference_id":"${TENANT_ID}","customer":"cus_test","subscription":"sub_test","metadata":{"plan_code":"NORMAL"}}}\n}`);
   const headers = { "content-type": "application/json", "stripe-signature": signatureFor(body) };
 
   const first = await app.inject({ method: "POST", url: "/api/saas/billing/webhook", headers, payload: body });
@@ -154,22 +156,36 @@ test("webhook stays unavailable when SaaS or Stripe configuration is disabled", 
   assert.equal((await unconfigured.inject(request)).statusCode, 503);
 });
 
-test("checkout preparation uses the selected price against an isolated mock only", async (t) => {
-  let observed;
+test("checkout charges activation now and configures card-only taxed billing after exactly 14 days", async (t) => {
+  const observed = [];
   const provider = http.createServer(async (req, res) => {
     let body = ""; for await (const chunk of req) body += chunk;
-    observed = { method: req.method, authorization: req.headers.authorization, idempotency: req.headers["idempotency-key"], body: new URLSearchParams(body) };
+    observed.push({ path: req.url, method: req.method, authorization: req.headers.authorization, idempotency: req.headers["idempotency-key"], body: new URLSearchParams(body) });
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ id: "cs_test_internal_only", url: "https://checkout.example.invalid/session" }));
+    res.end(JSON.stringify(req.url === "/v1/invoiceitems" ? { id: "ii_setup_deferred" } : { id: "cs_test_internal_only", url: "https://checkout.example.invalid/session" }));
   });
   provider.listen(0, "127.0.0.1"); await once(provider, "listening");
   t.after(() => provider.close());
-  const adapter = new StripeBillingAdapter({ secretKey: "sk_test_isolated_only", webhookSecret: WEBHOOK_SECRET, publicBaseUrl: "https://saas.example.invalid", priceIds: { CORE: "price_isolatedCore" }, apiBase: `http://127.0.0.1:${provider.address().port}` });
-  const checkout = await adapter.createCheckout({ tenantId: TENANT_ID, plan: "CORE" });
+  const adapter = new StripeBillingAdapter({ secretKey: "sk_test_isolated_only", webhookSecret: WEBHOOK_SECRET, publicBaseUrl: "https://saas.example.invalid", priceIds: { NORMAL: "price_monthlyPro" }, activationPriceId: "price_activation299", setupPriceIds: { NORMAL: "price_setupPro" }, apiBase: `http://127.0.0.1:${provider.address().port}` });
+  const checkout = await adapter.createCheckout({ tenantId: TENANT_ID, plan: "NORMAL", trialDays: 14 });
   assert.equal(checkout.id, "cs_test_internal_only");
-  assert.equal(observed.method, "POST");
-  assert.equal(observed.authorization, "Bearer sk_test_isolated_only");
-  assert.equal(observed.idempotency, `wb-trial-${TENANT_ID}`);
-  assert.equal(observed.body.get("line_items[0][price]"), "price_isolatedCore");
-  assert.equal(observed.body.get("client_reference_id"), TENANT_ID);
+  const session = observed[0];
+  assert.equal(session.method, "POST");
+  assert.equal(session.authorization, "Bearer sk_test_isolated_only");
+  assert.equal(session.idempotency, `wb-trial-${TENANT_ID}`);
+  assert.equal(session.body.get("line_items[0][price]"), "price_monthlyPro");
+  assert.equal(session.body.get("line_items[1][price]"), "price_activation299");
+  assert.equal(session.body.get("subscription_data[trial_period_days]"), "14");
+  assert.equal(session.body.get("payment_method_types[0]"), "card");
+  assert.equal(session.body.get("automatic_tax[enabled]"), "true");
+  assert.equal(session.body.get("tax_id_collection[enabled]"), "true");
+  assert.equal(session.body.get("client_reference_id"), TENANT_ID);
+
+  const setup = await adapter.prepareCheckoutCompletion({ type: "payment.confirmed", checkoutRef: checkout.id, tenantId: TENANT_ID, customerRef: "cus_test", subscriptionRef: "sub_test", plan: "NORMAL" });
+  assert.deepEqual(setup, { prepared: true, invoiceItemId: "ii_setup_deferred" });
+  const invoiceItem = observed[1];
+  assert.equal(invoiceItem.path, "/v1/invoiceitems");
+  assert.equal(invoiceItem.idempotency, `wb-setup-${checkout.id}`);
+  assert.equal(invoiceItem.body.get("price"), "price_setupPro");
+  assert.equal(invoiceItem.body.get("subscription"), "sub_test");
 });
