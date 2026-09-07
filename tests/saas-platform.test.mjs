@@ -117,6 +117,15 @@ test("approved registration creates only pending, verification-bound records", a
   await assert.rejects(registerPendingTenant(unavailable, { email: "owner@example.invalid", company: "Isolated GmbH", plan: "NORMAL" }, { verificationPepper: "isolated-verification-pepper-over-thirty-two-characters" }), /plan_not_available/);
 });
 
+test("verified registration proceeds directly to idempotent Stripe checkout and paid access waits only for OIDC self-service", async () => {
+  const platform = await readFile(new URL("../platform/saas-platform.mjs", import.meta.url), "utf8");
+  assert.match(platform, /status IN\('EMAIL_VERIFICATION_PENDING','PAYMENT_PENDING'\)/);
+  assert.match(platform, /billingAdapter\.createCheckout\(\{ tenantId: verified\.tenant_id, plan: verified\.requested_plan_code, trialDays: 14/);
+  assert.match(platform, /location\.assign\(result\.checkoutUrl\)/);
+  assert.match(platform, /status=CASE WHEN iam_provisioned_at IS NULL THEN 'IAM_PROVISIONING_PENDING' ELSE 'ACTIVATED' END/);
+  assert.doesNotMatch(platform, /!registration\?\.email_verified_at \|\| !registration\?\.iam_provisioned_at/);
+});
+
 test("server keeps SaaS behind a default-off feature flag and isolates company scopes", async () => {
   const server = await readFile(new URL("../platform/server.mjs", import.meta.url), "utf8");
   assert.match(server, /WB_TENDER_SAAS_ENABLED === "true"/);
