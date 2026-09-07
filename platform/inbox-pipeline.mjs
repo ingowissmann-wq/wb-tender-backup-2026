@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import {classifyRegion} from "./region-gate.mjs";
 
-export const INBOX_PIPELINE_VERSION="wb-daily-inbox-pipeline/2.0.0-structured-regions";
+export const INBOX_PIPELINE_VERSION="wb-daily-inbox-pipeline/2.1.0-performance-evidence";
 const json=value=>JSON.stringify(value??null);
 const hash=value=>crypto.createHash("sha256").update(json(value)).digest("hex");
 const unique=values=>[...new Set((values||[]).flat().filter(value=>value!==null&&value!==undefined&&String(value).trim()).map(value=>String(value).trim()))];
