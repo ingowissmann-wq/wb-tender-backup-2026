@@ -133,3 +133,34 @@ CREATE TABLE saas.audit_events(
   target_id text,
   metadata jsonb
 );
+
+-- Existing SaaS schema needed for atomic usage migration and rollback.
+ALTER TABLE saas.subscriptions ADD COLUMN plan_code text, ADD COLUMN current_period_ends_at timestamptz;
+CREATE TABLE saas.tenant_companies(id uuid PRIMARY KEY,tenant_id uuid,status text);
+CREATE SCHEMA tenant_portal;
+CREATE TABLE tenant_portal.jobs(id uuid PRIMARY KEY,tenant_id uuid,module_key text,status text,payload jsonb);
+CREATE TABLE tenant_portal.tender_workspaces(id uuid PRIMARY KEY,tenant_id uuid,public_tender_id uuid);
+CREATE FUNCTION saas.tenant_matches(candidate uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
+ SELECT candidate=nullif(current_setting('app.tenant_id',true),'')::uuid
+$$;
+CREATE FUNCTION saas.module_entitled(candidate uuid,module text,at_time timestamptz) RETURNS boolean LANGUAGE sql STABLE AS $$
+ SELECT EXISTS(SELECT 1 FROM saas.subscriptions WHERE tenant_id=candidate AND status='ACTIVE' AND current_period_ends_at>at_time) AND saas.tenant_matches(candidate)
+$$;
+CREATE OR REPLACE FUNCTION saas.enforce_plan_limits() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE allowed integer; used integer; tenant uuid;
+BEGIN
+ tenant:=NEW.tenant_id;
+ IF TG_TABLE_NAME='tenant_memberships' AND NEW.status='ACTIVE' THEN
+   SELECT p.seat_limit INTO allowed FROM saas.subscriptions s JOIN saas.plans p ON p.code=s.plan_code WHERE s.tenant_id=tenant;
+   SELECT count(*) INTO used FROM saas.tenant_memberships WHERE tenant_id=tenant AND status='ACTIVE' AND user_id<>NEW.user_id;
+ ELSIF TG_TABLE_NAME='tenant_companies' AND NEW.status='ACTIVE' THEN
+   SELECT p.company_limit INTO allowed FROM saas.subscriptions s JOIN saas.plans p ON p.code=s.plan_code WHERE s.tenant_id=tenant;
+   SELECT count(*) INTO used FROM saas.tenant_companies WHERE tenant_id=tenant AND status='ACTIVE' AND id<>NEW.id;
+ ELSE RETURN NEW; END IF;
+ IF allowed IS NOT NULL AND used>=allowed THEN RAISE EXCEPTION 'saas_plan_limit_exceeded'; END IF;
+ RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS saas_membership_plan_limit ON saas.tenant_memberships;
+CREATE TRIGGER saas_membership_plan_limit BEFORE INSERT OR UPDATE OF status ON saas.tenant_memberships FOR EACH ROW EXECUTE FUNCTION saas.enforce_plan_limits();
+DROP TRIGGER IF EXISTS saas_company_plan_limit ON saas.tenant_companies;
+CREATE TRIGGER saas_company_plan_limit BEFORE INSERT OR UPDATE OF status ON saas.tenant_companies FOR EACH ROW EXECUTE FUNCTION saas.enforce_plan_limits();
