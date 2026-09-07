@@ -51,6 +51,15 @@ def command(args):
     return result.stdout.strip()
 
 
+def manifest_checksum_verified(manifest):
+    entries = []
+    for line in Path(str(manifest) + '.sha256').read_text().splitlines():
+        parts = line.split(maxsplit=1)
+        if len(parts) == 2 and parts[1].lstrip('*') in (str(manifest), manifest.name):
+            entries.append(parts[0])
+    return len(entries) == 1 and hashlib.sha256(manifest.read_bytes()).hexdigest() == entries[0]
+
+
 def collect():
     report = {'checkedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'services': {}, 'errors': []}
     for service in SERVICES:
@@ -110,8 +119,7 @@ SELECT json_build_object(
         try:
             if manifest.is_symlink():
                 continue
-            checksum = Path(str(manifest) + '.sha256').read_text().split()[0]
-            if hashlib.sha256(manifest.read_bytes()).hexdigest() != checksum:
+            if not manifest_checksum_verified(manifest):
                 continue
             fields = dict(line.split('=', 1) for line in manifest.read_text().splitlines() if '=' in line)
             name = fields['archive']
