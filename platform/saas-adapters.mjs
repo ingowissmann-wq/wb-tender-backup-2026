@@ -137,6 +137,16 @@ export class StripeBillingAdapter {
     // Deliberately no invoice items, subscriptions or future charges here.
     return { prepared: false };
   }
+  async resolvePaymentPeriod(event) {
+    if (event.type !== "payment.confirmed" || event.purchaseKind !== "PACKAGE" || event.billingPath !== "AUTO_CARD") return event;
+    if (!/^sub_[A-Za-z0-9_]+$/.test(String(event.subscriptionRef || ""))) throw new Error("billing_subscription_reference_invalid");
+    const response = await fetch(`${this.apiBase}/v1/subscriptions/${event.subscriptionRef}`, { headers: { authorization: `Bearer ${this.secretKey}` } });
+    const subscription = await response.json();
+    const item = subscription.items?.data?.[0];
+    const periodEnd = subscription.current_period_end || item?.current_period_end;
+    if (!response.ok || subscription.id !== event.subscriptionRef || subscription.customer !== event.customerRef || subscription.status !== "active" || subscription.metadata?.tenant_id !== event.tenantId || subscription.metadata?.purchase_kind !== "PACKAGE" || subscription.metadata?.plan_code !== event.plan || subscription.items?.data?.length !== 1 || item.price?.id !== this.priceIds[event.plan] || !Number.isSafeInteger(periodEnd) || periodEnd * 1000 <= this.now()) throw new Error("billing_subscription_period_invalid");
+    return { ...event, periodEnd };
+  }
   verifyWebhook(rawBody, signatureHeader) {
     if (!Buffer.isBuffer(rawBody) || rawBody.length === 0) throw new Error("billing_webhook_raw_body_required");
     const raw = rawBody;
@@ -175,6 +185,9 @@ export class StripeBillingAdapter {
       subscriptionRef: checkoutEvent ? object.subscription : stripeInvoiceSubscription(object),
       plan: checkoutEvent ? object.metadata?.plan_code : null,
       billingPath: checkoutEvent ? object.metadata?.billing_path : null,
+      periodEnd: stripe.type === "invoice.paid" ? Math.max(0, ...(object.lines?.data || []).filter(line => line.subscription === stripeInvoiceSubscription(object) || line.parent?.subscription_item_details?.subscription === stripeInvoiceSubscription(object)).map(line => Number(line.period?.end || 0))) : null,
+      invoiceSubtotal: stripe.type === "invoice.paid" ? object.subtotal : null,
+      invoiceCurrency: stripe.type === "invoice.paid" ? object.currency : null,
       purchaseKind: checkoutEvent ? object.metadata?.purchase_kind : (object.parent?.subscription_details?.metadata || object.subscription_details?.metadata || object.metadata)?.purchase_kind,
       bookingId: checkoutEvent ? object.metadata?.booking_id : null,
       amountSubtotal: checkoutEvent ? object.amount_subtotal : null,

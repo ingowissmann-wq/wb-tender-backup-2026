@@ -29,7 +29,7 @@ async function webhookApp({ adapter = stripeAdapter(), enabled = true, withRawBo
   if (withRawBody) await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
   const client = { release() {} };
   const pool = { connect: async () => client };
-  if (adapter instanceof StripeBillingAdapter) adapter.prepareCheckoutCompletion = async () => ({ prepared: true });
+  if (adapter instanceof StripeBillingAdapter) adapter.resolvePaymentPeriod = async event => event;
   registerBillingWebhookRoute(app, { pool, enabled, billingAdapter: adapter, applyEvent });
   await app.ready();
   return app;
@@ -224,4 +224,17 @@ test("signed trial/package confusion and legacy metadata are rejected",()=>{
 test('live Klarna is blocked for the B2B product before contacting Stripe',async()=>{
   const adapter=new StripeBillingAdapter({secretKey:'sk_live_synthetic_not_a_real_key',webhookSecret:WEBHOOK_SECRET,publicBaseUrl:'https://www.enwi.online'});
   await assert.rejects(adapter.createCheckout({purchaseKind:'TRIAL',plan:'TRIAL',billingPath:'INVOICE_KLARNA',bookingId:TENANT_ID,consentVersion:'standalone-2026-09-07'}),/billing_klarna_b2b_not_supported/);
+});
+
+test('card package access uses the verified Stripe period and rejects another tenant subscription',async(t)=>{
+  let wrongTenant=false;
+  const periodEnd=Math.floor(NOW/1000)+86400*30;
+  const provider=http.createServer((req,res)=>{
+    res.setHeader('content-type','application/json');res.end(JSON.stringify({id:'sub_test',customer:'cus_test',status:'active',metadata:{tenant_id:wrongTenant?'another-tenant':TENANT_ID,purchase_kind:'PACKAGE',plan_code:'NORMAL'},items:{data:[{price:{id:'price_pro'},current_period_end:periodEnd}]}}));
+  });provider.listen(0,'127.0.0.1');await once(provider,'listening');t.after(()=>provider.close());
+  const adapter=new StripeBillingAdapter({secretKey:'sk_test_isolated',webhookSecret:WEBHOOK_SECRET,publicBaseUrl:'https://www.enwi.online',priceIds:{NORMAL:'price_pro'},now:()=>NOW,apiBase:`http://127.0.0.1:${provider.address().port}`});
+  const event={type:'payment.confirmed',purchaseKind:'PACKAGE',billingPath:'AUTO_CARD',subscriptionRef:'sub_test',customerRef:'cus_test',tenantId:TENANT_ID,plan:'NORMAL'};
+  assert.equal((await adapter.resolvePaymentPeriod(event)).periodEnd,periodEnd);
+  wrongTenant=true;await assert.rejects(adapter.resolvePaymentPeriod(event),/billing_subscription_period_invalid/);
+  const trial={...event,purchaseKind:'TRIAL'};assert.deepEqual(await adapter.resolvePaymentPeriod(trial),trial);
 });

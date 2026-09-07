@@ -164,10 +164,13 @@ export async function applyBillingEvent(client, event, rawPayload, now = new Dat
         || current.provider_customer_ref !== event.customerRef || current.provider_subscription_ref !== event.subscriptionRef)
         throw new Error("billing_provider_binding_mismatch");
     }
+    if (mapped === "INVOICE_PAID" && event.billingReason !== "subscription_create") {
+      if (event.billingReason !== "subscription_cycle" || event.invoiceCurrency !== "eur" || event.invoiceSubtotal !== PACKAGE_PRICES[current.plan_code]?.monthly || !Number.isSafeInteger(event.periodEnd) || event.periodEnd <= 0) throw new Error("billing_invoice_period_invalid");
+    }
     let update = mapped === "PAYMENT_CONFIRMED" || mapped === "PLAN_CHANGED" || (mapped === "INVOICE_PAID" && event.billingReason === "subscription_create")
       ? { status: current.status }
       : mapped === "INVOICE_PAID" && ["ACTIVE","PAST_DUE"].includes(current.status)
-        ? { status: "ACTIVE", currentPeriodEndsAt: nextBillingPeriod(now) }
+        ? { status: "ACTIVE", currentPeriodEndsAt: new Date(Math.max(event.periodEnd * 1000, new Date(current.current_period_ends_at || 0).getTime())) }
         : transitionSubscription(current, { type: mapped }, now);
     let planCode = current.plan_code;
     if (mapped === "PLAN_CHANGED") {
@@ -199,7 +202,8 @@ export async function applyBillingEvent(client, event, rawPayload, now = new Dat
         const usage = (await client.query("SELECT (SELECT count(*)::int FROM saas.tenant_memberships WHERE tenant_id=$1 AND status='ACTIVE') seats,(SELECT count(*)::int FROM saas.tenant_companies WHERE tenant_id=$1 AND status='ACTIVE') companies", [event.tenantId])).rows[0];
         if (!assessPlanChange(catalog.find(p=>p.code===current.plan_code),catalog.find(p=>p.code===checkout.plan_code),usage).allowed) throw new Error('plan_change_limit_conflict');
         planCode = checkout.plan_code;
-        update = { status: "ACTIVE", currentPeriodEndsAt: nextBillingPeriod(now) };
+        if (event.billingPath === "AUTO_CARD" && (!Number.isSafeInteger(event.periodEnd) || event.periodEnd * 1000 <= now.getTime())) throw new Error("billing_subscription_period_invalid");
+        update = { status: "ACTIVE", currentPeriodEndsAt: event.billingPath === "AUTO_CARD" ? new Date(event.periodEnd * 1000) : nextBillingPeriod(now) };
       }
       await client.query("UPDATE saas.checkout_sessions SET status='PAYMENT_CONFIRMED',confirmed_at=$4 WHERE provider=$1 AND provider_checkout_ref=$2 AND tenant_id=$3", [event.provider,event.checkoutRef,event.tenantId,now]);
     }
@@ -240,8 +244,9 @@ export function registerBillingWebhookRoute(app, { pool, enabled, billingAdapter
     if (!Buffer.isBuffer(req.rawBody) || req.rawBody.length === 0) return reply.code(400).send({ error: "billing_webhook_raw_body_required" });
     if (!String(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) return reply.code(415).send({ error: "billing_webhook_content_type_invalid" });
     try {
-      const event = billingAdapter.verifyWebhook(req.rawBody, req.headers["stripe-signature"]);
+      let event = billingAdapter.verifyWebhook(req.rawBody, req.headers["stripe-signature"]);
       if (event.ignored) return reply.code(200).send({ received: true, ignored: true });
+      if (typeof billingAdapter.resolvePaymentPeriod === "function") event = await billingAdapter.resolvePaymentPeriod(event);
       const client = await pool.connect();
       try {
         const result = await applyEvent(client, event, req.rawBody);

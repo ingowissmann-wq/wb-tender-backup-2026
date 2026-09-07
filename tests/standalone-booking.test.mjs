@@ -37,7 +37,7 @@ function fixture({kind='TRIAL',checkoutStatus='CREATED',duplicate=false,currentK
     return{rowCount:1,rows:[]};
   }};
 }
-function event(kind='TRIAL') { return {provider:'stripe',id:'evt_synthetic',type:'payment.confirmed',tenantId:tenant,checkoutRef:'cs_synthetic',bookingId:booking,purchaseKind:kind,billingPath:'AUTO_CARD',plan:kind==='TRIAL'?'TRIAL':'NORMAL',amountSubtotal:kind==='TRIAL'?29900:349000,subscriptionRef:kind==='TRIAL'?null:'sub_synthetic',customerRef:'cus_synthetic'}; }
+function event(kind='TRIAL') { return {provider:'stripe',id:'evt_synthetic',type:'payment.confirmed',tenantId:tenant,checkoutRef:'cs_synthetic',bookingId:booking,purchaseKind:kind,billingPath:'AUTO_CARD',plan:kind==='TRIAL'?'TRIAL':'NORMAL',amountSubtotal:kind==='TRIAL'?29900:349000,subscriptionRef:kind==='TRIAL'?null:'sub_synthetic',customerRef:'cus_synthetic',periodEnd:Math.floor(new Date('2026-10-07T12:00:00Z').getTime()/1000)}; }
 test('paid trial starts exactly 14 days and cannot be activated by a package event',async()=>{
   const db=fixture();assert.equal((await applyBillingEvent(db,event(),Buffer.from('{}'),now)).status,'TRIAL_ACTIVE');
   const update=db.queries.find(([q])=>q.startsWith('UPDATE saas.subscriptions SET status'))[1];
