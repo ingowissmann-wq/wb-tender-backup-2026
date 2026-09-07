@@ -3,6 +3,24 @@ SET LOCAL lock_timeout='5s';
 SET LOCAL statement_timeout='5min';
 SELECT pg_advisory_xact_lock(hashtextextended('wb-tender:critical-region-portal-resolution:160',0));
 
+-- Preserve the actual installed views, including later evidence enrichments.
+CREATE TABLE tender.release_160_view_snapshot (
+  view_name text PRIMARY KEY, definition text NOT NULL, options text[],
+  description text, previous_marker jsonb
+);
+REVOKE ALL ON tender.release_160_view_snapshot FROM PUBLIC;
+INSERT INTO tender.release_160_view_snapshot
+SELECT c.relname,pg_get_viewdef(c.oid,false),c.reloptions,obj_description(c.oid,'pg_class'),
+       (SELECT to_jsonb(m) FROM app.schema_migrations m WHERE version='0160-critical-region-portal-resolution')
+FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE n.nspname='tender' AND c.relkind='v'
+  AND c.relname IN('current_tender_portal_mapping_truth','current_registered_tender_company_portals');
+DO $$ BEGIN
+  IF (SELECT count(*) FROM tender.release_160_view_snapshot)<>2 THEN
+    RAISE EXCEPTION 'migration_160_view_snapshot_incomplete';
+  END IF;
+END $$;
+
 -- A participation target is not the publication source. Only explicit current
 -- enrichment mappings or evidenced procurement/submission links may select a
 -- portal; TED notice/login links can therefore never shadow the bidder portal.

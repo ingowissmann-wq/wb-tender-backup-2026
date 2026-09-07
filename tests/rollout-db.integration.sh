@@ -56,4 +56,30 @@ grep -qx 'RUNTIME_SESSIONS_REMAINING=0' <<<"$drain_result"
 APPLIED_MIGRATIONS_FILE="$temporary/migrations.log" RELEASE_ID=0000000000000000000000000000000000000001 LEDGER_EXISTED_BEFORE=false SNAPSHOT_EXISTED_BEFORE=false "$root/deployment/rollback-applied-release-migrations.sh"
 STATE_OUTPUT_DIR="$temporary/after" "$root/deployment/capture-rollout-db-state.sh"
 for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger.sha256 migration-snapshots.present migration-snapshots.sha256; do cmp -s "$temporary/before/$item" "$temporary/after/$item"; done
-printf '{"passed":true,"isolatedPostgres":true,"pendingMigrations":10,"runtimeLoginInheritedLeastPrivilege":true,"runtimeSessionsDrainedBeforeRollback":true,"exactReverseRollback":true,"schemaLedgerSnapshotPlansRestored":true}\n'
+# Production already has 155-159. Rolling 156 back in the all-new test above
+# would hide a lossy rollback of the later 161 price metadata update.
+export RELEASE_ID=0000000000000000000000000000000000000002
+"$root/deployment/apply-release-migrations.sh" >"$temporary/prefix-seed.log"
+sed -n '/^ROLLBACK_MIGRATION=16[0-4]_/p' "$temporary/prefix-seed.log" >"$temporary/prefix-tail.log"
+APPLIED_MIGRATIONS_FILE="$temporary/prefix-tail.log" LEDGER_EXISTED_BEFORE=true SNAPSHOT_EXISTED_BEFORE=true "$root/deployment/rollback-applied-release-migrations.sh"
+psql "$url" -v ON_ERROR_STOP=1 <<'SQL'
+CREATE OR REPLACE VIEW tender.current_tender_portal_mapping_truth AS
+SELECT NULL::uuid tender_id,NULL::uuid portal_id,0::integer portal_mapping_count,
+       'PREVIOUS_CUSTOM_RESOLUTION'::text mapping_status WHERE false;
+ALTER VIEW tender.current_tender_portal_mapping_truth RESET(security_barrier);
+ALTER VIEW tender.current_tender_portal_mapping_truth SET(security_invoker=true);
+COMMENT ON VIEW tender.current_tender_portal_mapping_truth IS 'Preserve installed resolution and view options';
+UPDATE saas.plans SET metadata=metadata||'{"setup_fee_minor":424242,"activation_fee_minor":121212,"rollback_sentinel":true}'::jsonb,
+  updated_at='2026-08-01T00:00:00Z' WHERE code IN('NORMAL','PROFESSIONAL','ENTERPRISE');
+INSERT INTO app.schema_migrations(version,description)
+VALUES('0160-critical-region-portal-resolution','Preserve pre-existing application marker');
+SQL
+mkdir "$temporary/prefix-before" "$temporary/prefix-after"
+STATE_OUTPUT_DIR="$temporary/prefix-before" "$root/deployment/capture-rollout-db-state.sh"
+"$root/deployment/apply-release-migrations.sh" >"$temporary/production-pending.log"
+[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/production-pending.log")" == 5 ]]
+APPLIED_MIGRATIONS_FILE="$temporary/production-pending.log" LEDGER_EXISTED_BEFORE=true SNAPSHOT_EXISTED_BEFORE=true "$root/deployment/rollback-applied-release-migrations.sh"
+STATE_OUTPUT_DIR="$temporary/prefix-after" "$root/deployment/capture-rollout-db-state.sh"
+for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger.sha256 migration-snapshots.present migration-snapshots.sha256; do cmp -s "$temporary/prefix-before/$item" "$temporary/prefix-after/$item"; done
+[[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT description FROM app.schema_migrations WHERE version='0160-critical-region-portal-resolution'")" == 'Preserve pre-existing application marker' ]]
+printf '{"passed":true,"isolatedPostgres":true,"pendingMigrations":10,"productionPrefixPendingMigrations":5,"runtimeLoginInheritedLeastPrivilege":true,"runtimeSessionsDrainedBeforeRollback":true,"exactReverseRollback":true,"schemaLedgerSnapshotPlansRestored":true,"installedViewAndPriceMetadataPreserved":true}\n'

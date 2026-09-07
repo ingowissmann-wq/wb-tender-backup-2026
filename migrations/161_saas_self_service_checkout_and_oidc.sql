@@ -1,5 +1,15 @@
 BEGIN;
 
+CREATE TABLE saas.release_161_plan_snapshot(code text PRIMARY KEY,row_data jsonb NOT NULL);
+REVOKE ALL ON saas.release_161_plan_snapshot FROM PUBLIC;
+INSERT INTO saas.release_161_plan_snapshot
+SELECT code,to_jsonb(p) FROM saas.plans p WHERE code IN('NORMAL','PROFESSIONAL','ENTERPRISE');
+DO $$ BEGIN
+  IF (SELECT count(*) FROM saas.release_161_plan_snapshot)<>3 THEN
+    RAISE EXCEPTION 'migration_161_plan_snapshot_incomplete';
+  END IF;
+END $$;
+
 UPDATE saas.plans
 SET metadata = metadata || CASE code
   WHEN 'NORMAL' THEN '{"activation_fee_minor":29900,"setup_fee_minor":250000,"net_price":true}'::jsonb

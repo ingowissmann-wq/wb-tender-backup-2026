@@ -1,35 +1,30 @@
 BEGIN;
-CREATE OR REPLACE VIEW tender.current_tender_portal_mapping_truth
-WITH (security_barrier=true) AS
-WITH current_enrichment AS (
- SELECT DISTINCT ON(version.tender_id) version.id,version.tender_id FROM tender.enrichment_versions version
- WHERE version.historical=false ORDER BY version.tender_id,version.version DESC,version.created_at DESC,version.id DESC
-), explicit_profiles AS (
- SELECT current.tender_id,nullif(document.provenance->>'portalId','') portal_key
- FROM current_enrichment current JOIN tender.enrichment_documents document ON document.enrichment_version_id=current.id
- WHERE nullif(document.provenance->>'portalId','') IS NOT NULL
-), mapping_count AS (
- SELECT tender_id,count(DISTINCT portal_key)::int portal_mapping_count,min(portal_key) portal_key FROM explicit_profiles GROUP BY tender_id
-)
-SELECT mapping.tender_id,CASE WHEN mapping.portal_mapping_count=1 THEN portal.id END portal_id,
- mapping.portal_mapping_count,CASE WHEN mapping.portal_mapping_count<>1 THEN 'AMBIGUOUS' WHEN portal.id IS NULL THEN 'UNKNOWN_PROFILE' ELSE 'UNIQUE_CANONICAL_PROFILE' END mapping_status
-FROM mapping_count mapping LEFT JOIN tender.portal_registry portal ON portal.id::text=mapping.portal_key;
-
-CREATE OR REPLACE VIEW tender.current_registered_tender_company_portals
-WITH (security_barrier=true) AS
-WITH active_bindings AS (
- SELECT credential.portal_id,scope.company_id,count(DISTINCT credential.id)::int active_credential_count,min(credential.id::text)::uuid credential_id
- FROM tender.portal_credential_secrets credential JOIN tender.portal_credential_companies scope ON scope.credential_id=credential.id AND scope.active=true
- JOIN tender.enterprise_company_links company ON company.company_id=scope.company_id AND company.active=true
- JOIN tender.portal_registry portal ON portal.id=credential.portal_id
- WHERE credential.status='ACTIVE' AND credential.revoked_at IS NULL AND (credential.valid_until IS NULL OR credential.valid_until>now())
- AND (credential.account_type IS NULL OR (credential.bound_host=lower(portal.canonical_domain) AND 'BID_SUBMISSION'=ANY(coalesce(credential.authorized_capabilities,'{}'::text[]))))
- GROUP BY credential.portal_id,scope.company_id HAVING count(DISTINCT credential.id)=1
-)
-SELECT mapping.tender_id,mapping.portal_id,binding.company_id,binding.credential_id,binding.active_credential_count,mapping.mapping_status
-FROM tender.current_tender_portal_mapping_truth mapping JOIN active_bindings binding ON binding.portal_id=mapping.portal_id
-WHERE mapping.mapping_status='UNIQUE_CANONICAL_PROFILE';
-COMMENT ON VIEW tender.current_registered_tender_company_portals IS
- 'Fail-closed exact tender/company/portal scope. Typed credentials additionally require exact host binding and BID_SUBMISSION capability; notice/discovery accounts never constitute bidder registration.';
-DELETE FROM app.schema_migrations WHERE version='0160-critical-region-portal-resolution';
+DO $$
+DECLARE saved record; option_value text; marker jsonb;
+BEGIN
+  IF (SELECT count(*) FROM tender.release_160_view_snapshot)<>2 THEN
+    RAISE EXCEPTION 'migration_160_view_snapshot_incomplete';
+  END IF;
+  SELECT previous_marker INTO marker FROM tender.release_160_view_snapshot LIMIT 1;
+  FOR saved IN SELECT * FROM tender.release_160_view_snapshot
+    ORDER BY CASE view_name WHEN 'current_tender_portal_mapping_truth' THEN 0 ELSE 1 END
+  LOOP
+    EXECUTE format('CREATE OR REPLACE VIEW tender.%I AS %s',saved.view_name,saved.definition);
+    FOR option_value IN SELECT unnest(c.reloptions) FROM pg_class c
+      JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='tender' AND c.relname=saved.view_name
+    LOOP
+      EXECUTE format('ALTER VIEW tender.%I RESET (%I)',saved.view_name,split_part(option_value,'=',1));
+    END LOOP;
+    FOREACH option_value IN ARRAY coalesce(saved.options,'{}'::text[]) LOOP
+      EXECUTE format('ALTER VIEW tender.%I SET (%I=%L)',saved.view_name,split_part(option_value,'=',1),split_part(option_value,'=',2));
+    END LOOP;
+    EXECUTE format('COMMENT ON VIEW tender.%I IS %L',saved.view_name,saved.description);
+  END LOOP;
+  DELETE FROM app.schema_migrations WHERE version='0160-critical-region-portal-resolution';
+  IF marker IS NOT NULL THEN
+    INSERT INTO app.schema_migrations SELECT (jsonb_populate_record(NULL::app.schema_migrations,marker)).*;
+  END IF;
+END $$;
+DROP TABLE tender.release_160_view_snapshot;
 COMMIT;
