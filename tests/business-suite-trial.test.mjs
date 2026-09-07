@@ -28,7 +28,7 @@ test("tenant storage upload/download/list/delete is physically isolated across t
 test("Stripe adapter rejects unpaid and unsigned events and accepts paid signed event", () => {
   const now=1_800_000_000_000, secret="whsec_test_test_test_test_test_test";
   const adapter=new StripeBillingAdapter({secretKey:"sk_test_placeholder",webhookSecret:secret,publicBaseUrl:"https://suite.example.invalid",priceIds:{CORE:"price_Core123"},now:()=>now});
-  const event={id:"evt_paid",type:"checkout.session.completed",data:{object:{id:"cs_test",mode:"subscription",payment_status:"paid",client_reference_id:A,customer:"cus_test",subscription:"sub_test"}}};
+  const event={id:"evt_paid",type:"checkout.session.completed",data:{object:{id:"cs_test",mode:"subscription",payment_status:"paid",client_reference_id:A,customer:"cus_test",subscription:"sub_test",currency:"eur",amount_subtotal:349000,metadata:{purchase_kind:"PACKAGE",plan_code:"NORMAL",billing_path:"AUTO_CARD",booking_id:A,consent_version:"standalone-2026-09-07"}}}};
   const raw=Buffer.from(JSON.stringify(event)),timestamp=Math.floor(now/1000),signature=crypto.createHmac('sha256',secret).update(`${timestamp}.`).update(raw).digest('hex');
   assert.equal(adapter.verifyWebhook(raw,`t=${timestamp},v1=${signature}`).type,"payment.confirmed");
   assert.throws(()=>adapter.verifyWebhook(raw,`t=${timestamp},v1=00`),/signature_invalid/);

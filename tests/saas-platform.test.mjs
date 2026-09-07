@@ -105,23 +105,24 @@ test("approved registration creates only pending, verification-bound records", a
   const client = { async query(sql, params = []) {
     calls.push([String(sql), params]);
     if (String(sql).startsWith("SELECT 1 FROM saas.plans")) return { rowCount: 1, rows: [{ ok: 1 }] };
+    if (String(sql).startsWith("SELECT 1 FROM iam.users")) return { rowCount: 0, rows: [] };
     return { rowCount: 1, rows: [] };
   } };
-  const secureInput = { email: "owner@example.invalid", company: "Isolated GmbH", plan: "NORMAL", billingPath: "AUTO_CARD", passwordHash: "scrypt$16384$8$1$salt$hash", mfaSecretEncrypted: "encrypted-mfa-material-over-thirty-two-characters" };
+  const secureInput = { purchaseKind: "PACKAGE", consentVersion: "standalone-2026-09-07", bookingConfirmed: true, email: "owner@example.invalid", company: "Isolated GmbH", plan: "NORMAL", billingPath: "AUTO_CARD", passwordHash: "scrypt$16384$8$1$salt$hash", mfaSecretEncrypted: "encrypted-mfa-material-over-thirty-two-characters" };
   const created = await registerPendingTenant(client, secureInput, { verificationPepper: "isolated-verification-pepper-over-thirty-two-characters" });
   assert.equal(created.plan, "NORMAL");
   assert.ok(created.token.length >= 32);
   assert.deepEqual(calls.find(([sql]) => sql.startsWith("SELECT 1 FROM saas.plans"))[1], ["NORMAL", 99_000]);
-  assert.deepEqual(calls.map(([sql]) => sql === "BEGIN" || sql === "COMMIT" ? sql : sql.split(/\s+/).slice(0, 3).join(" ")), ["BEGIN", "SELECT 1 FROM", "SELECT set_config('app.tenant_id',$1,true)", "INSERT INTO saas.tenants(id,slug,display_name,customer_identity_hash)", "INSERT INTO saas.pending_registrations(tenant_id,email,requested_plan_code,verification_token_hash,verification_expires_at,request_ip_hash,request_user_agent_hash,password_hash,mfa_secret_encrypted,billing_path)", "INSERT INTO saas.subscriptions(tenant_id,plan_code,status)", "SELECT tenant_portal.provision_empty_tenant($1,$2)", "INSERT INTO saas.audit_events(tenant_id,action,target_type,target_id,metadata)", "COMMIT"]);
+  assert.deepEqual(calls.map(([sql]) => sql === "BEGIN" || sql === "COMMIT" ? sql : sql.split(/\s+/).slice(0, 3).join(" ")), ["BEGIN", "SELECT 1 FROM", "SELECT 1 FROM", "SELECT set_config('app.tenant_id',$1,true)", "INSERT INTO saas.tenants(id,slug,display_name,customer_identity_hash)", "INSERT INTO saas.pending_registrations(tenant_id,email,requested_plan_code,verification_token_hash,verification_expires_at,request_ip_hash,request_user_agent_hash,password_hash,mfa_secret_encrypted,billing_path)", "UPDATE saas.pending_registrations SET", "INSERT INTO saas.subscriptions(tenant_id,plan_code,status)", "SELECT tenant_portal.provision_empty_tenant($1,$2)", "INSERT INTO saas.audit_events(tenant_id,action,target_type,target_id,metadata)", "COMMIT"]);
 
   const unavailable = { async query(sql) { if (sql === "BEGIN" || sql === "ROLLBACK") return { rowCount: 0, rows: [] }; return { rowCount: 0, rows: [] }; } };
   await assert.rejects(registerPendingTenant(unavailable, secureInput, { verificationPepper: "isolated-verification-pepper-over-thirty-two-characters" }), /plan_not_available/);
 });
 
-test("verified registration proceeds directly to idempotent Stripe checkout and paid access waits only for OIDC self-service", async () => {
+test("verified registration binds the explicit booking before paid native activation", async () => {
   const platform = await readFile(new URL("../platform/saas-platform.mjs", import.meta.url), "utf8");
   assert.match(platform, /status IN\('EMAIL_VERIFICATION_PENDING','PAYMENT_PENDING'\)/);
-  assert.match(platform, /billingAdapter\.createCheckout\(\{ tenantId: verified\.tenant_id, plan: verified\.requested_plan_code, billingPath: verified\.billing_path, trialDays: 14/);
+  assert.match(platform, /createBoundCheckout\(db,billingAdapter,verified\.tenant_id,contract,verified\.booking_id\)/);
   assert.match(platform, /location\.assign\(result\.checkoutUrl\)/);
   assert.match(platform, /status=CASE WHEN iam_provisioned_at IS NULL THEN 'IAM_PROVISIONING_PENDING' ELSE 'ACTIVATED' END/);
   assert.doesNotMatch(platform, /!registration\?\.email_verified_at \|\| !registration\?\.iam_provisioned_at/);

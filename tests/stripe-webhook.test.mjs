@@ -29,7 +29,7 @@ async function webhookApp({ adapter = stripeAdapter(), enabled = true, withRawBo
   if (withRawBody) await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
   const client = { release() {} };
   const pool = { connect: async () => client };
-  if (adapter instanceof StripeBillingAdapter) adapter.prepareCheckoutCompletion = async () => ({ prepared: true });
+  if (adapter instanceof StripeBillingAdapter) adapter.resolvePaymentPeriod = async event => event;
   registerBillingWebhookRoute(app, { pool, enabled, billingAdapter: adapter, applyEvent });
   await app.ready();
   return app;
@@ -45,7 +45,8 @@ const checkoutEvent = (overrides = {}) => ({
     client_reference_id: TENANT_ID,
     customer: "cus_test",
     subscription: "sub_test",
-    metadata: { plan_code: "NORMAL", billing_path: "AUTO_CARD" },
+    currency: "eur", amount_subtotal: 349000,
+    metadata: { plan_code: "NORMAL", billing_path: "AUTO_CARD", purchase_kind: "PACKAGE", booking_id: TENANT_ID, consent_version: "standalone-2026-09-07", renewal: "false" },
     ...overrides,
   } },
 });
@@ -60,7 +61,7 @@ test("Stripe webhook verifies the exact raw body and reports duplicate processin
     return { idempotent: false };
   } });
   t.after(() => app.close());
-  const body = Buffer.from(`{\n  "id": "evt_checkout_paid", "type": "checkout.session.completed",\n  "data": {"object":{"id":"cs_test_paid","mode":"subscription","payment_status":"paid","client_reference_id":"${TENANT_ID}","customer":"cus_test","subscription":"sub_test","metadata":{"plan_code":"NORMAL"}}}\n}`);
+  const body = Buffer.from(JSON.stringify(checkoutEvent(), null, 2));
   const headers = { "content-type": "application/json", "stripe-signature": signatureFor(body) };
 
   const first = await app.inject({ method: "POST", url: "/api/saas/billing/webhook", headers, payload: body });
@@ -156,61 +157,84 @@ test("webhook stays unavailable when SaaS or Stripe configuration is disabled", 
   assert.equal((await unconfigured.inject(request)).statusCode, 503);
 });
 
-test("checkout charges activation now and configures card-only taxed billing after exactly 14 days", async (t) => {
+test("standalone trial charges only 299 for all methods and never creates future charges", async (t) => {
   const observed = [];
-  const provider = http.createServer(async (req, res) => {
-    let body = ""; for await (const chunk of req) body += chunk;
-    observed.push({ path: req.url, method: req.method, authorization: req.headers.authorization, idempotency: req.headers["idempotency-key"], body: new URLSearchParams(body) });
-    res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify(req.url === "/v1/invoiceitems" ? { id: "ii_setup_deferred" } : { id: "cs_test_internal_only", url: "https://checkout.example.invalid/session" }));
+  const provider = http.createServer(async (req,res)=>{
+    let body=''; for await(const chunk of req)body+=chunk;
+    observed.push({path:req.url,body:new URLSearchParams(body),idempotency:req.headers['idempotency-key']});
+    res.setHeader('content-type','application/json');res.end(JSON.stringify({id:'cs_trial',url:'https://checkout.example.invalid/trial'}));
   });
-  provider.listen(0, "127.0.0.1"); await once(provider, "listening");
-  t.after(() => provider.close());
-  const adapter = new StripeBillingAdapter({ secretKey: "sk_test_isolated_only", webhookSecret: WEBHOOK_SECRET, publicBaseUrl: "https://saas.example.invalid", priceIds: { NORMAL: "price_monthlyPro" }, activationPriceId: "price_activation299", setupPriceIds: { NORMAL: "price_setupPro" }, apiBase: `http://127.0.0.1:${provider.address().port}` });
-  const checkout = await adapter.createCheckout({ tenantId: TENANT_ID, plan: "NORMAL", trialDays: 14 });
-  assert.equal(checkout.id, "cs_test_internal_only");
-  const session = observed[0];
-  assert.equal(session.method, "POST");
-  assert.equal(session.authorization, "Bearer sk_test_isolated_only");
-  assert.equal(session.idempotency, `wb-trial-${TENANT_ID}`);
-  assert.equal(session.body.get("line_items[0][price]"), "price_monthlyPro");
-  assert.equal(session.body.get("line_items[1][price]"), "price_activation299");
-  assert.equal(session.body.get("subscription_data[trial_period_days]"), "14");
-  assert.equal(session.body.get("payment_method_types[0]"), "card");
-  assert.equal(session.body.get("automatic_tax[enabled]"), "true");
-  assert.equal(session.body.get("tax_id_collection[enabled]"), "true");
-  assert.equal(session.body.get("client_reference_id"), TENANT_ID);
-
-  const setup = await adapter.prepareCheckoutCompletion({ type: "payment.confirmed", checkoutRef: checkout.id, tenantId: TENANT_ID, customerRef: "cus_test", subscriptionRef: "sub_test", plan: "NORMAL" });
-  assert.deepEqual(setup, { prepared: true, invoiceItemId: "ii_setup_deferred" });
-  const invoiceItem = observed[1];
-  assert.equal(invoiceItem.path, "/v1/invoiceitems");
-  assert.equal(invoiceItem.idempotency, `wb-setup-${checkout.id}`);
-  assert.equal(invoiceItem.body.get("price"), "price_setupPro");
-  assert.equal(invoiceItem.body.get("subscription"), "sub_test");
+  provider.listen(0,'127.0.0.1');await once(provider,'listening');t.after(()=>provider.close());
+  const adapter = new StripeBillingAdapter({secretKey:'sk_test_isolated',webhookSecret:WEBHOOK_SECRET,publicBaseUrl:'https://www.enwi.online',activationPriceId:'price_activation299',apiBase:`http://127.0.0.1:${provider.address().port}`});
+  for(const [billingPath,method] of [['AUTO_CARD','card'],['INVOICE_KLARNA','klarna'],['INVOICE_BILLIE','billie']]){
+    await adapter.createCheckout({tenantId:TENANT_ID,plan:'TRIAL',purchaseKind:'TRIAL',billingPath,bookingId:billingPath,consentVersion:'standalone-2026-09-07'});
+    const session=observed.at(-1).body;
+    assert.equal(session.get('mode'),'payment');assert.equal(session.get('line_items[0][price]'),'price_activation299');
+    assert.equal(session.get('line_items[1][price]'),null);assert.equal(session.get('payment_method_types[0]'),method);
+    assert.equal(session.get('metadata[purchase_kind]'),'TRIAL');assert.equal(session.get('metadata[plan_code]'),'TRIAL');
+    assert.equal(session.get('success_url'),'https://www.enwi.online/saas/trial-complete?session_id={CHECKOUT_SESSION_ID}');
+    assert.equal(session.get('payment_method_collection'),null);
+    assert.ok(![...session.keys()].some(k=>/subscription_data|setup_future_usage/.test(k)));
+    assert.ok(!session.toString().includes('sepa'));
+    assert.deepEqual(await adapter.prepareCheckoutCompletion({type:'payment.confirmed'}),{prepared:false});
+  }
+  assert.equal(observed.length,3);assert.ok(observed.every(r=>r.path==='/v1/checkout/sessions'));
 });
 
-test("Klarna immediate payment and Billie charge only activation and switch later fees to invoice", async (t) => {
-  const observed = [];
-  const provider = http.createServer(async (req, res) => {
-    let body = ""; for await (const chunk of req) body += chunk;
-    observed.push(new URLSearchParams(body));
-    res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ id: `cs_manual_${observed.length}`, url: "https://checkout.example.invalid/manual" }));
-  });
-  provider.listen(0, "127.0.0.1"); await once(provider, "listening");
-  t.after(() => provider.close());
-  const adapter = new StripeBillingAdapter({ secretKey: "sk_test_isolated_only", webhookSecret: WEBHOOK_SECRET, publicBaseUrl: "https://saas.example.invalid", priceIds: { NORMAL: "price_monthlyPro" }, activationPriceId: "price_activation299", setupPriceIds: { NORMAL: "price_setupPro" }, apiBase: `http://127.0.0.1:${provider.address().port}` });
-  for (const [billingPath, paymentMethod] of [["INVOICE_KLARNA","klarna"],["INVOICE_BILLIE","billie"]]) {
-    await adapter.createCheckout({ tenantId: TENANT_ID, plan: "NORMAL", billingPath, trialDays: 14 });
-    const session = observed.at(-1);
-    assert.equal(session.get("mode"), "payment");
-    assert.equal(session.get("payment_method_types[0]"), paymentMethod);
-    assert.equal(session.get("line_items[0][price]"), "price_activation299");
-    assert.equal(session.get("line_items[1][price]"), null);
-    assert.equal(session.get("subscription_data[trial_period_days]"), null);
-    assert.equal(session.get("customer_creation"), "always");
-    assert.equal(session.get("metadata[billing_path]"), billingPath);
-    assert.deepEqual(await adapter.prepareCheckoutCompletion({ type: "payment.confirmed", billingPath }), { prepared: false, billingCollection: "MANUAL_INVOICE" });
+test("all three packages use separate card subscriptions or explicitly paid manual months", async(t)=>{
+  const observed=[];
+  const prices={NORMAL:99000,PROFESSIONAL:149000,ENTERPRISE:249000};
+  const provider=http.createServer(async(req,res)=>{
+    res.setHeader('content-type','application/json');
+    if(req.method==='GET'){const plan=req.url.split('_').at(-1);res.end(JSON.stringify({active:true,currency:'eur',unit_amount:prices[plan],product:'prod_'+plan,tax_behavior:'exclusive',recurring:{interval:'month',interval_count:1}}));return;}
+    let body='';for await(const c of req)body+=c;observed.push(new URLSearchParams(body));res.end(JSON.stringify({id:'cs_package',url:'https://checkout.example.invalid/package'}));
+  });provider.listen(0,'127.0.0.1');await once(provider,'listening');t.after(()=>provider.close());
+  const adapter=new StripeBillingAdapter({secretKey:'sk_test_isolated',webhookSecret:WEBHOOK_SECRET,publicBaseUrl:'https://www.enwi.online',priceIds:Object.fromEntries(Object.keys(prices).map(p=>[p,'price_'+p])),setupPriceIds:Object.fromEntries(Object.keys(prices).map(p=>[p,'price_setup'+p])),apiBase:`http://127.0.0.1:${provider.address().port}`});
+  for(const plan of Object.keys(prices))for(const billingPath of ['AUTO_CARD','INVOICE_KLARNA','INVOICE_BILLIE']){
+    const input={tenantId:TENANT_ID,plan,purchaseKind:'PACKAGE',billingPath,bookingId:plan+billingPath,consentVersion:'standalone-2026-09-07'};
+    await adapter.createCheckout(input);const session=observed.at(-1);
+    assert.equal(session.get('mode'),billingPath==='AUTO_CARD'?'subscription':'payment');
+    assert.equal(session.get('line_items[1][price]'),'price_setup'+plan);
+    assert.equal(session.get('metadata[purchase_kind]'),'PACKAGE');
+    assert.equal(session.get('subscription_data[trial_period_days]'),null);
+    assert.ok(!session.toString().includes('activation'));assert.ok(!session.toString().includes('sepa'));
+    if(billingPath!=='AUTO_CARD'){
+      assert.equal(session.get('line_items[0][price_data][unit_amount]'),String(prices[plan]));
+      await adapter.createCheckout({...input,bookingId:input.bookingId+'renew',renewal:true});
+      assert.equal(observed.at(-1).get('line_items[1][price]'),null);
+    }
   }
+});
+
+test("signed trial/package confusion and legacy metadata are rejected",()=>{
+  const adapter=stripeAdapter();
+  const metadata={purchase_kind:'TRIAL',plan_code:'TRIAL',billing_path:'AUTO_CARD',booking_id:TENANT_ID,consent_version:'standalone-2026-09-07',renewal:'false'};
+  for(const overrides of [
+    {metadata},
+    {mode:'payment',subscription:null,metadata:{...metadata,plan_code:'NORMAL'}},
+    {mode:'payment',subscription:null,metadata:{...metadata,purchase_kind:'PACKAGE'}},
+    {metadata:{plan_code:'NORMAL'}},
+  ]){const raw=Buffer.from(JSON.stringify(checkoutEvent(overrides)));assert.throws(()=>adapter.verifyWebhook(raw,signatureFor(raw)),/billing_/);}
+  const event=checkoutEvent({mode:'payment',subscription:null,amount_subtotal:29900,metadata});
+  for(const type of ['checkout.session.completed','checkout.session.async_payment_succeeded']){
+    event.type=type;const raw=Buffer.from(JSON.stringify(event));assert.equal(adapter.verifyWebhook(raw,signatureFor(raw)).purchaseKind,'TRIAL');
+  }
+});
+
+test('live Klarna is blocked for the B2B product before contacting Stripe',async()=>{
+  const adapter=new StripeBillingAdapter({secretKey:'sk_live_synthetic_not_a_real_key',webhookSecret:WEBHOOK_SECRET,publicBaseUrl:'https://www.enwi.online'});
+  await assert.rejects(adapter.createCheckout({purchaseKind:'TRIAL',plan:'TRIAL',billingPath:'INVOICE_KLARNA',bookingId:TENANT_ID,consentVersion:'standalone-2026-09-07'}),/billing_klarna_b2b_not_supported/);
+});
+
+test('card package access uses the verified Stripe period and rejects another tenant subscription',async(t)=>{
+  let wrongTenant=false;
+  const periodEnd=Math.floor(NOW/1000)+86400*30;
+  const provider=http.createServer((req,res)=>{
+    res.setHeader('content-type','application/json');res.end(JSON.stringify({id:'sub_test',customer:'cus_test',status:'active',metadata:{tenant_id:wrongTenant?'another-tenant':TENANT_ID,purchase_kind:'PACKAGE',plan_code:'NORMAL'},items:{data:[{price:{id:'price_pro'},current_period_end:periodEnd}]}}));
+  });provider.listen(0,'127.0.0.1');await once(provider,'listening');t.after(()=>provider.close());
+  const adapter=new StripeBillingAdapter({secretKey:'sk_test_isolated',webhookSecret:WEBHOOK_SECRET,publicBaseUrl:'https://www.enwi.online',priceIds:{NORMAL:'price_pro'},now:()=>NOW,apiBase:`http://127.0.0.1:${provider.address().port}`});
+  const event={type:'payment.confirmed',purchaseKind:'PACKAGE',billingPath:'AUTO_CARD',subscriptionRef:'sub_test',customerRef:'cus_test',tenantId:TENANT_ID,plan:'NORMAL'};
+  assert.equal((await adapter.resolvePaymentPeriod(event)).periodEnd,periodEnd);
+  wrongTenant=true;await assert.rejects(adapter.resolvePaymentPeriod(event),/billing_subscription_period_invalid/);
+  const trial={...event,purchaseKind:'TRIAL'};assert.deepEqual(await adapter.resolvePaymentPeriod(trial),trial);
 });

@@ -134,8 +134,8 @@ export function transitionSubscription(current, event, now = new Date()) {
   if (event.type === "PAYMENT_FAILED" && ["TRIAL_ACTIVE", "ACTIVE"].includes(status)) return { status: "PAST_DUE" };
   if (event.type === "SUSPEND" && status !== "CANCELED") return { status: "SUSPENDED" };
   if (event.type === "REACTIVATE" && status === "SUSPENDED") {
-    if (current.trial_ends_at && new Date(current.trial_ends_at) > now) return { status: "TRIAL_ACTIVE" };
-    if (current.trial_claimed_at) return { status: "TRIAL_EXPIRED" };
+    if (current.purchase_kind !== "PACKAGE" && current.trial_ends_at && new Date(current.trial_ends_at) > now) return { status: "TRIAL_ACTIVE" };
+    if (current.purchase_kind !== "PACKAGE" && current.trial_claimed_at) return { status: "TRIAL_EXPIRED" };
     if (current.current_period_ends_at && new Date(current.current_period_ends_at) > now) return { status: "ACTIVE" };
     return { status: "PENDING_PAYMENT" };
   }

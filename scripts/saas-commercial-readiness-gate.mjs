@@ -17,11 +17,17 @@ if (enabled) {
   if (process.env.WB_TENDER_SAAS_LEGACY_API_ENABLED === "true") blockers.push("legacy_wb_data_plane_must_remain_forbidden");
   requireValue("WB_TENDER_RUNTIME_DB_ROLE", "least_privilege_runtime_role_missing");
   requireValue("WB_TENDER_TENANT_STORAGE_ADAPTER", "tenant_bound_storage_adapter_missing");
-  if (process.env.SAAS_IAM_ADAPTER !== "oidc") blockers.push("saas_oidc_adapter_not_selected");
-  for (const name of ["SAAS_IAM_ISSUER","SAAS_IAM_AUTHORIZATION_ENDPOINT","SAAS_IAM_TOKEN_ENDPOINT","SAAS_IAM_JWKS_URI","SAAS_IAM_CLIENT_ID"]) requireValue(name);
-  for (const name of ["SAAS_IAM_CLIENT_SECRET","SAAS_IAM_SESSION_PEPPER"]) {
+  if (!["native", "oidc"].includes(process.env.SAAS_IAM_ADAPTER)) blockers.push("saas_iam_adapter_not_selected");
+  if (process.env.SAAS_IAM_ADAPTER === "oidc") {
+    for (const name of ["SAAS_IAM_ISSUER","SAAS_IAM_AUTHORIZATION_ENDPOINT","SAAS_IAM_TOKEN_ENDPOINT","SAAS_IAM_JWKS_URI","SAAS_IAM_CLIENT_ID"]) requireValue(name);
+    for (const name of ["SAAS_IAM_CLIENT_SECRET","SAAS_IAM_SESSION_PEPPER"]) {
+      if (process.env[name]) blockers.push(`${name.toLowerCase()}_inline_value_forbidden`);
+      requireValue(`${name}_FILE`, `${name.toLowerCase()}_file_missing`);
+    }
+  }
+  for (const name of ["SAAS_VERIFICATION_PEPPER", "SAAS_INVITATION_PEPPER"]) {
     if (process.env[name]) blockers.push(`${name.toLowerCase()}_inline_value_forbidden`);
-    if (!String(process.env[`${name}_FILE`] || "").trim()) blockers.push(`${name.toLowerCase()}_file_missing`);
+    requireValue(`${name}_FILE`, `${name.toLowerCase()}_file_missing`);
   }
   requireValue("SAAS_EMAIL_PROVIDER", "email_provider_missing");
   requireValue("SAAS_BILLING_PROVIDER", "payment_provider_missing");
@@ -34,7 +40,7 @@ if (enabled) {
     if (process.env[name]) blockers.push(`${name.toLowerCase()}_inline_value_forbidden`);
     if (!String(process.env[`${name}_FILE`] || "").trim()) blockers.push(`${name.toLowerCase()}_file_missing`);
   }
-  for (const name of ["STRIPE_PRICE_NORMAL","STRIPE_PRICE_PROFESSIONAL","STRIPE_PRICE_ENTERPRISE","STRIPE_PRICE_ACTIVATION","STRIPE_PRICE_SETUP_NORMAL","STRIPE_PRICE_SETUP_PROFESSIONAL","STRIPE_PRICE_SETUP_ENTERPRISE","WB_TENDER_PUBLIC_BASE_URL","SAAS_INVITATION_PEPPER"]) requireValue(name);
+  for (const name of ["STRIPE_PRICE_NORMAL","STRIPE_PRICE_PROFESSIONAL","STRIPE_PRICE_ENTERPRISE","STRIPE_PRICE_ACTIVATION","STRIPE_PRICE_SETUP_NORMAL","STRIPE_PRICE_SETUP_PROFESSIONAL","STRIPE_PRICE_SETUP_ENTERPRISE","WB_TENDER_PUBLIC_BASE_URL"]) requireValue(name);
   for (const name of ["SAAS_SMTP_HOST","SAAS_SMTP_PORT","SAAS_SMTP_SECURE","SAAS_SMTP_USER","SAAS_SMTP_PASSWORD","SAAS_SMTP_FROM"]) {
     if (process.env[name]) blockers.push(`${name.toLowerCase()}_inline_value_forbidden`);
     if (!String(process.env[`${name}_FILE`] || "").trim()) blockers.push(`${name.toLowerCase()}_file_missing`);
