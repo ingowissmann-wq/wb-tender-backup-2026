@@ -3916,8 +3916,15 @@ export function registerAutopilotRoutes(
               FROM tender.region_evaluations region JOIN unambiguous_scope scope
                 ON scope.company_id=region.company_id AND scope.canonical_service=r.canonical_service
               WHERE region.tender_id=r.tender_id AND region.company_id=r.company_id AND region.lot_id IS NULL
+                AND (region.tenant_id IS NULL OR region.tenant_id=r.tenant_id)
+                AND (region.canonical_service IS NULL OR region.canonical_service=r.canonical_service)
+                AND (region.profile_id IS NULL OR region.profile_id=r.profile_id)
+                AND (region.region_profile_version_id IS NULL OR region.region_profile_version_id=r.active_region_version_id)
+                AND (region.configuration_version_id IS NULL OR region.configuration_version_id=r.active_configuration_version_id)
                 AND region.source_data->>'pipelineVersion'='wb-daily-inbox-pipeline/1.0.0'
-              ORDER BY region.evaluation_version DESC LIMIT 1)e ON true
+              ORDER BY (region.region_profile_version_id=r.active_region_version_id) DESC NULLS LAST,
+                (region.configuration_version_id=r.active_configuration_version_id) DESC NULLS LAST,
+                region.evaluation_version DESC,region.created_at DESC,region.id DESC LIMIT 1)e ON true
             LEFT JOIN LATERAL(SELECT x.* FROM tender.calculations x WHERE x.tender_id=r.tender_id AND x.company_id=r.company_id AND x.lot_key=coalesce(r.lot_key,'') ORDER BY x.version DESC LIMIT 1)calc ON true
             LEFT JOIN LATERAL(SELECT x.* FROM tender.approval_requests x WHERE x.tender_id=r.tender_id AND x.calculation_id=calc.id AND x.action_type='BID_SUBMISSION' ORDER BY x.created_at DESC LIMIT 1)ar ON true
             WHERE (($8::boolean AND ar.status='REQUESTED') OR ($11::text[] IS NULL OR r.relevance_status=ANY($11))) AND (r.primary_company OR ($7::boolean AND NOT r.has_primary AND r.canonical_rank=1)) AND ($2::uuid IS NULL OR r.company_id=$2) AND ($4='' OR r.service_line=$4)
@@ -4135,7 +4142,7 @@ export function registerAutopilotRoutes(
       const requestedLot = String(lotChoice.lot?.lot_key || "");
       const evaluation = (
         await pool.query(
-          `SELECT e.*,t.id tender_id,scope.company_id,coalesce(e.classification,'REGION_UNRESOLVED') classification,
+          `SELECT e.*,t.id tender_id,scope.company_id,scope.tenant_id scope_tenant_id,scope.canonical_service scope_canonical_service,scope.profile_id scope_profile_id,scope.active_region_version_id scope_region_profile_version_id,coalesce(e.classification,'REGION_UNRESOLVED') classification,
              coalesce(e.regional_decision,'REVIEW_REQUIRED') regional_decision,
              coalesce(e.explanation,'Für diesen neuen Datensatz liegt noch keine stabile Regionsmaterialisierung vor.') explanation,
              coalesce(e.detected_states,'[]'::jsonb) detected_states,coalesce(e.detected_nuts,'[]'::jsonb) detected_nuts,
@@ -4151,8 +4158,13 @@ export function registerAutopilotRoutes(
              AND (CASE r.service_line WHEN 'facility-management' THEN 'facility_management' WHEN 'emergency-services' THEN 'emergency_services' ELSE r.service_line END)=scope.canonical_service
            LEFT JOIN LATERAL(SELECT region.* FROM tender.region_evaluations region
              WHERE region.tender_id=t.id AND region.company_id=scope.company_id AND region.lot_id IS NULL
+               AND (region.tenant_id IS NULL OR region.tenant_id=scope.tenant_id)
+               AND (region.canonical_service IS NULL OR region.canonical_service=scope.canonical_service)
+               AND (region.profile_id IS NULL OR region.profile_id=scope.profile_id)
+               AND (region.region_profile_version_id IS NULL OR region.region_profile_version_id=scope.active_region_version_id)
                AND region.source_data->>'pipelineVersion'='wb-daily-inbox-pipeline/1.0.0'
-             ORDER BY region.evaluation_version DESC LIMIT 1)e ON true
+             ORDER BY (region.region_profile_version_id=scope.active_region_version_id) DESC NULLS LAST,
+               region.evaluation_version DESC,region.created_at DESC,region.id DESC LIMIT 1)e ON true
            LEFT JOIN tender.current_registered_tender_company_portals registered ON registered.tender_id=t.id AND registered.company_id=scope.company_id
            WHERE scope.company_id=$2 AND scope.canonical_service=$4
              AND (coalesce(r.lot_key,'')=$3 OR (r.lot_key IS NULL AND $3<>'' AND EXISTS(
@@ -4184,11 +4196,16 @@ export function registerAutopilotRoutes(
              WHERE ev.tender_id=life.tender_id AND el.lot_key=life.lot_key ORDER BY ev.version DESC LIMIT 1)enriched ON true
            LEFT JOIN LATERAL(SELECT region.* FROM tender.region_evaluations region
              WHERE region.tender_id=life.tender_id AND region.company_id=$2 AND region.lot_id=l.id
+               AND (region.tenant_id IS NULL OR region.tenant_id=$3::uuid)
+               AND (region.canonical_service IS NULL OR region.canonical_service=$4)
+               AND (region.profile_id IS NULL OR region.profile_id=$5::uuid)
+               AND (region.region_profile_version_id IS NULL OR region.region_profile_version_id=$6::uuid)
                AND region.source_data->>'pipelineVersion'='wb-daily-inbox-pipeline/1.0.0'
-             ORDER BY region.evaluation_version DESC LIMIT 1)e ON true
+             ORDER BY (region.region_profile_version_id=$6::uuid) DESC NULLS LAST,
+               region.evaluation_version DESC,region.created_at DESC,region.id DESC LIMIT 1)e ON true
            WHERE life.tender_id=$1 AND life.is_current
            ORDER BY life.lot_key`,
-          [req.params.tenderId, company.company_id],
+          [req.params.tenderId, company.company_id,evaluation.scope_tenant_id,evaluation.scope_canonical_service,evaluation.scope_profile_id,evaluation.scope_region_profile_version_id],
         )
       ).rows;
       const latest =
