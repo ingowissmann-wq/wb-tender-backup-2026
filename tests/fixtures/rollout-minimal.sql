@@ -101,6 +101,13 @@ CREATE TABLE saas.pending_registrations(
   iam_provisioned_at timestamptz,
   updated_at timestamptz
 );
+CREATE TABLE saas.checkout_sessions(
+  provider text,
+  provider_checkout_ref text,
+  tenant_id uuid,
+  plan_code text,
+  status text
+);
 CREATE TABLE saas.subscriptions(tenant_id uuid PRIMARY KEY,status text);
 CREATE TABLE saas.tenant_memberships(
   tenant_id uuid,

@@ -41,14 +41,14 @@ export async function loadSaasContext(pool, userId) {
   const loaded = await withTenantContext(pool, { tenantId, actorUserId: userId }, async (db) => {
     const result = await db.query(`
     SELECT m.tenant_id,m.role,m.status membership_status,t.slug,t.display_name,t.status tenant_status,t.tenant_kind,
-      s.id subscription_id,s.plan_code,s.commercial_scope,s.status,s.trial_started_at,s.trial_ends_at,s.trial_claimed_at,
+      s.id subscription_id,s.plan_code,s.commercial_scope,s.billing_collection,s.status,s.trial_started_at,s.trial_ends_at,s.trial_claimed_at,
       s.current_period_ends_at,p.seat_limit,p.company_limit,
       coalesce(array_agg(DISTINCT c.tender_company_id) FILTER(WHERE c.status='ACTIVE' AND c.tender_company_id IS NOT NULL),'{}'::uuid[]) company_ids
     FROM saas.tenant_memberships m JOIN saas.tenants t ON t.id=m.tenant_id
     JOIN saas.subscriptions s ON s.tenant_id=t.id JOIN saas.plans p ON p.code=s.plan_code
     LEFT JOIN saas.tenant_companies c ON c.tenant_id=t.id
     WHERE m.user_id=$1 AND m.status='ACTIVE'
-    GROUP BY m.tenant_id,m.role,m.status,t.slug,t.display_name,t.status,t.tenant_kind,s.id,s.plan_code,s.commercial_scope,s.status,s.trial_started_at,s.trial_ends_at,s.trial_claimed_at,s.current_period_ends_at,p.seat_limit,p.company_limit
+    GROUP BY m.tenant_id,m.role,m.status,t.slug,t.display_name,t.status,t.tenant_kind,s.id,s.plan_code,s.commercial_scope,s.billing_collection,s.status,s.trial_started_at,s.trial_ends_at,s.trial_claimed_at,s.current_period_ends_at,p.seat_limit,p.company_limit
     ORDER BY m.tenant_id LIMIT 2`, [userId]);
     if (!result.rowCount) return null;
     const grants = (await db.query("SELECT module_key,enabled,source,starts_at,ends_at FROM saas.tenant_module_entitlements WHERE tenant_id=$1 AND starts_at<=now() AND (ends_at IS NULL OR ends_at>now())", [tenantId])).rows;
@@ -93,9 +93,11 @@ export async function registerPendingTenant(client, input, { verificationPepper,
   const plan = normalizePlanCode(input.plan);
   const passwordHash = String(input.passwordHash || "");
   const mfaSecretEncrypted = String(input.mfaSecretEncrypted || "");
+  const billingPath = String(input.billingPath || "").toUpperCase();
   if (!emailPattern.test(email) || email.length > 254) throw Object.assign(new Error("email_invalid"), { statusCode: 400 });
   if (company.length < 2) throw Object.assign(new Error("company_name_invalid"), { statusCode: 400 });
   if (!passwordHash.startsWith("scrypt$") || mfaSecretEncrypted.length < 32) throw Object.assign(new Error("account_security_invalid"), { statusCode: 400 });
+  if (!["AUTO_CARD","INVOICE_KLARNA","INVOICE_BILLIE"].includes(billingPath)) throw Object.assign(new Error("billing_path_invalid"), { statusCode: 400 });
   const identityHash = customerIdentityHash(email, verificationPepper);
   const token = verificationToken(), tokenHash = hashVerificationToken(token, verificationPepper);
   const tenantId = crypto.randomUUID(), slug = `account-${tenantId.slice(0, 12)}`;
@@ -107,13 +109,13 @@ export async function registerPendingTenant(client, input, { verificationPepper,
     if (!availablePlan.rowCount) throw Object.assign(new Error("plan_not_available"), { statusCode: 409 });
     await client.query("SELECT set_config('app.tenant_id',$1,true)", [tenantId]);
     await client.query("INSERT INTO saas.tenants(id,slug,display_name,customer_identity_hash) VALUES($1,$2,$3,$4)", [tenantId, slug, company, identityHash]);
-    await client.query(`INSERT INTO saas.pending_registrations(tenant_id,email,requested_plan_code,verification_token_hash,verification_expires_at,request_ip_hash,request_user_agent_hash,password_hash,mfa_secret_encrypted)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [tenantId, email, plan, tokenHash, new Date(now.getTime() + 24 * 60 * 60 * 1000), digest(requestIp), digest(userAgent), passwordHash, mfaSecretEncrypted]);
+    await client.query(`INSERT INTO saas.pending_registrations(tenant_id,email,requested_plan_code,verification_token_hash,verification_expires_at,request_ip_hash,request_user_agent_hash,password_hash,mfa_secret_encrypted,billing_path)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, [tenantId, email, plan, tokenHash, new Date(now.getTime() + 24 * 60 * 60 * 1000), digest(requestIp), digest(userAgent), passwordHash, mfaSecretEncrypted, billingPath]);
     await client.query("INSERT INTO saas.subscriptions(tenant_id,plan_code,status) VALUES($1,$2,'PENDING_PAYMENT')", [tenantId, plan]);
     await client.query("SELECT tenant_portal.provision_empty_tenant($1,$2)", [tenantId, company]);
     await client.query("INSERT INTO saas.audit_events(tenant_id,action,target_type,target_id,metadata) VALUES($1,'REGISTRATION_CREATED','tenant',$1::uuid::text,$2)", [tenantId, { plan, externalWrite: false, productionAccessGranted: false }]);
     await client.query("COMMIT");
-    return { tenantId, email, plan, token };
+    return { tenantId, email, plan, token, billingPath };
   } catch (error) { await client.query("ROLLBACK"); throw error; }
 }
 
@@ -130,7 +132,7 @@ export async function verifyPendingRegistration(pool, token, verificationPepper,
     await client.query("SELECT set_config('app.tenant_id',$1,true)", [String(lookup.rows[0].tenant_id)]);
     const result = await client.query(`UPDATE saas.pending_registrations SET status='PAYMENT_PENDING',email_verified_at=coalesce(email_verified_at,$2),updated_at=$2
       WHERE verification_token_hash=$1 AND verification_expires_at>$2 AND status IN('EMAIL_VERIFICATION_PENDING','PAYMENT_PENDING')
-      RETURNING tenant_id,requested_plan_code`, [tokenHash, now]);
+      RETURNING tenant_id,requested_plan_code,billing_path`, [tokenHash, now]);
     await client.query("INSERT INTO saas.audit_events(tenant_id,action,metadata) VALUES($1,'EMAIL_VERIFIED',$2)", [result.rows[0].tenant_id, { productionAccessGranted: false }]);
     await client.query("COMMIT");
     return result.rows[0];
@@ -170,8 +172,8 @@ export async function applyBillingEvent(client, event, rawPayload, now = new Dat
     }
     if (mapped === "PAYMENT_CONFIRMED") {
       if (!event.checkoutRef) throw new Error("checkout_session_reference_missing");
-      const checkout = await client.query("UPDATE saas.checkout_sessions SET status='PAYMENT_CONFIRMED',confirmed_at=$4 WHERE provider=$1 AND provider_checkout_ref=$2 AND tenant_id=$3 AND status='CREATED' RETURNING plan_code", [event.provider,event.checkoutRef,event.tenantId,now]);
-      if (!checkout.rowCount || checkout.rows[0].plan_code !== current.plan_code) throw new Error("checkout_session_not_bound");
+      const checkout = await client.query("UPDATE saas.checkout_sessions SET status='PAYMENT_CONFIRMED',confirmed_at=$4 WHERE provider=$1 AND provider_checkout_ref=$2 AND tenant_id=$3 AND status='CREATED' RETURNING plan_code,billing_path", [event.provider,event.checkoutRef,event.tenantId,now]);
+      if (!checkout.rowCount || checkout.rows[0].plan_code !== current.plan_code || checkout.rows[0].billing_path !== event.billingPath) throw new Error("checkout_session_not_bound");
       const registration = (await client.query("SELECT email_verified_at,iam_provisioned_at FROM saas.pending_registrations WHERE tenant_id=$1 FOR UPDATE", [event.tenantId])).rows[0];
       if (!registration?.email_verified_at) throw new Error("activation_prerequisites_missing");
       const tenant = (await client.query("SELECT customer_identity_hash FROM saas.tenants WHERE id=$1", [event.tenantId])).rows[0];
@@ -179,6 +181,7 @@ export async function applyBillingEvent(client, event, rawPayload, now = new Dat
       if (!claim.rowCount) throw new Error("trial_already_claimed");
     }
     await client.query(`UPDATE saas.subscriptions SET status=$2,plan_code=$10,trial_started_at=coalesce($3,trial_started_at),trial_ends_at=coalesce($4,trial_ends_at),trial_claimed_at=coalesce($5,trial_claimed_at),provider=$6,provider_customer_ref=coalesce($7,provider_customer_ref),provider_subscription_ref=coalesce($8,provider_subscription_ref),version=version+1,updated_at=$9 WHERE tenant_id=$1`, [event.tenantId, update.status, update.trialStartedAt || null, update.trialEndsAt || null, update.trialClaimedAt || null, event.provider, event.customerRef || null, event.subscriptionRef || null, now, planCode]);
+    if (mapped === "PAYMENT_CONFIRMED") await client.query("UPDATE saas.subscriptions SET billing_collection=$2 WHERE tenant_id=$1", [event.tenantId,event.billingPath === "AUTO_CARD" ? "AUTO_CARD" : "MANUAL_INVOICE"]);
     if (mapped === "PAYMENT_CONFIRMED") {
       await client.query("UPDATE saas.tenants SET status='ACTIVE',updated_at=$2 WHERE id=$1", [event.tenantId, now]);
       await client.query("UPDATE saas.pending_registrations SET status=CASE WHEN iam_provisioned_at IS NULL THEN 'IAM_PROVISIONING_PENDING' ELSE 'ACTIVATED' END,verification_token_hash=NULL,updated_at=$2 WHERE tenant_id=$1", [event.tenantId, now]);
@@ -239,12 +242,12 @@ export function registerSaasRoutes(app, { pool, enabled, verificationPepper, inv
   app.get("/saas/pricing", { preHandler: guard }, async (_, r) => {
     const plans = (await pool.query("SELECT * FROM saas.plans WHERE active ORDER BY position")).rows;
     const cards = plans.map((p) => `<article class="plan"><h2>${esc(p.display_name)}</h2><p>${esc(p.description)}</p><p class="price">${(p.recommended_monthly_price_minor / 100).toLocaleString("de-DE", { minimumFractionDigits: 2 })} € netto / Monat</p><p>Einrichtung: ${Number(p.metadata?.setup_fee_minor || 0).toLocaleString("de-DE", { style: "currency", currency: "EUR" })} netto</p><p>${p.seat_limit || "Unbegrenzte"} Sitze · ${p.company_limit || "Unbegrenzte"} Unternehmen</p><a class="button" href="/saas/register?plan=${encodeURIComponent(p.code)}">${esc(p.display_name)} buchen</a></article>`).join("");
-    return r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="index,follow"><title>${esc(process.env.WB_TENDER_COMMERCIAL_PRODUCT_NAME || "WB Tender")} – Pakete</title><link rel="stylesheet" href="/saas/assets/commercial.css"></head><body><header><strong>${esc(process.env.WB_TENDER_COMMERCIAL_BRAND || "WB Tender")}</strong><a href="/saas/login">Anmelden</a></header><main><section class="hero"><h1>Ausschreibungen finden, kalkulieren und kontrolliert abgeben</h1><p>Drei einzeln buchbare Pakete für den vollständigen Tender-Workflow.</p></section><p class="notice"><strong>Faire Startphase:</strong> 299,00 € netto werden sofort berechnet. Einrichtung und erste Monatsrate werden nach 14 Tagen fällig. Zahlung ausschließlich per Kreditkarte; Steuern werden im Checkout berechnet.</p><section class="plans">${cards}</section></main><footer>WB-Holding AG · Am Spielberg 6 · 86316 Friedberg · USt-IdNr. DE460662472 · info@wb-holding.ag</footer></body></html>`);
+    return r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="index,follow"><title>${esc(process.env.WB_TENDER_COMMERCIAL_PRODUCT_NAME || "WB Tender")} – Pakete</title><link rel="stylesheet" href="/saas/assets/commercial.css"></head><body><header><strong>${esc(process.env.WB_TENDER_COMMERCIAL_BRAND || "WB Tender")}</strong><a href="/saas/login">Anmelden</a></header><main><section class="hero"><h1>Ausschreibungen finden, kalkulieren und kontrolliert abgeben</h1><p>Drei einzeln buchbare Pakete für den vollständigen Tender-Workflow.</p></section><p class="notice"><strong>Faire Startphase:</strong> 299,00 € netto werden sofort berechnet. Einrichtung und erste Monatsrate werden nach 14 Tagen fällig. Karte wird automatisch weiterberechnet; bei Klarna-Sofortzahlung oder Billie erfolgt die weitere Abrechnung per Rechnung. Keine SEPA-Lastschrift.</p><section class="plans">${cards}</section></main><footer>WB-Holding AG · Am Spielberg 6 · 86316 Friedberg · USt-IdNr. DE460662472 · info@wb-holding.ag</footer></body></html>`);
   });
   app.get("/saas/register", { preHandler: guard }, async (req, r) => {
     const plans = (await pool.query("SELECT code,display_name FROM saas.plans WHERE active AND price_status='APPROVED' ORDER BY position")).rows;
     const options = plans.map((p) => `<option value="${esc(p.code)}"${req.query?.plan === p.code ? " selected" : ""}>${esc(p.display_name)}</option>`).join("");
-    return r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Konto anlegen</title><link rel="stylesheet" href="/saas/assets/commercial.css"><script src="/saas/assets/register.js" defer></script></head><body><header><strong>${esc(process.env.WB_TENDER_COMMERCIAL_BRAND || "Tender Autopilot")}</strong><a href="/saas/pricing">Pakete</a></header><main class="panel"><h1>Konto anlegen</h1><p class="notice">299,00 € netto werden sofort berechnet. Einrichtung und erste Monatsrate werden nach 14 Tagen fällig.</p><form method="post" action="/api/saas/register"><label>Geschäftliche E-Mail<input type="email" name="email" required autocomplete="email"></label><label>Unternehmen<input name="company" required maxlength="160" autocomplete="organization"></label><label>Paket<select name="plan">${options}</select></label><label>Passwort (mindestens 12 Zeichen)<input type="password" name="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><label>Passwort wiederholen<input type="password" name="passwordConfirmation" minlength="12" maxlength="128" required autocomplete="new-password"></label><button type="submit">Sicheres Konto anlegen</button></form><section id="mfa-setup" hidden><h2>Authenticator einrichten</h2><p>Scannen Sie den QR-Code jetzt mit Ihrer Authenticator-App. Den sechsstelligen Code benötigen Sie nach dem Klick auf den Bestätigungslink in Ihrer E-Mail.</p><img alt="QR-Code für Authenticator" width="220" height="220"><p>Manueller Schlüssel: <code></code></p></section><p id="registration-status" role="status" aria-live="polite"></p></main></body></html>`);
+    return r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Konto anlegen</title><link rel="stylesheet" href="/saas/assets/commercial.css"><script src="/saas/assets/register.js" defer></script></head><body><header><strong>${esc(process.env.WB_TENDER_COMMERCIAL_BRAND || "Tender Autopilot")}</strong><a href="/saas/pricing">Pakete</a></header><main class="panel"><h1>Konto anlegen</h1><p class="notice">299,00 € netto werden sofort berechnet. Einrichtung und erste Monatsrate werden nach 14 Tagen fällig.</p><form method="post" action="/api/saas/register"><label>Geschäftliche E-Mail<input type="email" name="email" required autocomplete="email"></label><label>Unternehmen<input name="company" required maxlength="160" autocomplete="organization"></label><label>Paket<select name="plan">${options}</select></label><label>Zahlungsart<select name="billingPath" required><option value="AUTO_CARD">Karte – spätere Gebühren automatisch</option><option value="INVOICE_KLARNA">Klarna-Sofortzahlung – später per Rechnung</option><option value="INVOICE_BILLIE">Billie – später per Rechnung</option></select></label><label>Passwort (mindestens 12 Zeichen)<input type="password" name="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><label>Passwort wiederholen<input type="password" name="passwordConfirmation" minlength="12" maxlength="128" required autocomplete="new-password"></label><button type="submit">Sicheres Konto anlegen</button></form><section id="mfa-setup" hidden><h2>Authenticator einrichten</h2><p>Scannen Sie den QR-Code jetzt mit Ihrer Authenticator-App. Den sechsstelligen Code benötigen Sie nach dem Klick auf den Bestätigungslink in Ihrer E-Mail.</p><img alt="QR-Code für Authenticator" width="220" height="220"><p>Manueller Schlüssel: <code></code></p></section><p id="registration-status" role="status" aria-live="polite"></p></main></body></html>`);
   });
   app.post("/api/saas/register", { preHandler: guard, config: { rateLimit: { max: 8, timeWindow: "1 hour" } } }, async (req, reply) => {
     const client = await pool.connect();
@@ -275,8 +278,8 @@ export function registerSaasRoutes(app, { pool, enabled, verificationPepper, inv
     try {
       if (!billingAdapter.configured) return reply.code(503).send({ error: "payment_provider_not_configured" });
       const verified = await verifyPendingRegistration(pool, String(req.body?.token || ""), verificationPepper, fieldEncryptionKey, req.body?.mfaCode);
-      const checkout = await billingAdapter.createCheckout({ tenantId: verified.tenant_id, plan: verified.requested_plan_code, trialDays: 14, paymentRequired: true });
-      await withTenantContext(pool,{tenantId:verified.tenant_id},(db)=>db.query("INSERT INTO saas.checkout_sessions(provider,provider_checkout_ref,tenant_id,plan_code) VALUES($1,$2,$3,$4) ON CONFLICT(provider,provider_checkout_ref) DO NOTHING",[billingAdapter.provider,checkout.id,verified.tenant_id,verified.requested_plan_code]));
+      const checkout = await billingAdapter.createCheckout({ tenantId: verified.tenant_id, plan: verified.requested_plan_code, billingPath: verified.billing_path, trialDays: 14, paymentRequired: true });
+      await withTenantContext(pool,{tenantId:verified.tenant_id},(db)=>db.query("INSERT INTO saas.checkout_sessions(provider,provider_checkout_ref,tenant_id,plan_code,billing_path) VALUES($1,$2,$3,$4,$5) ON CONFLICT(provider,provider_checkout_ref) DO NOTHING",[billingAdapter.provider,checkout.id,verified.tenant_id,verified.requested_plan_code,verified.billing_path]));
       return { status: "PAYMENT_PENDING", checkoutUrl: checkout.url, productionAccessGranted: false };
     }
     catch (error) { return reply.code(error.statusCode || 400).send({ error: error.message }); }

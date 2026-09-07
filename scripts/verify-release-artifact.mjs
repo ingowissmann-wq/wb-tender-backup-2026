@@ -81,6 +81,8 @@ const required = [
   "migrations/161_saas_self_service_checkout_and_oidc.down.sql",
   "migrations/162_saas_native_self_service_iam.sql",
   "migrations/162_saas_native_self_service_iam.down.sql",
+  "migrations/163_saas_split_billing_collection.sql",
+  "migrations/163_saas_split_billing_collection.down.sql",
   "tests/critical-production-repair.test.mjs",
   "docs/kundenhandbuch-angebotsabgabe.md",
   "deployment/rollback-release-auth-and-commercial-enforcement.sql",
