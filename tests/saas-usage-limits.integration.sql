@@ -54,4 +54,19 @@ END $$;
 DO $$ BEGIN
  IF has_table_privilege('tender_api_runtime','saas.automation_usage','INSERT,UPDATE,DELETE,TRUNCATE') THEN RAISE EXCEPTION 'usage_ledger_mutable_by_runtime'; END IF;
 END $$;
+DO $$
+DECLARE tenant uuid:=gen_random_uuid(); workspace uuid:=gen_random_uuid(); job uuid:=gen_random_uuid(); claimed tenant_portal.jobs;
+BEGIN
+ INSERT INTO saas.tenants(id,status) VALUES(tenant,'ACTIVE');
+ INSERT INTO saas.subscriptions(tenant_id,status,plan_code,current_period_ends_at) VALUES(tenant,'ACTIVE','NORMAL',now()+interval '1 month');
+ PERFORM set_config('app.tenant_id',tenant::text,true);
+ INSERT INTO tenant_portal.tender_workspaces(id,tenant_id) VALUES(workspace,tenant);
+ INSERT INTO tenant_portal.jobs(id,tenant_id,module_key,status,payload) VALUES(job,tenant,'tender_autopilot','QUEUED',jsonb_build_object('workspaceId',workspace));
+ BEGIN
+  PERFORM (tenant_portal.claim_module_job(tenant,job)).*;
+  RAISE EXCEPTION 'expected_composite_expansion_failure_not_reproduced';
+ EXCEPTION WHEN raise_exception THEN IF SQLERRM<>'job_not_claimable' THEN RAISE; END IF; END;
+ SELECT * INTO claimed FROM tenant_portal.claim_module_job(tenant,job);
+ IF claimed.id IS DISTINCT FROM job OR claimed.status<>'RUNNING' THEN RAISE EXCEPTION 'single_job_claim_failed'; END IF;
+END $$;
 ROLLBACK;

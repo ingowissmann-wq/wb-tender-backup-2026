@@ -43,7 +43,7 @@ export async function claimTenantModuleJob(pool, context, jobId, moduleKey) {
   const decision = requireSaasJobModule({ saas: context.saas }, normalizeModuleKey(moduleKey));
   if (!decision.allowed) throw Object.assign(new Error(decision.error), { statusCode: decision.statusCode, module: decision.module });
   return withTenantContext(pool, context.tenant, async (db) => {
-    const result = await db.query("SELECT (tenant_portal.claim_module_job($1,$2)).*", [context.tenant.id, jobId]);
+    const result = await db.query("SELECT * FROM tenant_portal.claim_module_job($1,$2)", [context.tenant.id, jobId]);
     return result.rows[0];
   });
 }

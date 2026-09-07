@@ -218,6 +218,7 @@ export async function applyBillingEvent(client, event, rawPayload, now = new Dat
         if (!provisioned) throw new Error("activation_identity_missing");
       }
     }
+    if (mapped === "PAYMENT_CONFIRMED") await client.query("SELECT saas.enqueue_booking_confirmation($1,$2)", [event.tenantId,event.bookingId]);
     await client.query("INSERT INTO saas.audit_events(tenant_id,action,metadata) VALUES($1,$2,$3)", [event.tenantId, `BILLING_${mapped}`, { provider: event.provider, providerEventId: event.id, purchaseKind: event.purchaseKind, bookingId: event.bookingId || null, checkoutRef: event.checkoutRef || null }]);
     await client.query("COMMIT"); return { idempotent: false, status: update.status };
   } catch (error) { await client.query("ROLLBACK"); throw error; }

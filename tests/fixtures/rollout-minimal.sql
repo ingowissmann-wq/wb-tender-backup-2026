@@ -138,7 +138,7 @@ CREATE TABLE saas.audit_events(
 ALTER TABLE saas.subscriptions ADD COLUMN plan_code text, ADD COLUMN current_period_ends_at timestamptz;
 CREATE TABLE saas.tenant_companies(id uuid PRIMARY KEY,tenant_id uuid,status text);
 CREATE SCHEMA tenant_portal;
-CREATE TABLE tenant_portal.jobs(id uuid PRIMARY KEY,tenant_id uuid,module_key text,status text,payload jsonb);
+CREATE TABLE tenant_portal.jobs(id uuid PRIMARY KEY,tenant_id uuid,module_key text,status text,payload jsonb,claimed_at timestamptz);
 CREATE TABLE tenant_portal.tender_workspaces(id uuid PRIMARY KEY,tenant_id uuid,public_tender_id uuid);
 CREATE FUNCTION saas.tenant_matches(candidate uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
  SELECT candidate=nullif(current_setting('app.tenant_id',true),'')::uuid
@@ -167,3 +167,16 @@ CREATE TRIGGER saas_company_plan_limit BEFORE INSERT OR UPDATE OF status ON saas
 
 CREATE TABLE tender.tender_versions(id uuid PRIMARY KEY,tender_id uuid,version integer,created_at timestamptz);
 CREATE TABLE tender.tender_portal_resolutions(tender_id uuid,tender_version_id uuid,portal_id uuid,resolution_status text);
+
+CREATE OR REPLACE FUNCTION tenant_portal.claim_module_job(candidate uuid,candidate_job uuid) RETURNS tenant_portal.jobs
+LANGUAGE plpgsql SECURITY INVOKER AS $$
+DECLARE claimed tenant_portal.jobs;
+BEGIN
+  IF NOT saas.tenant_matches(candidate) THEN RAISE EXCEPTION 'tenant_context_required'; END IF;
+  SELECT * INTO claimed FROM tenant_portal.jobs WHERE tenant_id=candidate AND id=candidate_job FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'job_not_found'; END IF;
+  IF NOT saas.module_entitled(candidate,claimed.module_key,now()) THEN RAISE EXCEPTION 'module_entitlement_required'; END IF;
+  IF claimed.status<>'QUEUED' THEN RAISE EXCEPTION 'job_not_claimable'; END IF;
+  UPDATE tenant_portal.jobs SET status='RUNNING',claimed_at=now() WHERE tenant_id=candidate AND id=candidate_job RETURNING * INTO claimed;
+  RETURN claimed;
+END $$;
