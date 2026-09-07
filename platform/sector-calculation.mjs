@@ -1,51 +1,78 @@
-import {isExplicitlySupplied,snapshotHash} from "./canonical-truth.mjs";
+import {snapshotHash} from "./canonical-truth.mjs";
+import {normalizeUnit, normalizeDecimal} from "./unit-catalog.mjs";
 
-const numeric=value=>{
-  if(Array.isArray(value)){for(const item of value){const parsed=numeric(item);if(parsed!==null)return parsed}return null}
-  const candidate=typeof value==="object"&&value!==null?(value.value??value.amount??value.percent??value.hours??value.rate):value;
-  if(candidate===null||candidate===undefined||String(candidate).trim()==="")return null;
-  const match=String(candidate).replace(/\s/g,"").replace(",",".").match(/-?\d+(?:\.\d+)?/),parsed=match?Number(match[0]):NaN;
-  return Number.isFinite(parsed)?parsed:null;
-};
-const rate=(parameters,key,fallback=0)=>numeric(parameters[key])??fallback;
+export const CALCULATION_FORMULA_VERSION="WB_COST_CATALOG_V4";
 const money=value=>Math.round((value+Number.EPSILON)*100)/100;
-const durationMonths=(value,fallback=12)=>{const values=Array.isArray(value)?value:[value];for(const item of values){const dates=[...String(item??"").matchAll(/(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})/g)].map(x=>new Date(Date.UTC(Number(x[3]),Number(x[2])-1,Number(x[1]))));if(dates.length>=2&&dates.at(-1)>=dates[0])return Math.max(1,(dates.at(-1).getUTCFullYear()-dates[0].getUTCFullYear())*12+dates.at(-1).getUTCMonth()-dates[0].getUTCMonth()+1)}const parsed=numeric(value);return parsed&&parsed>0?parsed:fallback};
 
-export function calculateSectorTender({serviceArea,parameters={},facts={},provenance={},contractMonths=12}={}) {
-  const productiveHours=numeric(facts.productiveHours??facts.requiredHours??facts.hours);
-  const baseWage=rate(parameters,"C01",null);
-  const missing=[];
-  if(productiveHours===null||productiveHours<=0)missing.push("Produktivstunden");
-  if(baseWage===null)missing.push("C01 Grundlohn");
-  if((productiveHours===null||productiveHours<=0)&&!isExplicitlySupplied(facts.workdays))missing.push("Arbeitstage");
-  if(!isExplicitlySupplied(facts.duration??contractMonths))missing.push("Vertragslaufzeit");
-  if(missing.length)return {status:"CALCULATION_BLOCKED_MISSING_INPUT",missing,provenance,externalTransmission:false};
-  const months=durationMonths(facts.duration,contractMonths);
-  const fteDivisor=rate(parameters,"C05",173.33);
-  const fte=productiveHours/(fteDivisor*Math.max(1,months));
-  const directWages=productiveHours*baseWage;
-  const supplements=directWages*rate(parameters,"C03")/100;
-  const employerOnCosts=(directWages+supplements)*rate(parameters,"C04")/100;
-  const holidayReserve=directWages*rate(parameters,"C06")/100;
-  const sicknessReserve=directWages*rate(parameters,"C07")/100;
-  const overhead=(directWages+supplements+employerOnCosts+holidayReserve+sicknessReserve)*rate(parameters,"C08")/100;
-  const recruiting=fte*rate(parameters,"C09");
-  const management=fte*rate(parameters,"C10");
-  const material=rate(parameters,"C11");
-  const equipment=rate(parameters,"C12");
-  const clothing=rate(parameters,"C13");
-  const vehicles=rate(parameters,"C14");
-  const insurance=rate(parameters,"C15");
-  const other=rate(parameters,"C16")+rate(parameters,"C17");
-  const contractWeeks=Math.max(1,months)*52/12,securityVideo=serviceArea==="security"?rate(parameters,"S01"):0,securityFacilityWeeks=serviceArea==="security"?rate(parameters,"S02")*contractWeeks:0,securityEmergencyWeeks=serviceArea==="security"?rate(parameters,"S03")*contractWeeks:0,securitySiteEquipment=serviceArea==="security"?rate(parameters,"S04"):0,securityNonPersonnelCosts=securityVideo+securityFacilityWeeks+securityEmergencyWeeks+securitySiteEquipment;
-  const costBase=directWages+supplements+employerOnCosts+holidayReserve+sicknessReserve+overhead+recruiting+management+material+equipment+clothing+vehicles+insurance+other+securityNonPersonnelCosts;
-  const risk=costBase*rate(parameters,"C18")/100;
-  const db1=rate(parameters,"C19"),db2=rate(parameters,"C20"),db3=rate(parameters,"C21");
-  const total=costBase+risk;
-  const targetPrice=total/(1-Math.min(95,db3||db2||db1||0)/100);
-  const contribution1=targetPrice-directWages-supplements-employerOnCosts,contribution2=targetPrice-(directWages+supplements+employerOnCosts+holidayReserve+sicknessReserve+material+equipment+clothing+vehicles),contribution3=targetPrice-total,profit=targetPrice-total;
-  const result={schemaVersion:3,status:"CALCULATED",serviceArea,productiveHours:money(productiveHours),hoursPerMonth:money(productiveHours/months),hoursPerYear:money(productiveHours/months*12),nightHours:money(numeric(facts.nightHours)||0),sundayHours:money(numeric(facts.sundayHours)||0),holidayHours:money(numeric(facts.holidayHours)||0),staffingStrength:numeric(facts.staffingStrength),fte:money(fte),directWages:money(directWages),supplements:money(supplements),employerOnCosts:money(employerOnCosts),holidayReserve:money(holidayReserve),sicknessReserve:money(sicknessReserve),otherAbsenceReserve:money(other),overhead:money(overhead),recruiting:money(recruiting),siteAndOperationsManagement:money(management),material:money(material),equipment:money(equipment),clothing:money(clothing),vehicles:money(vehicles),insurance:money(insurance),securityNonPersonnelCosts:money(securityNonPersonnelCosts),securityCostParameters:{S01:securityVideo,S02:rate(parameters,"S02"),S03:rate(parameters,"S03"),S04:securitySiteEquipment,contractWeeks:money(contractWeeks)},risk:money(risk),db1Percent:db1,db2Percent:db2,db3Percent:db3,db1:money(contribution1),db2:money(contribution2),db3:money(contribution3),profit:money(profit),hourlyRate:money(targetPrice/productiveHours),squareMeterPrice:serviceArea==="cleaning"&&numeric(facts.areas)?money(targetPrice/numeric(facts.areas)):null,monthlyPrice:money(targetPrice/months),annualPrice:money(targetPrice/months*12),totalPrice:money(targetPrice),pricePositions:facts.pricePositions||[],provenance,externalTransmission:false};
-  return {...result,calculationHash:snapshotHash(result)};
+// Every cost uses its catalog unit. A missing value is never a zero cost.
+export function calculateSectorTender({serviceArea,parameters={},facts={},provenance={},effectiveAt}={}) {
+ const missing=[], values={}, units={};
+ const need=(name,value,{positive=false}={})=>{const n=normalizeDecimal(value);if(n===null||n<0||(positive&&n===0)){missing.push(name);return null;}return n;};
+ if(!["cleaning","security","facility_management","facility-management"].includes(serviceArea))missing.push("Leistungsart");
+ const point=Date.parse(effectiveAt);
+ if(!Number.isFinite(point))missing.push("Gültigkeitsdatum");
+ const keys=Array.from({length:21},(_,i)=>`C${String(i+1).padStart(2,"0")}`);
+ if(serviceArea==='security')keys.push('S01','S02','S03','S04');
+ for(const key of keys){
+  const item=parameters[key];
+  if(!item||typeof item!=="object"||!item.sourceVersionId||!item.parameterId||!item.validFrom){missing.push(`${key} freigegebene Quelle`);continue;}
+  if(!Number.isFinite(Date.parse(item.validFrom))||Date.parse(item.validFrom)>point||(item.validUntil&&(!Number.isFinite(Date.parse(item.validUntil))||Date.parse(item.validUntil)<point))){missing.push(`${key} Gültigkeit`);continue;}
+  const unit=normalizeUnit(key,item.unit);if(!unit){missing.push(`${key} Einheit`);continue;}units[key]=unit.id;
+  if(key==='C02'){if(!item.value||!String(typeof item.value==='object'?JSON.stringify(item.value):item.value).trim())missing.push('C02 Tarifgrundlage');values[key]=item.value;}
+  else if(key==='C03')values[key]=item.value;
+  else values[key]=need(key,item.value,{positive:key==='C01'});
+ }
+ const hours=need('Produktivstunden',facts.productiveHours??facts.requiredHours??facts.hours,{positive:true});
+ const months=need('Vertragslaufzeit in Monaten',facts.duration,{positive:true});
+ if(!provenance.productiveHours?.source)missing.push('Produktivstunden Quelle');
+ if(!provenance.contractDuration?.source)missing.push('Vertragslaufzeit Quelle');
+ for(const cell of facts.requiredCells||[]){
+  if(!cell?.address||!cell.source||normalizeDecimal(cell.value)===null||normalizeDecimal(cell.value)<=0)missing.push(`Pflichtfeld ${cell?.address||'unbekannt'}`);
+ }
+ const blocked=()=>({schemaVersion:4,formulaVersion:CALCULATION_FORMULA_VERSION,status:'CALCULATION_BLOCKED_MISSING_INPUT',missing:[...new Set(missing)],provenance,externalTransmission:false});
+ if(missing.length)return blocked();
+ const directWages=money(hours*values.C01);
+ let supplements=0;
+ // Percent-by-type requires matching actual hours, including explicit zeros.
+ const supplementRates=values.C03;
+ if(!supplementRates||typeof supplementRates!=='object'||Array.isArray(supplementRates)||Object.keys(supplementRates).length===0){missing.push('C03 Zuschläge je Art');}
+ else for(const [kind,rate] of Object.entries(supplementRates)){
+  const pct=need(`C03 ${kind}`,rate);if(pct===0)continue;
+  const quantity=need(`${kind} Zuschlagsstunden`,facts.supplementHours?.[kind]);
+  if(pct!==null&&quantity!==null){if(quantity>hours)missing.push(`${kind} Zuschlagsstunden überschreiten Gesamtstunden`);else supplements+=money(quantity*values.C01*pct/100);}
+ }
+ const percent=(base,key)=>money(base*values[key]/100);
+ const employerOnCosts=percent(directWages+supplements,'C04');
+ const holidayReserve=percent(directWages,'C05'),sicknessReserve=percent(directWages,'C06'),otherAbsenceReserve=percent(directWages,'C07');
+ const personnel=directWages+supplements+employerOnCosts+holidayReserve+sicknessReserve+otherAbsenceReserve;
+ const cost=(key,base)=>{
+  const rate=values[key];if(rate===0)return 0;
+  const unit=units[key];if(unit==='PERCENT')return money(base*rate/100);
+  if(unit==='EUR')return rate;
+  if(unit==='EUR_PER_HOUR')return money(rate*hours);
+  if(unit==='EUR_PER_MONTH')return money(rate*months);
+  if(unit==='EUR_PER_YEAR')return money(rate*months/12);
+  const quantity=need(`${key} Menge (${unit})`,facts.quantities?.[key]);
+  if(!provenance.quantities?.[key]?.source)missing.push(`${key} Mengenquelle`);
+  return quantity===null?0:money(rate*quantity);
+ };
+ const material=cost('C11',personnel),equipment=cost('C12',personnel),vehicles=cost('C13',personnel),travel=cost('C14',personnel),subcontractors=cost('C16',personnel);
+ const securityNonPersonnelCosts=serviceArea==='security'?['S01','S02','S03','S04'].reduce((sum,key)=>sum+cost(key,personnel),0):0;
+ const directCosts=money(personnel+material+equipment+vehicles+travel+subcontractors+securityNonPersonnelCosts);
+ const siteManagement=cost('C09',personnel),operationsManagement=cost('C10',personnel),recruiting=cost('C15',personnel),insurance=cost('C17',directCosts);
+ const attributableCosts=money(directCosts+siteManagement+operationsManagement+recruiting+insurance);
+ const overhead=cost('C08',attributableCosts),risk=percent(attributableCosts+overhead,'C18');
+ const totalCosts=money(attributableCosts+overhead+risk);
+ // Honor all three approved contribution targets; never silently clamp them.
+ const target=(base,key)=>{if(units[key]==='EUR')return base+values[key];if(values[key]>=100){missing.push(`${key} muss kleiner als 100 Prozent sein`);return 0;}return base/(1-values[key]/100);};
+ const targetPrice=Math.ceil((Math.max(target(directCosts,'C19'),target(attributableCosts,'C20'),target(totalCosts,'C21'))-Number.EPSILON)*100)/100;
+ if(![directCosts,attributableCosts,totalCosts,targetPrice].every(Number.isFinite))missing.push("Kostenwerte außerhalb des berechenbaren Bereichs");
+ if(missing.length)return blocked();
+ const result={schemaVersion:4,formulaVersion:CALCULATION_FORMULA_VERSION,status:'CALCULATED',serviceArea,effectiveAt:new Date(point).toISOString(),productiveHours:money(hours),hoursPerMonth:money(hours/months),hoursPerYear:money(hours/months*12),
+ directWages,supplements:money(supplements),employerOnCosts,holidayReserve,sicknessReserve,otherAbsenceReserve,material,equipment,vehicles,travel,subcontractors,securityNonPersonnelCosts,siteManagement,operationsManagement,recruiting,insurance,overhead,risk,directCosts,attributableCosts,totalCosts,
+ db1:money(targetPrice-directCosts),db2:money(targetPrice-attributableCosts),db3:money(targetPrice-totalCosts),profit:money(targetPrice-totalCosts),hourlyRate:money(targetPrice/hours),monthlyPrice:money(targetPrice/months),annualPrice:money(targetPrice/months*12),totalPrice:targetPrice,
+ inputVersion:snapshotHash({serviceArea,parameters,facts,provenance,effectiveAt}),provenance,externalTransmission:false};
+ return {...result,calculationHash:snapshotHash(result)};
 }
 
 export function buildManagementOutput({tender,lotKey,company,profileSnapshot,documentRevision,calculation,missing=[],jobId,correlationId,now=new Date().toISOString()}={}) {
