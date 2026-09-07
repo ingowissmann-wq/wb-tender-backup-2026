@@ -54,7 +54,7 @@ const stripeInvoiceSubscription = (invoice) =>
     : invoice?.subscription;
 
 const stripeTenantId = (stripeType, object) => {
-  if (stripeType === "checkout.session.completed") return object?.metadata?.tenant_id || object?.client_reference_id;
+  if (["checkout.session.completed", "checkout.session.async_payment_succeeded"].includes(stripeType)) return object?.metadata?.tenant_id || object?.client_reference_id;
   return object?.metadata?.tenant_id
     || object?.parent?.subscription_details?.metadata?.tenant_id
     || object?.subscription_details?.metadata?.tenant_id;
@@ -69,66 +69,73 @@ export class StripeBillingAdapter {
   }
   get provider() { return "stripe"; }
   get configured() { return true; }
-  async createCheckout({ tenantId, plan, billingPath = "AUTO_CARD", trialDays = 14, successUrl = `${this.publicBaseUrl}/saas/payment-complete`, cancelUrl = `${this.publicBaseUrl}/saas/pricing` }) {
-    const planCode = String(plan || "").toUpperCase();
-    const path = String(billingPath || "").toUpperCase();
-    if (!["AUTO_CARD","INVOICE_KLARNA","INVOICE_BILLIE"].includes(path)) throw new Error("stripe_billing_path_invalid");
-    const price = this.priceIds[planCode], setupPrice = this.setupPriceIds[planCode];
-    if (!price || !/^price_[A-Za-z0-9]+$/.test(price)) throw new Error("stripe_plan_price_not_configured");
-    if (!this.activationPriceId || !/^price_[A-Za-z0-9]+$/.test(this.activationPriceId)) throw new Error("stripe_activation_price_not_configured");
-    if (!setupPrice || !/^price_[A-Za-z0-9]+$/.test(setupPrice)) throw new Error("stripe_setup_price_not_configured");
-    if (!Number.isInteger(trialDays) || trialDays !== 14) throw new Error("stripe_trial_period_invalid");
-    const automatic = path === "AUTO_CARD";
+  async createCheckout({ tenantId, plan, purchaseKind, billingPath, bookingId, consentVersion, renewal = false }) {
+    const trial = purchaseKind === "TRIAL";
+    // Stripe explicitly excludes B2B from Klarna. Account capability alone
+    // does not authorize this business model: fail before creating a live session.
+    if (this.secretKey.startsWith("sk_live_") && billingPath === "INVOICE_KLARNA") throw new Error("billing_klarna_b2b_not_supported");
+    if (!["TRIAL", "PACKAGE"].includes(purchaseKind)) throw new Error("billing_purchase_kind_invalid");
+    if (!["AUTO_CARD", "INVOICE_KLARNA", "INVOICE_BILLIE"].includes(billingPath)) throw new Error("stripe_billing_path_invalid");
+    if (!bookingId || consentVersion !== "standalone-2026-09-07") throw new Error("billing_explicit_booking_required");
+    if (trial && (plan !== "TRIAL" || renewal)) throw new Error("billing_trial_contract_invalid");
+    if (!trial && !["NORMAL", "PROFESSIONAL", "ENTERPRISE"].includes(plan)) throw new Error("stripe_plan_price_not_configured");
+    if (renewal && billingPath === "AUTO_CARD") throw new Error("billing_manual_renewal_required");
+    const automatic = !trial && billingPath === "AUTO_CARD";
+    const method = billingPath === "AUTO_CARD" ? "card" : billingPath === "INVOICE_KLARNA" ? "klarna" : "billie";
     const body = new URLSearchParams({
       mode: automatic ? "subscription" : "payment",
-      "payment_method_types[0]": automatic ? "card" : path === "INVOICE_KLARNA" ? "klarna" : "billie",
-      "payment_method_collection": "always",
+      "payment_method_types[0]": method,
       "automatic_tax[enabled]": "true",
       "tax_id_collection[enabled]": "true",
       "billing_address_collection": "required",
       "consent_collection[terms_of_service]": "required",
-      "line_items[0][price]": automatic ? price : this.activationPriceId,
-      "line_items[0][quantity]": "1",
-      success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: cancelUrl,
+      success_url: `${this.publicBaseUrl}/saas/${trial ? "trial" : "package"}-complete?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${this.publicBaseUrl}/saas/pricing`,
       client_reference_id: tenantId,
       "metadata[tenant_id]": tenantId,
-      "metadata[plan_code]": planCode,
-      "metadata[billing_path]": path,
+      "metadata[plan_code]": plan,
+      "metadata[purchase_kind]": purchaseKind,
+      "metadata[billing_path]": billingPath,
+      "metadata[booking_id]": bookingId,
+      "metadata[consent_version]": consentVersion,
+      "metadata[renewal]": String(renewal),
+      "line_items[0][quantity]": "1",
     });
-    if (automatic) {
-      body.set("line_items[1][price]", this.activationPriceId);
+    const priceId = trial ? this.activationPriceId : this.priceIds[plan];
+    if (!/^price_[A-Za-z0-9]+$/.test(String(priceId || ""))) throw new Error("stripe_plan_price_not_configured");
+    if (trial || automatic) body.set("line_items[0][price]", priceId);
+    else {
+      // A recurring Price cannot be used in payment mode. A separate one-time
+      // price is derived from the approved product for each expressly booked month.
+      const response = await fetch(`${this.apiBase}/v1/prices/${priceId}`, { headers: { authorization: `Bearer ${this.secretKey}` } });
+      const price = await response.json();
+      const expected = { NORMAL: 99000, PROFESSIONAL: 149000, ENTERPRISE: 249000 }[plan];
+      if (!response.ok || !price.active || price.currency !== "eur" || price.unit_amount !== expected || price.recurring?.interval !== "month" || price.recurring?.interval_count !== 1 || price.tax_behavior !== "exclusive") throw new Error("stripe_catalog_mismatch");
+      body.set("line_items[0][price_data][currency]", "eur");
+      body.set("line_items[0][price_data][unit_amount]", String(expected));
+      body.set("line_items[0][price_data][product]", price.product);
+      body.set("line_items[0][price_data][tax_behavior]", "exclusive");
+    }
+    if (!trial && !renewal) {
+      const setup = this.setupPriceIds[plan];
+      if (!/^price_[A-Za-z0-9]+$/.test(String(setup || ""))) throw new Error("stripe_setup_price_not_configured");
+      body.set("line_items[1][price]", setup);
       body.set("line_items[1][quantity]", "1");
-      body.set("subscription_data[trial_period_days]", String(trialDays));
-      body.set("subscription_data[trial_settings][end_behavior][missing_payment_method]", "cancel");
+    }
+    if (automatic) {
+      body.set("payment_method_collection", "always");
       body.set("subscription_data[automatic_tax][enabled]", "true");
-      body.set("subscription_data[metadata][tenant_id]", tenantId);
-      body.set("subscription_data[metadata][plan_code]", planCode);
-      body.set("subscription_data[metadata][billing_path]", path);
-    } else body.set("customer_creation", "always");
-    const response = await fetch(`${this.apiBase}/v1/checkout/sessions`, { method: "POST", headers: { authorization: `Bearer ${this.secretKey}`, "content-type": "application/x-www-form-urlencoded", "idempotency-key": `wb-trial-${tenantId}` }, body });
+      for (const key of ["tenant_id", "plan_code", "purchase_kind", "billing_path", "booking_id", "consent_version"])
+        body.set(`subscription_data[metadata][${key}]`, body.get(`metadata[${key}]`));
+    }
+    const response = await fetch(`${this.apiBase}/v1/checkout/sessions`, { method: "POST", headers: { authorization: `Bearer ${this.secretKey}`, "content-type": "application/x-www-form-urlencoded", "idempotency-key": `wb-booking-${bookingId}` }, body });
     const payload = await response.json();
     if (!response.ok || !payload.id || !payload.url) throw new Error(`stripe_checkout_failed_${response.status}`);
     return { id: payload.id, url: payload.url };
   }
-  async prepareCheckoutCompletion(event) {
-    if (event?.type !== "payment.confirmed") return { prepared: false };
-    if ((event.billingPath || "AUTO_CARD") !== "AUTO_CARD") return { prepared: false, billingCollection: "MANUAL_INVOICE" };
-    const setupPrice = this.setupPriceIds[String(event.plan || "").toUpperCase()];
-    if (!setupPrice || !/^price_[A-Za-z0-9]+$/.test(setupPrice)) throw new Error("stripe_setup_price_not_configured");
-    if (!/^cus_[A-Za-z0-9_]+$/.test(String(event.customerRef || "")) || !/^sub_[A-Za-z0-9_]+$/.test(String(event.subscriptionRef || ""))) throw new Error("stripe_subscription_reference_invalid");
-    const body = new URLSearchParams({
-      customer: event.customerRef,
-      subscription: event.subscriptionRef,
-      price: setupPrice,
-      quantity: "1",
-      "metadata[tenant_id]": event.tenantId,
-      "metadata[purpose]": "setup_fee_first_post_trial_invoice",
-    });
-    const response = await fetch(`${this.apiBase}/v1/invoiceitems`, { method: "POST", headers: { authorization: `Bearer ${this.secretKey}`, "content-type": "application/x-www-form-urlencoded", "idempotency-key": `wb-setup-${event.checkoutRef}` }, body });
-    const payload = await response.json();
-    if (!response.ok || !payload.id) throw new Error(`stripe_setup_invoice_item_failed_${response.status}`);
-    return { prepared: true, invoiceItemId: payload.id };
+  async prepareCheckoutCompletion() {
+    // Deliberately no invoice items, subscriptions or future charges here.
+    return { prepared: false };
   }
   verifyWebhook(rawBody, signatureHeader) {
     if (!Buffer.isBuffer(rawBody) || rawBody.length === 0) throw new Error("billing_webhook_raw_body_required");
@@ -143,22 +150,34 @@ export class StripeBillingAdapter {
     if (!/^evt_[A-Za-z0-9_]+$/.test(String(stripe?.id || "")) || typeof stripe?.type !== "string") throw new Error("billing_webhook_payload_invalid");
     const object = stripe?.data?.object;
     if (!object || typeof object !== "object" || Array.isArray(object)) throw new Error("billing_webhook_payload_invalid");
-    const supported = new Set(["checkout.session.completed", "invoice.paid", "invoice.payment_failed"]);
+    const supported = new Set(["checkout.session.completed", "checkout.session.async_payment_succeeded", "invoice.paid", "invoice.payment_failed"]);
     if (!supported.has(stripe.type)) return { id: stripe.id, provider: "stripe", stripeType: stripe.type, ignored: true };
+    const checkoutEvent = ["checkout.session.completed", "checkout.session.async_payment_succeeded"].includes(stripe.type);
     const tenantId = stripeTenantId(stripe.type, object);
     let type;
-    if (stripe.type === "checkout.session.completed" && object.payment_status === "paid" && ["subscription","payment"].includes(object.mode) && object.id) type = "payment.confirmed";
+    if (checkoutEvent && object.payment_status === "paid" && ["subscription","payment"].includes(object.mode) && object.id) type = "payment.confirmed";
     else if (stripe.type === "invoice.paid" && object.status === "paid" && object.paid === true) type = "invoice.paid";
     else if (stripe.type === "invoice.payment_failed" && object.paid !== true) type = "payment.failed";
     else throw new Error("billing_event_unsupported_or_unpaid");
+    if (checkoutEvent) {
+      const metadata = object.metadata || {};
+      const trial = metadata.purchase_kind === "TRIAL";
+      if (!["TRIAL", "PACKAGE"].includes(metadata.purchase_kind) || !metadata.booking_id || metadata.consent_version !== "standalone-2026-09-07") throw new Error("billing_booking_metadata_invalid");
+      if (trial && (object.mode !== "payment" || object.subscription || metadata.plan_code !== "TRIAL" || metadata.renewal !== "false")) throw new Error("billing_trial_contract_invalid");
+      if (!trial && (!["NORMAL", "PROFESSIONAL", "ENTERPRISE"].includes(metadata.plan_code) || (metadata.billing_path === "AUTO_CARD" ? object.mode !== "subscription" || !object.subscription : object.mode !== "payment" || Boolean(object.subscription)))) throw new Error("billing_package_contract_invalid");
+      if (object.currency !== "eur" || !Number.isSafeInteger(object.amount_subtotal)) throw new Error("billing_amount_invalid");
+    }
     if (!stripe.id || !tenantId) throw new Error("billing_webhook_payload_invalid");
     return {
       id: stripe.id, type, tenantId, provider: "stripe", stripeType: stripe.type,
-      checkoutRef: stripe.type === "checkout.session.completed" ? object.id : null,
+      checkoutRef: checkoutEvent ? object.id : null,
       customerRef: object.customer || null,
-      subscriptionRef: stripe.type === "checkout.session.completed" ? object.subscription : stripeInvoiceSubscription(object),
-      plan: stripe.type === "checkout.session.completed" ? object.metadata?.plan_code : null,
-      billingPath: stripe.type === "checkout.session.completed" ? object.metadata?.billing_path : null,
+      subscriptionRef: checkoutEvent ? object.subscription : stripeInvoiceSubscription(object),
+      plan: checkoutEvent ? object.metadata?.plan_code : null,
+      billingPath: checkoutEvent ? object.metadata?.billing_path : null,
+      purchaseKind: checkoutEvent ? object.metadata?.purchase_kind : (object.parent?.subscription_details?.metadata || object.subscription_details?.metadata || object.metadata)?.purchase_kind,
+      bookingId: checkoutEvent ? object.metadata?.booking_id : null,
+      amountSubtotal: checkoutEvent ? object.amount_subtotal : null,
       billingReason: stripe.type === "invoice.paid" ? object.billing_reason || null : null,
     };
   }

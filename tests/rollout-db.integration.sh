@@ -3,7 +3,7 @@ set -Eeuo pipefail
 umask 077
 [[ "${WB_TENDER_ROLLOUT_ISOLATED_TEST:-false}" == true ]] || { echo "isolated rollout database test marker is required" >&2; exit 64; }
 : "${DATABASE_URL_FILE:?DATABASE_URL_FILE is required}"
-root=$(git rev-parse --show-toplevel)
+root=${ROLLOUT_TEST_SOURCE_ROOT:-$(git rev-parse --show-toplevel)}
 temporary=$(mktemp -d /tmp/wb-rollout-db-integration.XXXXXX)
 trap 'rm -rf -- "$temporary"' EXIT
 url=$(cat "$DATABASE_URL_FILE")
@@ -29,8 +29,8 @@ for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger
   cmp -s "$temporary/before/$item" "$temporary/trusted/$item"
 done
 RELEASE_ID=0000000000000000000000000000000000000001 "$root/deployment/apply-release-migrations.sh" | tee "$temporary/migrations.log"
-[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/migrations.log")" -eq 9 ]]
-[[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT count(*) FROM tender.release_migrations")" == 9 ]]
+[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/migrations.log")" -eq 10 ]]
+[[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT count(*) FROM tender.release_migrations")" == 10 ]]
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT string_agg(display_name||':'||recommended_monthly_price_minor,',' ORDER BY code) FROM saas.plans WHERE code IN ('NORMAL','PROFESSIONAL','ENTERPRISE')")" == 'Enterprise:249000,Pro:99000,Business:149000' ]]
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT has_table_privilege('wb_tender_api_login','iam.tender_login_challenges','SELECT,INSERT,DELETE') AND NOT has_table_privilege('wb_tender_api_login','iam.tender_login_challenges','UPDATE,TRUNCATE,REFERENCES,TRIGGER')")" == t ]]
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT NOT rolsuper AND NOT rolbypassrls AND NOT rolcreaterole AND NOT rolcreatedb AND NOT rolcanlogin AND rolinherit AND NOT EXISTS(SELECT 1 FROM pg_auth_members WHERE member='tender_api_runtime'::regrole) FROM pg_roles WHERE rolname='tender_api_runtime'")" == t ]]
@@ -56,4 +56,4 @@ grep -qx 'RUNTIME_SESSIONS_REMAINING=0' <<<"$drain_result"
 APPLIED_MIGRATIONS_FILE="$temporary/migrations.log" RELEASE_ID=0000000000000000000000000000000000000001 LEDGER_EXISTED_BEFORE=false SNAPSHOT_EXISTED_BEFORE=false "$root/deployment/rollback-applied-release-migrations.sh"
 STATE_OUTPUT_DIR="$temporary/after" "$root/deployment/capture-rollout-db-state.sh"
 for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger.sha256 migration-snapshots.present migration-snapshots.sha256; do cmp -s "$temporary/before/$item" "$temporary/after/$item"; done
-printf '{"passed":true,"isolatedPostgres":true,"pendingMigrations":9,"runtimeLoginInheritedLeastPrivilege":true,"runtimeSessionsDrainedBeforeRollback":true,"exactReverseRollback":true,"schemaLedgerSnapshotPlansRestored":true}\n'
+printf '{"passed":true,"isolatedPostgres":true,"pendingMigrations":10,"runtimeLoginInheritedLeastPrivilege":true,"runtimeSessionsDrainedBeforeRollback":true,"exactReverseRollback":true,"schemaLedgerSnapshotPlansRestored":true}\n'
