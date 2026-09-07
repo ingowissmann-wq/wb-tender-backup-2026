@@ -124,7 +124,6 @@ export class StripeBillingAdapter {
     }
     if (automatic) {
       body.set("payment_method_collection", "always");
-      body.set("subscription_data[automatic_tax][enabled]", "true");
       for (const key of ["tenant_id", "plan_code", "purchase_kind", "billing_path", "booking_id", "consent_version"])
         body.set(`subscription_data[metadata][${key}]`, body.get(`metadata[${key}]`));
     }
