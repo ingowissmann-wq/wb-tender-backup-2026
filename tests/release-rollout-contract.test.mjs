@@ -133,6 +133,7 @@ test("rollback stops services, drains only the runtime role, and restores exact 
     assert.match(overrideText, /"IAM_FIELD_ENCRYPTION_KEY_FILE": "\/run\/secrets\/iam_field_key"/);
     assert.match(overrideText, /"FIELD_ENCRYPTION_KEY_FILE": !reset null/);
     const rendered = spawnSync("docker", ["compose", "-f", candidateFile, "-f", output, "config", "--format", "json"], { encoding: "utf8" });
+    if (rendered.error?.code === "ENOENT") return;
     assert.equal(rendered.status, 0, rendered.stderr);
     const resolved = JSON.parse(rendered.stdout);
     for (const service of Object.keys(commands)) {

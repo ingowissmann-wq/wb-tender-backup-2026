@@ -716,7 +716,14 @@ const stripeWebhookSecret = saasEnabled && process.env.SAAS_BILLING_ADAPTER === 
 const stripePublicBaseUrl = process.env.WB_TENDER_PUBLIC_BASE_URL || "";
 const stripeConfigurationComplete = Boolean(stripeSecretKey && stripeWebhookSecret && stripePublicBaseUrl);
 const billingAdapter = saasEnabled && process.env.SAAS_BILLING_ADAPTER === "stripe" && stripeConfigurationComplete
-  ? new StripeBillingAdapter({ secretKey: stripeSecretKey, webhookSecret: stripeWebhookSecret, publicBaseUrl: stripePublicBaseUrl, priceIds: { CORE: process.env.STRIPE_PRICE_CORE, NORMAL: process.env.STRIPE_PRICE_NORMAL, PROFESSIONAL: process.env.STRIPE_PRICE_PROFESSIONAL, ENTERPRISE: process.env.STRIPE_PRICE_ENTERPRISE } })
+  ? new StripeBillingAdapter({
+    secretKey: stripeSecretKey,
+    webhookSecret: stripeWebhookSecret,
+    publicBaseUrl: stripePublicBaseUrl,
+    priceIds: { CORE: process.env.STRIPE_PRICE_CORE, NORMAL: process.env.STRIPE_PRICE_NORMAL, PROFESSIONAL: process.env.STRIPE_PRICE_PROFESSIONAL, ENTERPRISE: process.env.STRIPE_PRICE_ENTERPRISE },
+    activationPriceId: process.env.STRIPE_PRICE_ACTIVATION,
+    setupPriceIds: { NORMAL: process.env.STRIPE_PRICE_SETUP_NORMAL, PROFESSIONAL: process.env.STRIPE_PRICE_SETUP_PROFESSIONAL, ENTERPRISE: process.env.STRIPE_PRICE_SETUP_ENTERPRISE },
+  })
   : new UnconfiguredBillingAdapter();
 const tenantStorage = saasEnabled && process.env.WB_TENDER_TENANT_STORAGE_ADAPTER === "filesystem"
   ? new TenantFilesystemStorage({ root: process.env.WB_TENDER_TENANT_STORAGE_ROOT })
@@ -735,7 +742,8 @@ const saasIamClient = saasIamConfigured ? new SaasOidcClient({
   stateStore: new PostgresLoginStateStore(pool),
   sessionStore: new PostgresSaasSessionStore(pool),
   resolveIdentity: async ({issuer,subject,email}) => {
-    const binding = (await pool.query("SELECT * FROM saas.resolve_iam_subject_binding($1,$2,$3)",[issuer,subject,email])).rows;
+    let binding = (await pool.query("SELECT * FROM saas.resolve_iam_subject_binding($1,$2,$3)",[issuer,subject,email])).rows;
+    if (binding.length === 0) binding = (await pool.query("SELECT * FROM saas.provision_pending_oidc_identity($1,$2,$3)",[issuer,subject,email])).rows;
     if (binding.length !== 1) return null;
     const saas = await loadSaasContext(pool,binding[0].user_id);
     if (!saas || saas.tenant_id !== String(binding[0].tenant_id)) return null;

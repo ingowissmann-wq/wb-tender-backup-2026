@@ -61,22 +61,66 @@ const stripeTenantId = (stripeType, object) => {
 };
 
 export class StripeBillingAdapter {
-  constructor({ secretKey, webhookSecret, publicBaseUrl, priceIds = {}, apiBase = "https://api.stripe.com", now = () => Date.now() }) {
+  constructor({ secretKey, webhookSecret, publicBaseUrl, priceIds = {}, activationPriceId, setupPriceIds = {}, apiBase = "https://api.stripe.com", now = () => Date.now() }) {
     if (!String(secretKey || "").startsWith("sk_")) throw new Error("stripe_secret_key_invalid");
     if (!String(webhookSecret || "").startsWith("whsec_") || webhookSecret.length < 24) throw new Error("stripe_webhook_secret_invalid");
     if (!/^https:\/\//.test(String(publicBaseUrl || ""))) throw new Error("stripe_public_base_url_invalid");
-    this.secretKey = secretKey; this.webhookSecret = webhookSecret; this.publicBaseUrl = publicBaseUrl.replace(/\/$/, ""); this.priceIds = priceIds; this.apiBase = apiBase; this.now = now;
+    this.secretKey = secretKey; this.webhookSecret = webhookSecret; this.publicBaseUrl = publicBaseUrl.replace(/\/$/, ""); this.priceIds = priceIds; this.activationPriceId = activationPriceId; this.setupPriceIds = setupPriceIds; this.apiBase = apiBase; this.now = now;
   }
   get provider() { return "stripe"; }
   get configured() { return true; }
-  async createCheckout({ tenantId, plan, successUrl = `${this.publicBaseUrl}/saas/payment-complete`, cancelUrl = `${this.publicBaseUrl}/saas/pricing` }) {
-    const price = this.priceIds[String(plan || "").toUpperCase()];
+  async createCheckout({ tenantId, plan, trialDays = 14, successUrl = `${this.publicBaseUrl}/saas/payment-complete`, cancelUrl = `${this.publicBaseUrl}/saas/pricing` }) {
+    const planCode = String(plan || "").toUpperCase();
+    const price = this.priceIds[planCode], setupPrice = this.setupPriceIds[planCode];
     if (!price || !/^price_[A-Za-z0-9]+$/.test(price)) throw new Error("stripe_plan_price_not_configured");
-    const body = new URLSearchParams({ mode: "subscription", "line_items[0][price]": price, "line_items[0][quantity]": "1", success_url: successUrl, cancel_url: cancelUrl, client_reference_id: tenantId, "metadata[tenant_id]": tenantId, "subscription_data[metadata][tenant_id]": tenantId });
+    if (!this.activationPriceId || !/^price_[A-Za-z0-9]+$/.test(this.activationPriceId)) throw new Error("stripe_activation_price_not_configured");
+    if (!setupPrice || !/^price_[A-Za-z0-9]+$/.test(setupPrice)) throw new Error("stripe_setup_price_not_configured");
+    if (!Number.isInteger(trialDays) || trialDays !== 14) throw new Error("stripe_trial_period_invalid");
+    const body = new URLSearchParams({
+      mode: "subscription",
+      "payment_method_types[0]": "card",
+      "payment_method_collection": "always",
+      "automatic_tax[enabled]": "true",
+      "tax_id_collection[enabled]": "true",
+      "billing_address_collection": "required",
+      "consent_collection[terms_of_service]": "required",
+      "line_items[0][price]": price,
+      "line_items[0][quantity]": "1",
+      "line_items[1][price]": this.activationPriceId,
+      "line_items[1][quantity]": "1",
+      "subscription_data[trial_period_days]": String(trialDays),
+      "subscription_data[trial_settings][end_behavior][missing_payment_method]": "cancel",
+      "subscription_data[automatic_tax][enabled]": "true",
+      success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: cancelUrl,
+      client_reference_id: tenantId,
+      "metadata[tenant_id]": tenantId,
+      "metadata[plan_code]": planCode,
+      "subscription_data[metadata][tenant_id]": tenantId,
+      "subscription_data[metadata][plan_code]": planCode,
+    });
     const response = await fetch(`${this.apiBase}/v1/checkout/sessions`, { method: "POST", headers: { authorization: `Bearer ${this.secretKey}`, "content-type": "application/x-www-form-urlencoded", "idempotency-key": `wb-trial-${tenantId}` }, body });
     const payload = await response.json();
     if (!response.ok || !payload.id || !payload.url) throw new Error(`stripe_checkout_failed_${response.status}`);
     return { id: payload.id, url: payload.url };
+  }
+  async prepareCheckoutCompletion(event) {
+    if (event?.type !== "payment.confirmed") return { prepared: false };
+    const setupPrice = this.setupPriceIds[String(event.plan || "").toUpperCase()];
+    if (!setupPrice || !/^price_[A-Za-z0-9]+$/.test(setupPrice)) throw new Error("stripe_setup_price_not_configured");
+    if (!/^cus_[A-Za-z0-9_]+$/.test(String(event.customerRef || "")) || !/^sub_[A-Za-z0-9_]+$/.test(String(event.subscriptionRef || ""))) throw new Error("stripe_subscription_reference_invalid");
+    const body = new URLSearchParams({
+      customer: event.customerRef,
+      subscription: event.subscriptionRef,
+      price: setupPrice,
+      quantity: "1",
+      "metadata[tenant_id]": event.tenantId,
+      "metadata[purpose]": "setup_fee_first_post_trial_invoice",
+    });
+    const response = await fetch(`${this.apiBase}/v1/invoiceitems`, { method: "POST", headers: { authorization: `Bearer ${this.secretKey}`, "content-type": "application/x-www-form-urlencoded", "idempotency-key": `wb-setup-${event.checkoutRef}` }, body });
+    const payload = await response.json();
+    if (!response.ok || !payload.id) throw new Error(`stripe_setup_invoice_item_failed_${response.status}`);
+    return { prepared: true, invoiceItemId: payload.id };
   }
   verifyWebhook(rawBody, signatureHeader) {
     if (!Buffer.isBuffer(rawBody) || rawBody.length === 0) throw new Error("billing_webhook_raw_body_required");
@@ -105,6 +149,7 @@ export class StripeBillingAdapter {
       checkoutRef: stripe.type === "checkout.session.completed" ? object.id : null,
       customerRef: object.customer || null,
       subscriptionRef: stripe.type === "checkout.session.completed" ? object.subscription : stripeInvoiceSubscription(object),
+      plan: stripe.type === "checkout.session.completed" ? object.metadata?.plan_code : null,
       billingReason: stripe.type === "invoice.paid" ? object.billing_reason || null : null,
     };
   }
