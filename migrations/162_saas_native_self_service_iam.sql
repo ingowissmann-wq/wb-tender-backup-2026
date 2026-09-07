@@ -14,6 +14,9 @@ DECLARE
   registration record;
   created_user_id uuid;
 BEGIN
+  IF saas.tenant_matches(p_tenant_id) IS DISTINCT FROM true THEN
+    RAISE EXCEPTION 'tenant_context_required';
+  END IF;
   SELECT pr.tenant_id,lower(pr.email) email,pr.password_hash,
          pr.mfa_secret_encrypted
   INTO registration
@@ -77,6 +80,6 @@ $$;
 REVOKE ALL ON FUNCTION saas.provision_pending_native_identity(uuid)
   FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION saas.provision_pending_native_identity(uuid)
-  TO saas_runtime;
+  TO saas_runtime,tender_api_runtime;
 
 COMMIT;

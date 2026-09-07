@@ -34,6 +34,7 @@ RELEASE_ID=0000000000000000000000000000000000000001 "$root/deployment/apply-rele
 psql "$url" -v ON_ERROR_STOP=1 -f "$root/tests/saas-usage-limits.integration.sql" >/dev/null
 bash "$root/tests/saas-usage-concurrency.integration.sh"
 psql "$url" -v ON_ERROR_STOP=1 -f "$root/tests/portal-resolution-evidence.integration.sql" >/dev/null
+psql "$url" -v ON_ERROR_STOP=1 -f "$root/tests/native-provisioning-role.integration.sql" >/dev/null
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT string_agg(display_name||':'||recommended_monthly_price_minor,',' ORDER BY code) FROM saas.plans WHERE code IN ('NORMAL','PROFESSIONAL','ENTERPRISE')")" == 'Enterprise:249000,Pro:99000,Business:149000' ]]
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT has_table_privilege('wb_tender_api_login','iam.tender_login_challenges','SELECT,INSERT,DELETE') AND NOT has_table_privilege('wb_tender_api_login','iam.tender_login_challenges','UPDATE,TRUNCATE,REFERENCES,TRIGGER')")" == t ]]
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT NOT rolsuper AND NOT rolbypassrls AND NOT rolcreaterole AND NOT rolcreatedb AND NOT rolcanlogin AND rolinherit AND NOT EXISTS(SELECT 1 FROM pg_auth_members WHERE member='tender_api_runtime'::regrole) FROM pg_roles WHERE rolname='tender_api_runtime'")" == t ]]

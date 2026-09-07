@@ -12,7 +12,7 @@ BEGIN
     CREATE ROLE wb_tender_api_login LOGIN IN ROLE tender_api_runtime;
   END IF;
 END $$;
-GRANT USAGE ON SCHEMA iam TO tender_api_runtime;
+GRANT USAGE ON SCHEMA iam,saas TO tender_api_runtime;
 CREATE TABLE tender.autopilot_results(tender_id uuid,company_id uuid,lot_key text,result_version integer);
 CREATE TABLE tender.autopilot_queue(tender_id uuid,company_id uuid,lot_key text,created_at timestamptz,action_type text);
 CREATE TABLE tender.enrichment_versions(id uuid PRIMARY KEY,tender_id uuid,version integer,historical boolean,created_at timestamptz);
