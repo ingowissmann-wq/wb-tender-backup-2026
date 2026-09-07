@@ -61,6 +61,13 @@ jobs:
             id=$(docker create --name "release-$service" wb-tender-release:ci true)
             test "$(docker inspect "$id" --format '{{.Image}}')" = "$image_id"
           done
+      - name: Prove PostgreSQL 16 archive round trip with release tools
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export RELEASE_IMAGE=$(docker image inspect wb-tender-release:ci --format '{{.Id}}')
+          export POSTGRES_IMAGE=postgres@sha256:bb3e1a57e5407e0a5280b4211980a5e537f4abd234a87014ac979849a78dd825
+          tests/release-postgres-tools.integration.sh
       - name: Prove excluded build context is absent
         run: |
           ! docker run --rm wb-tender-release:ci test -e /app/production-snapshot
