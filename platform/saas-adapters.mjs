@@ -69,36 +69,43 @@ export class StripeBillingAdapter {
   }
   get provider() { return "stripe"; }
   get configured() { return true; }
-  async createCheckout({ tenantId, plan, trialDays = 14, successUrl = `${this.publicBaseUrl}/saas/payment-complete`, cancelUrl = `${this.publicBaseUrl}/saas/pricing` }) {
+  async createCheckout({ tenantId, plan, billingPath = "AUTO_CARD", trialDays = 14, successUrl = `${this.publicBaseUrl}/saas/payment-complete`, cancelUrl = `${this.publicBaseUrl}/saas/pricing` }) {
     const planCode = String(plan || "").toUpperCase();
+    const path = String(billingPath || "").toUpperCase();
+    if (!["AUTO_CARD","INVOICE_KLARNA","INVOICE_BILLIE"].includes(path)) throw new Error("stripe_billing_path_invalid");
     const price = this.priceIds[planCode], setupPrice = this.setupPriceIds[planCode];
     if (!price || !/^price_[A-Za-z0-9]+$/.test(price)) throw new Error("stripe_plan_price_not_configured");
     if (!this.activationPriceId || !/^price_[A-Za-z0-9]+$/.test(this.activationPriceId)) throw new Error("stripe_activation_price_not_configured");
     if (!setupPrice || !/^price_[A-Za-z0-9]+$/.test(setupPrice)) throw new Error("stripe_setup_price_not_configured");
     if (!Number.isInteger(trialDays) || trialDays !== 14) throw new Error("stripe_trial_period_invalid");
+    const automatic = path === "AUTO_CARD";
     const body = new URLSearchParams({
-      mode: "subscription",
-      "payment_method_types[0]": "card",
+      mode: automatic ? "subscription" : "payment",
+      "payment_method_types[0]": automatic ? "card" : path === "INVOICE_KLARNA" ? "klarna" : "billie",
       "payment_method_collection": "always",
       "automatic_tax[enabled]": "true",
       "tax_id_collection[enabled]": "true",
       "billing_address_collection": "required",
       "consent_collection[terms_of_service]": "required",
-      "line_items[0][price]": price,
+      "line_items[0][price]": automatic ? price : this.activationPriceId,
       "line_items[0][quantity]": "1",
-      "line_items[1][price]": this.activationPriceId,
-      "line_items[1][quantity]": "1",
-      "subscription_data[trial_period_days]": String(trialDays),
-      "subscription_data[trial_settings][end_behavior][missing_payment_method]": "cancel",
-      "subscription_data[automatic_tax][enabled]": "true",
       success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: cancelUrl,
       client_reference_id: tenantId,
       "metadata[tenant_id]": tenantId,
       "metadata[plan_code]": planCode,
-      "subscription_data[metadata][tenant_id]": tenantId,
-      "subscription_data[metadata][plan_code]": planCode,
+      "metadata[billing_path]": path,
     });
+    if (automatic) {
+      body.set("line_items[1][price]", this.activationPriceId);
+      body.set("line_items[1][quantity]", "1");
+      body.set("subscription_data[trial_period_days]", String(trialDays));
+      body.set("subscription_data[trial_settings][end_behavior][missing_payment_method]", "cancel");
+      body.set("subscription_data[automatic_tax][enabled]", "true");
+      body.set("subscription_data[metadata][tenant_id]", tenantId);
+      body.set("subscription_data[metadata][plan_code]", planCode);
+      body.set("subscription_data[metadata][billing_path]", path);
+    } else body.set("customer_creation", "always");
     const response = await fetch(`${this.apiBase}/v1/checkout/sessions`, { method: "POST", headers: { authorization: `Bearer ${this.secretKey}`, "content-type": "application/x-www-form-urlencoded", "idempotency-key": `wb-trial-${tenantId}` }, body });
     const payload = await response.json();
     if (!response.ok || !payload.id || !payload.url) throw new Error(`stripe_checkout_failed_${response.status}`);
@@ -106,6 +113,7 @@ export class StripeBillingAdapter {
   }
   async prepareCheckoutCompletion(event) {
     if (event?.type !== "payment.confirmed") return { prepared: false };
+    if ((event.billingPath || "AUTO_CARD") !== "AUTO_CARD") return { prepared: false, billingCollection: "MANUAL_INVOICE" };
     const setupPrice = this.setupPriceIds[String(event.plan || "").toUpperCase()];
     if (!setupPrice || !/^price_[A-Za-z0-9]+$/.test(setupPrice)) throw new Error("stripe_setup_price_not_configured");
     if (!/^cus_[A-Za-z0-9_]+$/.test(String(event.customerRef || "")) || !/^sub_[A-Za-z0-9_]+$/.test(String(event.subscriptionRef || ""))) throw new Error("stripe_subscription_reference_invalid");
@@ -139,7 +147,7 @@ export class StripeBillingAdapter {
     if (!supported.has(stripe.type)) return { id: stripe.id, provider: "stripe", stripeType: stripe.type, ignored: true };
     const tenantId = stripeTenantId(stripe.type, object);
     let type;
-    if (stripe.type === "checkout.session.completed" && object.payment_status === "paid" && object.mode === "subscription" && object.id) type = "payment.confirmed";
+    if (stripe.type === "checkout.session.completed" && object.payment_status === "paid" && ["subscription","payment"].includes(object.mode) && object.id) type = "payment.confirmed";
     else if (stripe.type === "invoice.paid" && object.status === "paid" && object.paid === true) type = "invoice.paid";
     else if (stripe.type === "invoice.payment_failed" && object.paid !== true) type = "payment.failed";
     else throw new Error("billing_event_unsupported_or_unpaid");
@@ -150,6 +158,7 @@ export class StripeBillingAdapter {
       customerRef: object.customer || null,
       subscriptionRef: stripe.type === "checkout.session.completed" ? object.subscription : stripeInvoiceSubscription(object),
       plan: stripe.type === "checkout.session.completed" ? object.metadata?.plan_code : null,
+      billingPath: stripe.type === "checkout.session.completed" ? object.metadata?.billing_path : null,
       billingReason: stripe.type === "invoice.paid" ? object.billing_reason || null : null,
     };
   }

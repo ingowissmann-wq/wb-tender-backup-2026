@@ -45,7 +45,7 @@ const checkoutEvent = (overrides = {}) => ({
     client_reference_id: TENANT_ID,
     customer: "cus_test",
     subscription: "sub_test",
-    metadata: { plan_code: "NORMAL" },
+    metadata: { plan_code: "NORMAL", billing_path: "AUTO_CARD" },
     ...overrides,
   } },
 });
@@ -188,4 +188,29 @@ test("checkout charges activation now and configures card-only taxed billing aft
   assert.equal(invoiceItem.idempotency, `wb-setup-${checkout.id}`);
   assert.equal(invoiceItem.body.get("price"), "price_setupPro");
   assert.equal(invoiceItem.body.get("subscription"), "sub_test");
+});
+
+test("Klarna immediate payment and Billie charge only activation and switch later fees to invoice", async (t) => {
+  const observed = [];
+  const provider = http.createServer(async (req, res) => {
+    let body = ""; for await (const chunk of req) body += chunk;
+    observed.push(new URLSearchParams(body));
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ id: `cs_manual_${observed.length}`, url: "https://checkout.example.invalid/manual" }));
+  });
+  provider.listen(0, "127.0.0.1"); await once(provider, "listening");
+  t.after(() => provider.close());
+  const adapter = new StripeBillingAdapter({ secretKey: "sk_test_isolated_only", webhookSecret: WEBHOOK_SECRET, publicBaseUrl: "https://saas.example.invalid", priceIds: { NORMAL: "price_monthlyPro" }, activationPriceId: "price_activation299", setupPriceIds: { NORMAL: "price_setupPro" }, apiBase: `http://127.0.0.1:${provider.address().port}` });
+  for (const [billingPath, paymentMethod] of [["INVOICE_KLARNA","klarna"],["INVOICE_BILLIE","billie"]]) {
+    await adapter.createCheckout({ tenantId: TENANT_ID, plan: "NORMAL", billingPath, trialDays: 14 });
+    const session = observed.at(-1);
+    assert.equal(session.get("mode"), "payment");
+    assert.equal(session.get("payment_method_types[0]"), paymentMethod);
+    assert.equal(session.get("line_items[0][price]"), "price_activation299");
+    assert.equal(session.get("line_items[1][price]"), null);
+    assert.equal(session.get("subscription_data[trial_period_days]"), null);
+    assert.equal(session.get("customer_creation"), "always");
+    assert.equal(session.get("metadata[billing_path]"), billingPath);
+    assert.deepEqual(await adapter.prepareCheckoutCompletion({ type: "payment.confirmed", billingPath }), { prepared: false, billingCollection: "MANUAL_INVOICE" });
+  }
 });
