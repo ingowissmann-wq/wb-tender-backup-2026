@@ -30,7 +30,11 @@ if (enabled) {
   if (process.env.SAAS_BILLING_ADAPTER !== "stripe" || process.env.SAAS_BILLING_PROVIDER !== "stripe") blockers.push("stripe_adapter_not_selected");
   if (process.env.SAAS_EMAIL_ADAPTER !== "smtp") blockers.push("smtp_email_adapter_not_selected");
   if (process.env.WB_TENDER_TENANT_STORAGE_ADAPTER !== "filesystem") blockers.push("tenant_filesystem_storage_not_selected");
-  for (const name of ["STRIPE_SECRET_KEY","STRIPE_WEBHOOK_SECRET","STRIPE_PRICE_NORMAL","STRIPE_PRICE_PROFESSIONAL","STRIPE_PRICE_ENTERPRISE","STRIPE_PRICE_ACTIVATION","STRIPE_PRICE_SETUP_NORMAL","STRIPE_PRICE_SETUP_PROFESSIONAL","STRIPE_PRICE_SETUP_ENTERPRISE","WB_TENDER_PUBLIC_BASE_URL","SAAS_INVITATION_PEPPER"]) requireValue(name);
+  for (const name of ["STRIPE_SECRET_KEY","STRIPE_WEBHOOK_SECRET"]) {
+    if (process.env[name]) blockers.push(`${name.toLowerCase()}_inline_value_forbidden`);
+    if (!String(process.env[`${name}_FILE`] || "").trim()) blockers.push(`${name.toLowerCase()}_file_missing`);
+  }
+  for (const name of ["STRIPE_PRICE_NORMAL","STRIPE_PRICE_PROFESSIONAL","STRIPE_PRICE_ENTERPRISE","STRIPE_PRICE_ACTIVATION","STRIPE_PRICE_SETUP_NORMAL","STRIPE_PRICE_SETUP_PROFESSIONAL","STRIPE_PRICE_SETUP_ENTERPRISE","WB_TENDER_PUBLIC_BASE_URL","SAAS_INVITATION_PEPPER"]) requireValue(name);
   for (const name of ["SAAS_SMTP_HOST","SAAS_SMTP_PORT","SAAS_SMTP_SECURE","SAAS_SMTP_USER","SAAS_SMTP_PASSWORD","SAAS_SMTP_FROM"]) {
     if (process.env[name]) blockers.push(`${name.toLowerCase()}_inline_value_forbidden`);
     if (!String(process.env[`${name}_FILE`] || "").trim()) blockers.push(`${name.toLowerCase()}_file_missing`);
