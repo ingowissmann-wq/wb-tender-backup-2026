@@ -5,6 +5,9 @@ CREATE SCHEMA iam;
 CREATE SCHEMA app;
 DO $$
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='saas_runtime') THEN
+    CREATE ROLE saas_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOBYPASSRLS NOLOGIN;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='wb_tender_api_login') THEN
     CREATE ROLE wb_tender_api_login LOGIN IN ROLE tender_api_runtime;
   END IF;
@@ -78,5 +81,48 @@ INSERT INTO saas.plans(code,display_name,description,seat_limit,company_limit,re
 ('NORMAL','Previous Normal','Synthetic pre-rollout row',1,1,200,'PLACEHOLDER',false),
 ('PROFESSIONAL','Previous Professional','Synthetic pre-rollout row',1,1,300,'PLACEHOLDER',false),
 ('ENTERPRISE','Previous Enterprise','Synthetic pre-rollout row',1,1,400,'PLACEHOLDER',false);
-CREATE TABLE iam.users(id uuid PRIMARY KEY);
+CREATE TABLE iam.users(
+  id uuid PRIMARY KEY,
+  email text,
+  password_hash text,
+  active boolean,
+  mfa_required boolean,
+  mfa_secret_encrypted text,
+  mfa_last_counter bigint,
+  failed_attempts integer,
+  locked_until timestamptz
+);
 INSERT INTO iam.users(id) VALUES ('00000000-0000-0000-0000-000000000001');
+CREATE TABLE saas.pending_registrations(
+  tenant_id uuid PRIMARY KEY,
+  email text,
+  email_verified_at timestamptz,
+  status text,
+  iam_provisioned_at timestamptz,
+  updated_at timestamptz
+);
+CREATE TABLE saas.subscriptions(tenant_id uuid PRIMARY KEY,status text);
+CREATE TABLE saas.tenant_memberships(
+  tenant_id uuid,
+  user_id uuid,
+  role text,
+  status text,
+  UNIQUE(tenant_id,user_id)
+);
+CREATE TABLE saas.iam_subject_bindings(
+  issuer text,
+  subject text,
+  user_id uuid,
+  tenant_id uuid,
+  email text,
+  email_verified_at timestamptz
+);
+CREATE TABLE saas.tenants(id uuid PRIMARY KEY,status text,updated_at timestamptz);
+CREATE TABLE saas.audit_events(
+  tenant_id uuid,
+  actor_user_id uuid,
+  action text,
+  target_type text,
+  target_id text,
+  metadata jsonb
+);

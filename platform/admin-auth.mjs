@@ -32,7 +32,8 @@ export function safeAdminReturnTo(value, configuredUiBase = "/admin/ausschreibun
   let decodedPath;
   try { decodedPath = decodeURIComponent(target.pathname); } catch { return fallback; }
   const insideTender = decodedPath === uiBase || decodedPath.startsWith(`${uiBase}/`);
-  if (target.origin !== "https://wb-tender.invalid" || !insideTender || decodedPath === `${uiBase}/login`
+  const insideSaas = decodedPath === "/saas" || decodedPath.startsWith("/saas/");
+  if (target.origin !== "https://wb-tender.invalid" || (!insideTender && !insideSaas) || decodedPath === `${uiBase}/login`
       || decodedPath.startsWith(`${uiBase}/login/`) || decodedPath.includes("//") || decodedPath.includes("\\")) return fallback;
   return `${target.pathname}${target.search}`;
 }
@@ -77,13 +78,24 @@ export function totpFor(secret, at = Date.now()) {
   return String((result.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, "0");
 }
 
-function validTotpCounter(secret, code, at = Date.now()) {
+export function validTotpCounter(secret, code, at = Date.now()) {
   if (!/^\d{6}$/.test(String(code))) return null;
   const current = Math.floor(Number(at) / 30_000);
   for (const candidate of [current - 1, current, current + 1]) {
     if (constantTimeText(totpFor(secret, candidate * 30_000), code)) return candidate;
   }
   return null;
+}
+
+export function randomTotpSecret(bytes = 20) {
+  const input = crypto.randomBytes(bytes);
+  let bits = "";
+  for (const byte of input) bits += byte.toString(2).padStart(8, "0");
+  let output = "";
+  for (let offset = 0; offset < bits.length; offset += 5) {
+    output += BASE32[Number.parseInt(bits.slice(offset, offset + 5).padEnd(5, "0"), 2)];
+  }
+  return output;
 }
 
 export function encryptTotpSecret(value, key) {
@@ -105,7 +117,7 @@ export function decryptTotpSecret(value, key) {
 
 const loginHtml = (uiBase) => `<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Anmelden · WB Plattform</title><link rel="stylesheet" href="${uiBase}/login.css"><script src="${uiBase}/login.js" defer></script></head><body><main><h1>WB Plattform</h1><form id="login-form"><label>E-Mail<input name="email" type="email" autocomplete="username" required></label><label>Passwort<input name="password" type="password" autocomplete="current-password" minlength="12" required></label><button type="submit">Weiter</button></form><form id="mfa-form" hidden><label>Authenticator-Code<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label><button type="submit">Sicher anmelden</button></form><p id="status" role="status" aria-live="polite"></p></main></body></html>`;
 const loginCss = `:root{font-family:system-ui;color:#172033;background:#f6f7f9}body{margin:0;min-height:100vh;display:grid;place-items:center}main{width:min(92vw,28rem);background:#fff;border:1px solid #d8dee7;border-radius:12px;padding:2rem;box-shadow:0 8px 30px #0f172915}[hidden]{display:none!important}form,label{display:grid;gap:.5rem}form{gap:1rem}input,button{font:inherit;min-height:44px;padding:.55rem .7rem}button{background:#0f8f91;color:white;border:0;border-radius:6px;font-weight:700}#status{min-height:1.5rem;color:#b42318}`;
-const loginJs = (uiBase, apiBase) => `const UI=${JSON.stringify(uiBase)},API=${JSON.stringify(apiBase)},login=document.querySelector('#login-form'),mfa=document.querySelector('#mfa-form'),status=document.querySelector('#status');let challenge='';const fallback=UI+'/';const returnTo=()=>{const raw=new URLSearchParams(location.search).get('returnTo')||'';if(!raw.startsWith('/')||raw.startsWith('//')||raw.includes('\\\\'))return fallback;try{const value=new URL(raw,location.origin),path=decodeURIComponent(value.pathname),inside=path===UI||path.startsWith(UI+'/');return value.origin===location.origin&&inside&&path!==UI+'/login'&&!path.startsWith(UI+'/login/')&&!path.includes('//')&&!path.includes('\\\\')?value.pathname+value.search:fallback}catch{return fallback}};login.addEventListener('submit',async event=>{event.preventDefault();status.textContent='';const values=new FormData(login),response=await fetch(API+'/iam/login',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({email:values.get('email'),password:values.get('password')})});const body=await response.json();if(!response.ok){status.textContent='Anmeldung fehlgeschlagen.';return}challenge=body.challenge;login.hidden=true;mfa.hidden=false;mfa.elements.code.focus()});mfa.addEventListener('submit',async event=>{event.preventDefault();status.textContent='';const response=await fetch(API+'/iam/mfa',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({challenge,code:new FormData(mfa).get('code')})});if(!response.ok){status.textContent='Code ungültig oder abgelaufen.';return}location.assign(returnTo())});`;
+const loginJs = (uiBase, apiBase) => `const UI=${JSON.stringify(uiBase)},API=${JSON.stringify(apiBase)},login=document.querySelector('#login-form'),mfa=document.querySelector('#mfa-form'),status=document.querySelector('#status');let challenge='';const fallback=UI+'/';const returnTo=()=>{const raw=new URLSearchParams(location.search).get('returnTo')||'';if(!raw.startsWith('/')||raw.startsWith('//')||raw.includes('\\\\'))return fallback;try{const value=new URL(raw,location.origin),path=decodeURIComponent(value.pathname),inside=path===UI||path.startsWith(UI+'/')||path==='/saas'||path.startsWith('/saas/');return value.origin===location.origin&&inside&&path!==UI+'/login'&&!path.startsWith(UI+'/login/')&&!path.includes('//')&&!path.includes('\\\\')?value.pathname+value.search:fallback}catch{return fallback}};login.addEventListener('submit',async event=>{event.preventDefault();status.textContent='';const values=new FormData(login),response=await fetch(API+'/iam/login',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({email:values.get('email'),password:values.get('password')})});const body=await response.json();if(!response.ok){status.textContent='Anmeldung fehlgeschlagen.';return}challenge=body.challenge;login.hidden=true;mfa.hidden=false;mfa.elements.code.focus()});mfa.addEventListener('submit',async event=>{event.preventDefault();status.textContent='';const response=await fetch(API+'/iam/mfa',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({challenge,code:new FormData(mfa).get('code')})});if(!response.ok){status.textContent='Code ungültig oder abgelaufen.';return}location.assign(returnTo())});`;
 
 export function registerAdminAuth(app, { pool, sessionPepper, fieldEncryptionKey, secureCookies = true, now = () => new Date(), uiBase: configuredUiBase = "/admin/ausschreibungen", apiBase: configuredApiBase = "/api/tender" }) {
   if (!sessionPepper || sessionPepper.length < 32) throw new Error("session_pepper_invalid");

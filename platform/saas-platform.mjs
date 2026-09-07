@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
+import QRCode from "qrcode";
 import { customerIdentityHash, hashVerificationToken, verificationToken, UnconfiguredBillingAdapter, UnconfiguredEmailAdapter } from "./saas-adapters.mjs";
+import { decryptTotpSecret, encryptTotpSecret, hashTenderPassword, randomTotpSecret, validTotpCounter } from "./admin-auth.mjs";
 import {
   MODULE_CATALOG, MODULE_KEYS, SUITE_PRODUCT_KEY, assessPlanChange, effectiveAccess,
   moduleAccess, navigationCatalog, normalizeModuleKey, normalizePlanCode,
@@ -89,8 +91,11 @@ export async function registerPendingTenant(client, input, { verificationPepper,
   const email = String(input.email || "").trim().toLowerCase();
   const company = String(input.company || "").trim().slice(0, 160);
   const plan = normalizePlanCode(input.plan);
+  const passwordHash = String(input.passwordHash || "");
+  const mfaSecretEncrypted = String(input.mfaSecretEncrypted || "");
   if (!emailPattern.test(email) || email.length > 254) throw Object.assign(new Error("email_invalid"), { statusCode: 400 });
   if (company.length < 2) throw Object.assign(new Error("company_name_invalid"), { statusCode: 400 });
+  if (!passwordHash.startsWith("scrypt$") || mfaSecretEncrypted.length < 32) throw Object.assign(new Error("account_security_invalid"), { statusCode: 400 });
   const identityHash = customerIdentityHash(email, verificationPepper);
   const token = verificationToken(), tokenHash = hashVerificationToken(token, verificationPepper);
   const tenantId = crypto.randomUUID(), slug = `account-${tenantId.slice(0, 12)}`;
@@ -102,8 +107,8 @@ export async function registerPendingTenant(client, input, { verificationPepper,
     if (!availablePlan.rowCount) throw Object.assign(new Error("plan_not_available"), { statusCode: 409 });
     await client.query("SELECT set_config('app.tenant_id',$1,true)", [tenantId]);
     await client.query("INSERT INTO saas.tenants(id,slug,display_name,customer_identity_hash) VALUES($1,$2,$3,$4)", [tenantId, slug, company, identityHash]);
-    await client.query(`INSERT INTO saas.pending_registrations(tenant_id,email,requested_plan_code,verification_token_hash,verification_expires_at,request_ip_hash,request_user_agent_hash)
-      VALUES($1,$2,$3,$4,$5,$6,$7)`, [tenantId, email, plan, tokenHash, new Date(now.getTime() + 24 * 60 * 60 * 1000), digest(requestIp), digest(userAgent)]);
+    await client.query(`INSERT INTO saas.pending_registrations(tenant_id,email,requested_plan_code,verification_token_hash,verification_expires_at,request_ip_hash,request_user_agent_hash,password_hash,mfa_secret_encrypted)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [tenantId, email, plan, tokenHash, new Date(now.getTime() + 24 * 60 * 60 * 1000), digest(requestIp), digest(userAgent), passwordHash, mfaSecretEncrypted]);
     await client.query("INSERT INTO saas.subscriptions(tenant_id,plan_code,status) VALUES($1,$2,'PENDING_PAYMENT')", [tenantId, plan]);
     await client.query("SELECT tenant_portal.provision_empty_tenant($1,$2)", [tenantId, company]);
     await client.query("INSERT INTO saas.audit_events(tenant_id,action,target_type,target_id,metadata) VALUES($1,'REGISTRATION_CREATED','tenant',$1::uuid::text,$2)", [tenantId, { plan, externalWrite: false, productionAccessGranted: false }]);
@@ -112,14 +117,16 @@ export async function registerPendingTenant(client, input, { verificationPepper,
   } catch (error) { await client.query("ROLLBACK"); throw error; }
 }
 
-export async function verifyPendingRegistration(pool, token, verificationPepper, now = new Date()) {
+export async function verifyPendingRegistration(pool, token, verificationPepper, fieldEncryptionKey, mfaCode, now = new Date()) {
   const tokenHash = hashVerificationToken(token, verificationPepper);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query("SELECT set_config('app.verification_token_hash',$1,true)", [tokenHash]);
-    const lookup = await client.query("SELECT tenant_id FROM saas.pending_registrations WHERE verification_token_hash=$1 AND verification_expires_at>$2 AND status IN('EMAIL_VERIFICATION_PENDING','PAYMENT_PENDING')", [tokenHash, now]);
+    const lookup = await client.query("SELECT tenant_id,mfa_secret_encrypted FROM saas.pending_registrations WHERE verification_token_hash=$1 AND verification_expires_at>$2 AND status IN('EMAIL_VERIFICATION_PENDING','PAYMENT_PENDING')", [tokenHash, now]);
     if (!lookup.rowCount) throw Object.assign(new Error("verification_token_invalid_or_expired"), { statusCode: 400 });
+    const totpSecret = decryptTotpSecret(lookup.rows[0].mfa_secret_encrypted, fieldEncryptionKey);
+    if (validTotpCounter(totpSecret, String(mfaCode || ""), now.getTime()) == null) throw Object.assign(new Error("mfa_code_invalid"), { statusCode: 400 });
     await client.query("SELECT set_config('app.tenant_id',$1,true)", [String(lookup.rows[0].tenant_id)]);
     const result = await client.query(`UPDATE saas.pending_registrations SET status='PAYMENT_PENDING',email_verified_at=coalesce(email_verified_at,$2),updated_at=$2
       WHERE verification_token_hash=$1 AND verification_expires_at>$2 AND status IN('EMAIL_VERIFICATION_PENDING','PAYMENT_PENDING')
@@ -175,6 +182,7 @@ export async function applyBillingEvent(client, event, rawPayload, now = new Dat
     if (mapped === "PAYMENT_CONFIRMED") {
       await client.query("UPDATE saas.tenants SET status='ACTIVE',updated_at=$2 WHERE id=$1", [event.tenantId, now]);
       await client.query("UPDATE saas.pending_registrations SET status=CASE WHEN iam_provisioned_at IS NULL THEN 'IAM_PROVISIONING_PENDING' ELSE 'ACTIVATED' END,verification_token_hash=NULL,updated_at=$2 WHERE tenant_id=$1", [event.tenantId, now]);
+      await client.query("SELECT saas.provision_pending_native_identity($1)", [event.tenantId]);
     }
     await client.query("INSERT INTO saas.audit_events(tenant_id,action,metadata) VALUES($1,$2,$3)", [event.tenantId, `BILLING_${mapped}`, { provider: event.provider, providerEventId: event.id }]);
     await client.query("COMMIT"); return { idempotent: false, status: update.status };
@@ -182,8 +190,8 @@ export async function applyBillingEvent(client, event, rawPayload, now = new Dat
 }
 
 const commercialCss = `:root{font-family:Inter,Roboto,Arial,sans-serif;color:#172033;background:#f5f8f8}*{box-sizing:border-box}body{margin:0}header,main,footer{width:min(1120px,calc(100% - 2rem));margin:auto}header{display:flex;justify-content:space-between;align-items:center;padding:1.2rem 0}a{color:#087173}.hero{text-align:center;padding:4rem 1rem 2rem}.hero h1{font-size:clamp(2rem,6vw,4rem);margin:.2rem}.plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1rem}.plan,.panel{background:white;border:1px solid #d8dee7;border-radius:14px;padding:1.3rem}.price{font-size:1.5rem;font-weight:700}.notice{border-left:4px solid #d97706;padding:.8rem;background:#fff8eb}.button,button{display:inline-block;background:#087173;color:white;border:0;border-radius:7px;padding:.8rem 1rem;font-weight:700;text-decoration:none}label{display:grid;gap:.35rem;margin:1rem 0}input,select{padding:.8rem;border:1px solid #aab5c3;border-radius:6px;font:inherit}footer{padding:3rem 0;color:#5d6878}@media(max-width:600px){header{align-items:flex-start;gap:1rem;flex-direction:column}}`;
-const registrationJs = `document.querySelector("form")?.addEventListener("submit",async(event)=>{event.preventDefault();const form=event.currentTarget,status=document.querySelector("#registration-status"),button=form.querySelector("button");button.disabled=true;status.textContent="Registrierung wird angelegt …";try{const body=Object.fromEntries(new FormData(form));const response=await fetch(form.action,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw new Error(result.error||"Registrierung fehlgeschlagen");form.hidden=true;status.textContent=result.delivery==="QUEUED"?"Bitte prüfen Sie Ihr E-Mail-Postfach.":"Das Konto wurde sicher vorgemerkt. Der E-Mail-Versand ist vor dem Start noch zu konfigurieren; es wurden keine Zugriffsrechte erteilt."}catch(error){status.textContent=error.message;button.disabled=false}});`;
-const verificationJs = `const status=document.querySelector("#verification-status"),token=location.hash.slice(1);history.replaceState(null,"",location.pathname);if(!token){status.textContent="Verifizierungslink unvollständig."}else fetch("/api/saas/verify-email",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({token})}).then(async response=>{const result=await response.json();if(!response.ok)throw new Error(result.error||"Verifizierung fehlgeschlagen");status.textContent="E-Mail bestätigt. Sie werden zur sicheren Zahlung weitergeleitet …";location.assign(result.checkoutUrl)}).catch(error=>status.textContent=error.message);`;
+const registrationJs = `document.querySelector("form")?.addEventListener("submit",async(event)=>{event.preventDefault();const form=event.currentTarget,status=document.querySelector("#registration-status"),button=form.querySelector("button"),setup=document.querySelector("#mfa-setup");button.disabled=true;status.textContent="Registrierung wird angelegt …";try{const body=Object.fromEntries(new FormData(form));if(body.password!==body.passwordConfirmation)throw new Error("Die Passwörter stimmen nicht überein.");const response=await fetch(form.action,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw new Error(result.error||"Registrierung fehlgeschlagen");form.hidden=true;setup.hidden=false;setup.querySelector("img").src=result.mfaQrCode;setup.querySelector("code").textContent=result.mfaManualKey;status.textContent=result.delivery==="QUEUED"?"Authenticator jetzt einrichten und anschließend den Link in Ihrem E-Mail-Postfach öffnen.":"E-Mail-Versand fehlgeschlagen. Bitte wenden Sie sich an den Support."}catch(error){status.textContent=error.message;button.disabled=false}});`;
+const verificationJs = `const status=document.querySelector("#verification-status"),form=document.querySelector("form"),token=location.hash.slice(1);history.replaceState(null,"",location.pathname);if(!token){form.hidden=true;status.textContent="Verifizierungslink unvollständig."}form?.addEventListener("submit",async event=>{event.preventDefault();const button=form.querySelector("button");button.disabled=true;status.textContent="E-Mail und Authenticator werden geprüft …";try{const response=await fetch("/api/saas/verify-email",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({token,mfaCode:new FormData(form).get("mfaCode")})});const result=await response.json();if(!response.ok)throw new Error(result.error||"Verifizierung fehlgeschlagen");status.textContent="Bestätigt. Sie werden zur sicheren Zahlung weitergeleitet …";location.assign(result.checkoutUrl)}catch(error){status.textContent=error.message;button.disabled=false}});`;
 const invitationJs = `const status=document.querySelector("#invitation-status"),params=new URLSearchParams(location.hash.slice(1)),tenantId=params.get("tenantId"),token=params.get("token"),csrf=()=>decodeURIComponent(document.cookie.split("; ").find(x=>x.startsWith("wb_csrf="))?.split("=").slice(1).join("=")||"");history.replaceState(null,"",location.pathname);if(!tenantId||!token){status.textContent="Einladungslink unvollständig."}else fetch("/api/saas/invitations/accept",{method:"POST",credentials:"same-origin",headers:{"content-type":"application/json","x-csrf-token":csrf()},body:JSON.stringify({tenantId,token})}).then(async response=>{const result=await response.json();if(!response.ok)throw new Error(result.error||"Einladung konnte nicht angenommen werden");status.textContent="Einladung angenommen."}).catch(error=>status.textContent=error.message);`;
 
 export function registerBillingWebhookRoute(app, { pool, enabled, billingAdapter = new UnconfiguredBillingAdapter(), applyEvent = applyBillingEvent }) {
@@ -215,7 +223,7 @@ export function registerBillingWebhookRoute(app, { pool, enabled, billingAdapter
   });
 }
 
-export function registerSaasRoutes(app, { pool, enabled, verificationPepper, invitationPepper = "", loadInternalIdentity, requireInternalAdmin, csrf, saasCsrf = csrf, emailAdapter = new UnconfiguredEmailAdapter(), billingAdapter = new UnconfiguredBillingAdapter(), loginUrl = "" }) {
+export function registerSaasRoutes(app, { pool, enabled, verificationPepper, invitationPepper = "", fieldEncryptionKey, loadInternalIdentity, requireInternalAdmin, csrf, saasCsrf = csrf, emailAdapter = new UnconfiguredEmailAdapter(), billingAdapter = new UnconfiguredBillingAdapter(), loginUrl = "" }) {
   const guard = async (_, reply) => { if (!enabled) return reply.code(404).send({ error: "saas_disabled" }); };
   registerBillingWebhookRoute(app, { pool, enabled, billingAdapter });
   app.get("/saas/assets/commercial.css", { preHandler: guard }, async (_, r) => r.type("text/css").send(commercialCss));
@@ -236,18 +244,24 @@ export function registerSaasRoutes(app, { pool, enabled, verificationPepper, inv
   app.get("/saas/register", { preHandler: guard }, async (req, r) => {
     const plans = (await pool.query("SELECT code,display_name FROM saas.plans WHERE active AND price_status='APPROVED' ORDER BY position")).rows;
     const options = plans.map((p) => `<option value="${esc(p.code)}"${req.query?.plan === p.code ? " selected" : ""}>${esc(p.display_name)}</option>`).join("");
-    return r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Konto anlegen</title><link rel="stylesheet" href="/saas/assets/commercial.css"><script src="/saas/assets/register.js" defer></script></head><body><header><strong>${esc(process.env.WB_TENDER_COMMERCIAL_BRAND || "Tender Autopilot")}</strong><a href="/saas/pricing">Pakete</a></header><main class="panel"><h1>Konto anlegen</h1><p class="notice">299,00 € netto werden sofort berechnet. Einrichtung und erste Monatsrate werden nach 14 Tagen fällig.</p><form method="post" action="/api/saas/register"><label>Geschäftliche E-Mail<input type="email" name="email" required autocomplete="email"></label><label>Unternehmen<input name="company" required maxlength="160" autocomplete="organization"></label><label>Paket<select name="plan">${options}</select></label><button type="submit">E-Mail bestätigen und buchen</button></form><p id="registration-status" role="status" aria-live="polite"></p></main></body></html>`);
+    return r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Konto anlegen</title><link rel="stylesheet" href="/saas/assets/commercial.css"><script src="/saas/assets/register.js" defer></script></head><body><header><strong>${esc(process.env.WB_TENDER_COMMERCIAL_BRAND || "Tender Autopilot")}</strong><a href="/saas/pricing">Pakete</a></header><main class="panel"><h1>Konto anlegen</h1><p class="notice">299,00 € netto werden sofort berechnet. Einrichtung und erste Monatsrate werden nach 14 Tagen fällig.</p><form method="post" action="/api/saas/register"><label>Geschäftliche E-Mail<input type="email" name="email" required autocomplete="email"></label><label>Unternehmen<input name="company" required maxlength="160" autocomplete="organization"></label><label>Paket<select name="plan">${options}</select></label><label>Passwort (mindestens 12 Zeichen)<input type="password" name="password" minlength="12" maxlength="128" required autocomplete="new-password"></label><label>Passwort wiederholen<input type="password" name="passwordConfirmation" minlength="12" maxlength="128" required autocomplete="new-password"></label><button type="submit">Sicheres Konto anlegen</button></form><section id="mfa-setup" hidden><h2>Authenticator einrichten</h2><p>Scannen Sie den QR-Code jetzt mit Ihrer Authenticator-App. Den sechsstelligen Code benötigen Sie nach dem Klick auf den Bestätigungslink in Ihrer E-Mail.</p><img alt="QR-Code für Authenticator" width="220" height="220"><p>Manueller Schlüssel: <code></code></p></section><p id="registration-status" role="status" aria-live="polite"></p></main></body></html>`);
   });
   app.post("/api/saas/register", { preHandler: guard, config: { rateLimit: { max: 8, timeWindow: "1 hour" } } }, async (req, reply) => {
     const client = await pool.connect();
     try {
-      const created = await registerPendingTenant(client, req.body || {}, { verificationPepper, requestIp: req.ip, userAgent: req.headers["user-agent"] });
+      const password = String(req.body?.password || ""), confirmation = String(req.body?.passwordConfirmation || "");
+      if (password.length < 12 || password.length > 128 || password !== confirmation) return reply.code(400).send({ error: "password_invalid" });
+      const mfaSecret = randomTotpSecret();
+      const created = await registerPendingTenant(client, { ...(req.body || {}), passwordHash: await hashTenderPassword(password), mfaSecretEncrypted: encryptTotpSecret(mfaSecret, fieldEncryptionKey) }, { verificationPepper, requestIp: req.ip, userAgent: req.headers["user-agent"] });
+      const issuer = process.env.WB_TENDER_COMMERCIAL_BRAND || "WB Tender";
+      const otpauth = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(created.email)}?${new URLSearchParams({ secret:mfaSecret,issuer,algorithm:"SHA1",digits:"6",period:"30" })}`;
+      const mfaQrCode = await QRCode.toDataURL(otpauth, { errorCorrectionLevel: "M", margin: 2, width: 220 });
       let delivery = "PENDING_PROVIDER_CONFIGURATION";
       if (emailAdapter.configured) {
         try { await emailAdapter.sendVerification({ email: created.email, token: created.token, tenantId: created.tenantId }); delivery = "QUEUED"; }
         catch { delivery = "PROVIDER_DELIVERY_FAILED"; }
       }
-      return reply.code(202).send({ status: "EMAIL_VERIFICATION_PENDING", delivery, productionAccessGranted: false, paymentStatus: "PENDING_PAYMENT" });
+      return reply.code(202).send({ status: "EMAIL_VERIFICATION_PENDING", delivery, mfaQrCode, mfaManualKey:mfaSecret, productionAccessGranted: false, paymentStatus: "PENDING_PAYMENT" });
     } catch (error) {
       if (error.message === "registration_already_exists" || error.code === "23505")
         return reply.code(202).send({ status: "REGISTRATION_RECEIVED", productionAccessGranted: false, paymentStatus: "PENDING_PAYMENT" });
@@ -255,19 +269,19 @@ export function registerSaasRoutes(app, { pool, enabled, verificationPepper, inv
     }
     finally { client.release(); }
   });
-  app.get("/saas/verify", { preHandler: guard }, async (_, r) => r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>E-Mail bestätigen</title><link rel="stylesheet" href="/saas/assets/commercial.css"><script src="/saas/assets/verify.js" defer></script></head><body><main class="panel"><h1>E-Mail bestätigen</h1><p id="verification-status" role="status" aria-live="polite">Verifizierung läuft …</p></main></body></html>`));
+  app.get("/saas/verify", { preHandler: guard }, async (_, r) => r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>E-Mail bestätigen</title><link rel="stylesheet" href="/saas/assets/commercial.css"><script src="/saas/assets/verify.js" defer></script></head><body><main class="panel"><h1>E-Mail bestätigen</h1><form><label>Aktueller Authenticator-Code<input name="mfaCode" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" required></label><button type="submit">Bestätigen und zu Stripe</button></form><p id="verification-status" role="status" aria-live="polite">Bitte geben Sie den sechsstelligen Code ein.</p></main></body></html>`));
   app.get("/saas/invitation", { preHandler: guard }, async (_, r) => r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Einladung annehmen</title><link rel="stylesheet" href="/saas/assets/commercial.css"><script src="/saas/assets/invitation.js" defer></script></head><body><main class="panel"><h1>Einladung annehmen</h1><p id="invitation-status" role="status" aria-live="polite">Einladung wird geprüft …</p></main></body></html>`));
   app.post("/api/saas/verify-email", { preHandler: guard }, async (req, reply) => {
     try {
       if (!billingAdapter.configured) return reply.code(503).send({ error: "payment_provider_not_configured" });
-      const verified = await verifyPendingRegistration(pool, String(req.body?.token || ""), verificationPepper);
+      const verified = await verifyPendingRegistration(pool, String(req.body?.token || ""), verificationPepper, fieldEncryptionKey, req.body?.mfaCode);
       const checkout = await billingAdapter.createCheckout({ tenantId: verified.tenant_id, plan: verified.requested_plan_code, trialDays: 14, paymentRequired: true });
       await withTenantContext(pool,{tenantId:verified.tenant_id},(db)=>db.query("INSERT INTO saas.checkout_sessions(provider,provider_checkout_ref,tenant_id,plan_code) VALUES($1,$2,$3,$4) ON CONFLICT(provider,provider_checkout_ref) DO NOTHING",[billingAdapter.provider,checkout.id,verified.tenant_id,verified.requested_plan_code]));
       return { status: "PAYMENT_PENDING", checkoutUrl: checkout.url, productionAccessGranted: false };
     }
     catch (error) { return reply.code(error.statusCode || 400).send({ error: error.message }); }
   });
-  app.get("/saas/payment-complete", { preHandler: guard }, async (_, r) => r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Buchung abgeschlossen</title><link rel="stylesheet" href="/saas/assets/commercial.css"></head><body><main class="panel"><h1>Buchung abgeschlossen</h1><p>Die Zahlung wurde übermittelt. Aktivieren Sie jetzt Ihren sicheren Portalzugang.</p><p><a class="button" href="/saas/login?returnTo=/saas/">Portalzugang aktivieren</a></p></main></body></html>`));
+  app.get("/saas/payment-complete", { preHandler: guard }, async (_, r) => r.type("text/html").send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Buchung abgeschlossen</title><link rel="stylesheet" href="/saas/assets/commercial.css"></head><body><main class="panel"><h1>Buchung abgeschlossen</h1><p>Ihre Buchung wurde übermittelt. Sobald Stripe die Zahlung bestätigt hat, können Sie sich mit Ihrer E-Mail-Adresse, Ihrem Passwort und Ihrem Authenticator-Code anmelden.</p><p><a class="button" href="/saas/login?returnTo=/saas/app/tender-scout">Zum Portalzugang</a></p></main></body></html>`));
   app.post("/api/saas/checkout", { preHandler: [guard, loadInternalIdentity, saasCsrf] }, async (req, reply) => {
     if (!req.identity?.saas) return reply.code(403).send({ error: "saas_membership_required" });
     if (!billingAdapter.configured) return reply.code(503).send({ error: "payment_provider_not_configured", trialActivated: false });
