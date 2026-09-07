@@ -197,6 +197,8 @@ test("all three packages use separate card subscriptions or explicitly paid manu
     assert.equal(session.get('line_items[1][price]'),'price_setup'+plan);
     assert.equal(session.get('metadata[purchase_kind]'),'PACKAGE');
     assert.equal(session.get('subscription_data[trial_period_days]'),null);
+    assert.equal(session.get('subscription_data[automatic_tax][enabled]'),null);
+    assert.equal(session.get('automatic_tax[enabled]'),'true');
     assert.ok(!session.toString().includes('activation'));assert.ok(!session.toString().includes('sepa'));
     if(billingPath!=='AUTO_CARD'){
       assert.equal(session.get('line_items[0][price_data][unit_amount]'),String(prices[plan]));
