@@ -65,8 +65,8 @@ BEGIN
    RAISE EXCEPTION 'automation_job_binding_immutable';
  END IF;
  IF NEW.module_key<>'tender_autopilot' OR NEW.status NOT IN('RUNNING','SUCCEEDED') THEN RETURN NEW; END IF;
- IF NOT saas.tenant_matches(NEW.tenant_id) THEN RAISE EXCEPTION 'tenant_context_required'; END IF;
- IF NOT saas.module_entitled(NEW.tenant_id,'tender_autopilot',now()) THEN RAISE EXCEPTION 'module_entitlement_required'; END IF;
+ IF saas.tenant_matches(NEW.tenant_id) IS DISTINCT FROM true THEN RAISE EXCEPTION 'tenant_context_required'; END IF;
+ IF saas.module_entitled(NEW.tenant_id,'tender_autopilot',now()) IS DISTINCT FROM true THEN RAISE EXCEPTION 'module_entitlement_required'; END IF;
  BEGIN workspace:=(NEW.payload->>'workspaceId')::uuid;
  EXCEPTION WHEN invalid_text_representation THEN RAISE EXCEPTION 'automation_workspace_required'; END;
  IF workspace IS NULL OR NOT EXISTS(SELECT 1 FROM tenant_portal.tender_workspaces WHERE tenant_id=NEW.tenant_id AND id=workspace) THEN
