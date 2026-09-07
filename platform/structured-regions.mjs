@@ -116,25 +116,50 @@ export async function validateStructuredRegionConfiguration(value,{geocode=nomin
 export function structuredRules(value){return isStructuredRegionConfiguration(value)?value.regions.filter(row=>row.validationStatus==="VALID"):[]}
 export function haversineKm(a,b){const rad=x=>x*Math.PI/180,R=6371,dLat=rad(b.latitude-a.latitude),dLon=rad(b.longitude-a.longitude),x=Math.sin(dLat/2)**2+Math.cos(rad(a.latitude))*Math.cos(rad(b.latitude))*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(x))}
 
+const coordinate=(value,limit)=>{
+  if(value==null||typeof value==='boolean'||String(value).trim()==='')return null;
+  const number=Number(value);return Number.isFinite(number)&&Math.abs(number)<=limit?number:null;
+};
 function sourceLocation(item){
-  if(!item||typeof item!=="object")return null;const latitude=Number(item.latitude??item.lat),longitude=Number(item.longitude??item.lon),nutsCode=canonicalNuts(item.nuts??item.region),state=canonicalState(item.state??(nutsCode?.slice(0,3))),postalCode=canonicalPostalCode(item.postalCode??item.postal_code),place=String(item.locality??item.city??item.place??"").trim()||null;
-  return {latitude:Number.isFinite(latitude)?latitude:null,longitude:Number.isFinite(longitude)?longitude:null,nutsCode,state,postalCode,place};
+  if(!item||typeof item!=="object")return null;
+  // An explicitly tagged buyer address must never become a performance place.
+  if(['BUYER','CONTRACTING_AUTHORITY'].includes(String(item.role||item.locationRole||'').toUpperCase()))return null;
+  const nutsCode=canonicalNuts(item.nuts??item.region),explicitState=canonicalState(item.state),state=explicitState||canonicalState(nutsCode?.slice(0,3));
+  return {latitude:coordinate(item.latitude??item.lat,90),longitude:coordinate(item.longitude??item.lon,180),nutsCode,state,
+    postalCode:canonicalPostalCode(item.postalCode??item.postal_code),place:String(item.locality??item.city??item.place??"").normalize('NFKC').trim()||null,
+    district:String(item.district??item.county??"").normalize('NFKC').trim()||null,
+    conflicting:Boolean(explicitState&&nutsCode&&!nutsCode.startsWith(explicitState.nuts)),
+    nationwide:item.nationwide===true||['DE','DEU','ANYW','ANYWHERE'].includes(String(item.nuts??item.region??'').toUpperCase())};
 }
-export function evaluateStructuredRegions(value,locations=[]){
-  const rules=structuredRules(value),resolved=locations.map(sourceLocation).filter(Boolean),distinct=new Map(resolved.map(x=>[JSON.stringify(x),x]));
-  if(!rules.length)return {classification:"REGION_UNRESOLVED",matchingStatus:"CONFIGURATION_REQUIRED",reason:"Keine gültige strukturierte Kernregion ist aktiv.",matches:[]};
-  if(!distinct.size)return {classification:"REGION_UNRESOLVED",matchingStatus:"REGION_REVIEW_REQUIRED",reason:"Kein strukturierter Leistungsort vorhanden; der Auftraggeberstandort wird nicht ersatzweise verwendet.",matches:[]};
-  if(distinct.size>1)return {classification:"MULTI_REGION_REVIEW",matchingStatus:"REGION_REVIEW_REQUIRED",reason:"Mehrere Leistungsorte müssen einzeln beziehungsweise losbezogen geprüft werden.",matches:[]};
-  const location=[...distinct.values()][0],matches=[];let insufficient=false;
+function evaluateLocation(rules,location){
+  const matches=[];let insufficient=false;
+  if(location.conflicting||location.nationwide)return {location,classification:'REGION_UNRESOLVED',matches};
   for(const rule of rules){
-    if(rule.type==="POSTAL_CODE"&&location.postalCode&&location.postalCode===rule.postalCode)matches.push({rule,distanceKm:null});
-    else if(rule.type==="NUTS"&&location.nutsCode&&(location.nutsCode===rule.nutsCode||location.nutsCode.startsWith(rule.nutsCode)))matches.push({rule,distanceKm:null});
-    else if(rule.type==="STATE"&&((location.state&&location.state.nuts===canonicalState(rule.state)?.nuts)||(location.nutsCode&&location.nutsCode.startsWith(rule.nutsCode))))matches.push({rule,distanceKm:null});
-    else if(rule.type==="PLACE_RADIUS"){
-      if(location.latitude===null||location.longitude===null){insufficient=true;continue}const distanceKm=haversineKm(rule,location);if(distanceKm<=rule.radiusKm)matches.push({rule,distanceKm});
+    if(rule.type==='POSTAL_CODE'){
+      if(!location.postalCode)insufficient=true;
+      else if(location.postalCode===rule.postalCode)matches.push({rule,distanceKm:null});
+    }else if(rule.type==='NUTS'){
+      if(!location.nutsCode||rule.nutsCode.startsWith(location.nutsCode)&&rule.nutsCode!==location.nutsCode)insufficient=true;
+      else if(location.nutsCode.startsWith(rule.nutsCode))matches.push({rule,distanceKm:null});
+    }else if(rule.type==='STATE'){
+      if(!location.state&&!location.nutsCode)insufficient=true;
+      else if(location.state?.nuts===canonicalState(rule.state)?.nuts||location.nutsCode?.startsWith(rule.nutsCode))matches.push({rule,distanceKm:null});
+    }else if(rule.type==='PLACE_RADIUS'){
+      if(location.latitude===null||location.longitude===null){insufficient=true;continue}
+      const distanceKm=haversineKm(rule,location);if(distanceKm<=rule.radiusKm)matches.push({rule,distanceKm});
     }
   }
-  if(matches.length)return {classification:"CORE_REGION",matchingStatus:"REGION_GATE_PASSED",reason:"Der eindeutige Leistungsort entspricht der aktiven strukturierten Kernregionsversion.",matches};
-  if(insufficient)return {classification:"REGION_UNRESOLVED",matchingStatus:"REGION_REVIEW_REQUIRED",reason:"Für die Radiusprüfung fehlen belegte Koordinaten des Leistungsorts.",matches:[]};
-  return {classification:"OUTSIDE_CORE_REGION",matchingStatus:"OUTSIDE_CORE_REGION",reason:"Der eindeutige Leistungsort liegt außerhalb der aktiven strukturierten Kernregion.",matches:[]};
+  return {location,classification:matches.length?'CORE_REGION':insufficient?'REGION_UNRESOLVED':'OUTSIDE_CORE_REGION',matches};
+}
+export function evaluateStructuredRegions(value,locations=[]){
+  const rules=structuredRules(value).toSorted((a,b)=>JSON.stringify(checksumValue(a)).localeCompare(JSON.stringify(checksumValue(b))));
+  const distinct=new Map(locations.map(sourceLocation).filter(Boolean).map(location=>[JSON.stringify(location),location]));
+  if(!rules.length)return {classification:'REGION_UNRESOLVED',matchingStatus:'CONFIGURATION_REQUIRED',reason:'Keine gültige strukturierte Kernregion ist aktiv.',matches:[],locations:[]};
+  if(!distinct.size)return {classification:'REGION_UNRESOLVED',matchingStatus:'REGION_REVIEW_REQUIRED',reason:'Kein strukturierter Leistungsort vorhanden; der Auftraggeberstandort wird nicht ersatzweise verwendet.',matches:[],locations:[]};
+  const evaluated=[...distinct].sort(([a],[b])=>a.localeCompare(b)).map(([,location])=>evaluateLocation(rules,location));
+  const allCore=evaluated.every(item=>item.classification==='CORE_REGION');
+  const classification=allCore?'CORE_REGION':evaluated.length>1?'MULTI_REGION_REVIEW':evaluated[0].classification;
+  return {classification,matchingStatus:allCore?'REGION_GATE_PASSED':classification==='OUTSIDE_CORE_REGION'?'OUTSIDE_CORE_REGION':'REGION_REVIEW_REQUIRED',
+    reason:allCore?'Alle belegten Leistungsorte entsprechen der aktiven strukturierten Kernregionsversion.':evaluated.length>1?'Mindestens ein Leistungsort ist ungeklärt oder liegt außerhalb der Kernregion; Einzelprüfung erforderlich.':classification==='OUTSIDE_CORE_REGION'?'Der belegte Leistungsort liegt außerhalb der aktiven Kernregion.':'Leistungsort unvollständig, bundesweit oder widersprüchlich; manuelle Prüfung erforderlich.',
+    matches:evaluated.flatMap(item=>item.matches.map(match=>({...match,location:item.location}))),locations:evaluated};
 }
