@@ -24,3 +24,17 @@ with tempfile.TemporaryDirectory() as directory:
 print('PASS')`;
  assert.equal(execFileSync('python3',['-B','-c',script],{encoding:'utf8'}).trim(),'PASS');
 });
+
+test('scanner monitor checks the loaded signatures, binding and daemon health',()=>{
+ const script=`import importlib.util,datetime
+s=importlib.util.spec_from_file_location('monitor','deployment/production-monitor.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+now=datetime.datetime(2026,9,8,6,0,tzinfo=datetime.timezone.utc)
+r={'project':'wb-tender-malware','configuredImage':m.SCANNER_IMAGE,'health':'healthy','restarts':0,'ping':'PONG','version':'ClamAV 1.5.4/28116/Mon Sep  7 06:24:32 2026','portBindings':{'3310/tcp':[{'HostIp':'127.0.0.1','HostPort':'13310'}]}}
+assert m.scanner_failures(r,now)==[]
+for field,value in [('project','foreign'),('configuredImage','latest'),('health','unhealthy'),('restarts',1),('ping',''),('portBindings',{'3310/tcp':[{'HostIp':'0.0.0.0','HostPort':'13310'}]}),('version','invalid')]:
+ bad=dict(r);bad[field]=value;assert m.scanner_failures(bad,now)
+assert 'scanner:signatures_stale' in m.scanner_failures(r,now+datetime.timedelta(days=3))
+assert 'scanner:signatures_stale' in m.scanner_failures(r,now-datetime.timedelta(days=3))
+print('PASS')`;
+ assert.equal(execFileSync('python3',['-B','-c',script],{encoding:'utf8'}).trim(),'PASS');
+});
