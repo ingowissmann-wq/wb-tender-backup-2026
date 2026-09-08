@@ -57,6 +57,8 @@ export async function loadDispatchCredential(db,row,{keyringFile,legacyKeyFile})
  }else{
   stored=(await db.query(`WITH RECURSIVE recovered(id,depth) AS(SELECT $2::uuid,0 UNION ALL SELECT r.new_credential_id,recovered.depth+1 FROM recovered JOIN tender.submission_credential_recoveries r ON r.previous_credential_id=recovered.id AND r.tenant_id=$4 AND r.company_id=$1 AND r.portal_id=$3 WHERE recovered.depth<16) SELECT c.* FROM recovered JOIN tender.portal_credential_secrets c ON c.id=recovered.id JOIN tender.portal_credential_companies b ON b.credential_id=c.id AND b.company_id=$1 AND b.active WHERE c.portal_id=$3 AND c.status='ACTIVE' AND c.revoked_at IS NULL ORDER BY recovered.depth DESC LIMIT 1`,[row.company_id,row.binding.credentialId,row.portal_id,row.tenant_id])).rows[0];
   requireDispatch(stored,'submission_credentials_required');
+  requireDispatch(!stored.valid_until||Number.isFinite(Date.parse(stored.valid_until))&&Date.parse(stored.valid_until)>Date.now(),'submission_credentials_required');
+  requireDispatch(!stored.bound_host||stored.bound_host===row.binding.portalHost,'submission_credential_host_mismatch');
   try{secret=decryptSecret(stored,credentialKey(legacyKeyFile));}catch{throw Object.assign(new Error('submission_credentials_required'),{code:'submission_credentials_required'})}
  }
  requireDispatch(typeof secret?.username==='string'&&typeof secret.password==='string'&&secret.password.length>0,'submission_credentials_required');

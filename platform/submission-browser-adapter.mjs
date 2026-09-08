@@ -6,6 +6,13 @@ import {canonicalJson,liveSubmissionHash} from './submission-live-core.mjs';
 
 export const SUBMISSION_BROWSER_CODE_SHA256=bytesHash(readFileSync(new URL(import.meta.url)));
 const readOnlySources=new Set(['ted','ted-discovery','datenservice-oeffentlicher-einkauf']);
+export function submissionLoginFailure(resultCode){
+ if(resultCode==='PORTAL_NICHT_ERREICHBAR')return dispatchError('submission_network_unavailable');
+ if(/FORMULAR|REDIRECT/.test(resultCode||''))return dispatchError('submission_portal_changed');
+ if(/MFA|CAPTCHA/.test(resultCode||''))return dispatchError('submission_portal_interaction_required');
+ if(['BENUTZERNAME_ODER_PASSWORT_FALSCH','KONTO_GESPERRT','PASSWORT_ABGELAUFEN'].includes(resultCode))return dispatchError('submission_credentials_required');
+ return dispatchError('submission_login_not_verified');
+}
 export function validateSubmissionProfile(profile,binding,{isolatedTest=false}={}){
  requireDispatch(profile?.kind==='WB_BROWSER_SUBMISSION_PROFILE_V1','submission_portal_changed');
  requireDispatch(profile.host===binding.portalHost&&profile.adapterId===binding.portalAdapterId&&profile.adapterVersion===binding.portalAdapterVersion,'submission_portal_binding_invalid');
@@ -63,10 +70,10 @@ export class BrowserSubmissionAdapter{
  async prepare({credential,documents,fence,onEvidence=async()=>{}}){
   this.fence=fence;assertDispatchDocuments(this.binding,documents);await fence();
   const login=await this.authenticate({portal:this.portal,credential,targetUrl:this.binding.portalTenderUrl,timeoutMs:60000});
-  if(login.resultCode!=='LOGIN_ERFOLGREICH')throw dispatchError(/FORMULAR|REDIRECT/.test(login.resultCode||'')?'submission_portal_changed':/MFA|CAPTCHA/.test(login.resultCode||'')?'submission_portal_interaction_required':'submission_credentials_required');
+  if(login.resultCode!=='LOGIN_ERFOLGREICH')throw submissionLoginFailure(login.resultCode);
   requireDispatch(login.documentAccess&&login.session?.storageState,'submission_credentials_required');
   this.browser=await this.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium-browser',args:['--disable-dev-shm-usage','--no-sandbox']});
-  this.context=await this.browser.newContext({acceptDownloads:true,storageState:login.session.storageState});
+  this.context=await this.browser.newContext({acceptDownloads:true,serviceWorkers:'block',storageState:login.session.storageState});
   await this.setupContext?.(this.context);
   await this.context.route('**/*',async route=>{
    const req=route.request(),url=req.url();let allowed=submissionRequestAllowed({url,method:req.method(),body:req.postData()},{binding:this.binding,profile:this.profile,phase:this.phase});
