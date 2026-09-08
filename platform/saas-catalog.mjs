@@ -106,6 +106,7 @@ export function resolveModuleEntitlements({ planCode, commercialScope = "BUNDLE"
 
 export function moduleAccess(context, moduleKey, now = new Date()) {
   const key = normalizeModuleKey(moduleKey);
+  if(context?.role==='BILLING')return {allowed:false,reason:'billing_role_only',module:key};
   const access = context?.access || effectiveAccess(context, now);
   if (!access.allowed) return { allowed: false, reason: access.reason, module: key };
   return (context.modules || []).includes(key)
@@ -114,6 +115,7 @@ export function moduleAccess(context, moduleKey, now = new Date()) {
 }
 
 export function technicalCapabilities(context) {
+  if(context?.role==='BILLING')return Object.freeze([]);
   return Object.freeze([...new Set((context?.modules || []).flatMap((key) => MODULE_CAPABILITIES[key] || []))]);
 }
 

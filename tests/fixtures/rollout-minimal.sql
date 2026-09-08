@@ -108,7 +108,7 @@ CREATE TABLE saas.checkout_sessions(
   plan_code text,
   status text
 );
-CREATE TABLE saas.subscriptions(tenant_id uuid PRIMARY KEY,status text);
+CREATE TABLE saas.subscriptions(tenant_id uuid PRIMARY KEY,status text,trial_ends_at timestamptz);
 CREATE TABLE saas.tenant_memberships(
   tenant_id uuid,
   user_id uuid,
@@ -182,3 +182,13 @@ BEGIN
   UPDATE tenant_portal.jobs SET status='RUNNING',claimed_at=now() WHERE tenant_id=candidate AND id=candidate_job RETURNING * INTO claimed;
   RETURN claimed;
 END $$;
+
+CREATE TABLE saas.tenant_invitations(
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL REFERENCES saas.tenants(id) ON DELETE CASCADE,
+  email text NOT NULL, role text NOT NULL CHECK(role IN('ADMIN','MEMBER','BILLING')), token_hash char(64) NOT NULL UNIQUE,
+  status text NOT NULL DEFAULT 'PENDING' CHECK(status IN('PENDING','ACCEPTED','EXPIRED','REVOKED')),
+  expires_at timestamptz NOT NULL, invited_by uuid NOT NULL REFERENCES iam.users(id), accepted_user_id uuid REFERENCES iam.users(id),
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(), UNIQUE(tenant_id,email,status)
+);
+
+ALTER TABLE iam.users ALTER COLUMN id SET DEFAULT gen_random_uuid();
