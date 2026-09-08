@@ -20,6 +20,7 @@ export function verifyOfferPrice(document,binding,expected){
 }
 export async function offerPackageZip(manifest,files){
  const zip=new JSZip(),date=new Date('1980-01-01T00:00:00Z');
+ zip.file('Angebot/',null,{dir:true,date});
  for(const file of files){if(digest(file.buffer)!==file.sha256)throw fail('offer_package_file_integrity_failed',409);const basename=path.basename(file.filename.replaceAll('\\','/')).replace(/[\x00-\x1f\x7f]/g,'_');zip.file('Angebot/'+file.id+'-'+basename,file.buffer,{date});}
  zip.file('Pruefnachweis.json',JSON.stringify(manifest,null,2)+'\n',{date});
  return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE',compressionOptions:{level:6}});

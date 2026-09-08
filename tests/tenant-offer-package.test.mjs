@@ -25,3 +25,16 @@ test('denied package downloads return JSON without attempting ZIP serialization'
  const app=Fastify();registerTenantOfferPackageRoutes(app,{pool:{connect(){throw new Error('database_must_not_be_called_for_invalid_identifier')}},storage:null,authenticate:async req=>{req.identity={userId:'22222222-2222-4222-8222-222222222222',saas:{tenant_id:document.id,role:'OWNER',modules:['tender_autopilot'],access:{allowed:true},plan_code:'ENTERPRISE'}}},csrf:async()=>{}});
  try{const response=await app.inject({url:'/api/tenant-portal/packages/invalid/download'});assert.equal(response.statusCode,404);assert.match(response.headers['content-type'],/application\/json/);assert.equal(response.json().error,'offer_package_not_found');}finally{await app.close();}
 });
+
+test('offer archive bytes and directory timestamps stay identical across different download times',async()=>{
+ const NativeDate=globalThis.Date;let now=NativeDate.parse('2026-09-08T10:00:00Z');
+ globalThis.Date=class extends NativeDate{constructor(...args){super(...(args.length?args:[now]));}static now(){return now;}};
+ try{
+  const buffer=Buffer.from('source-verified document');const files=[{id:'stable-file',filename:'document.txt',buffer,sha256:crypto.createHash('sha256').update(buffer).digest('hex')}];
+  const first=await offerPackageZip({version:1,externalTransmission:false},files);now+=60000;
+  const second=await offerPackageZip({version:1,externalTransmission:false},files);
+  assert.equal(first.equals(second),true,'Unchanged approved package must have identical bytes one minute later');
+  const archive=await JSZip.loadAsync(first);
+  for(const entry of Object.values(archive.files))assert.equal(entry.date.toISOString(),'1980-01-01T00:00:00.000Z');
+ }finally{globalThis.Date=NativeDate;}
+});
