@@ -201,12 +201,37 @@ SELECT json_build_object(
         command(['systemctl', 'is-enabled', '--quiet', 'wb-tender-production-backup.timer'])
     except Exception:
         report['errors'].append('daily_backup_timer_inactive')
+    try:
+        backup_state = json.loads(Path('/var/lib/wb-tender-production-backup/current.json').read_text())
+    except (OSError, ValueError):
+        backup_state = None
+    report['scheduledBackup'] = {key: backup_state.get(key) for key in ('status', 'checkedAt', 'backupCreated', 'availableBytes', 'requiredBytes')} if isinstance(backup_state, dict) else None
+    report['errors'].extend(scheduled_backup_failures(backup_state))
     usage = os.statvfs('/srv/wb-tender-production')
     report['diskFreePercent'] = round(100 * usage.f_bavail / usage.f_blocks, 2)
     if report['diskFreePercent'] < 15:
         report['errors'].append('disk_space_low')
     report['healthy'] = not report['errors']
     return report
+
+
+def scheduled_backup_failures(record, now=None):
+    if not isinstance(record, dict):
+        return ['scheduled_backup_state_missing']
+    status = record.get('status')
+    if status not in ('BACKUP_PASS', 'RUNNING'):
+        return ['scheduled_backup_' + str(status or 'missing').lower()]
+    try:
+        stamp = datetime.datetime.fromisoformat(record['checkedAt'])
+        age = ((now or datetime.datetime.now(datetime.timezone.utc)) - stamp).total_seconds()
+        maximum = 4 * 3600 + 600 if status == 'RUNNING' else 30 * 3600
+        if not 0 <= age <= maximum:
+            return ['scheduled_backup_state_stale']
+    except (KeyError, ValueError, TypeError):
+        return ['scheduled_backup_state_invalid']
+    if status == 'BACKUP_PASS' and record.get('backupCreated') is not True:
+        return ['scheduled_backup_result_invalid']
+    return []
 
 
 def main():

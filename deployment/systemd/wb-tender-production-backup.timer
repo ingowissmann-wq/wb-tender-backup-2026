@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted WB-Tender backup
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+Unit=wb-tender-production-backup.service
+
+[Install]
+WantedBy=timers.target
