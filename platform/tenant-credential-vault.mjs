@@ -93,6 +93,7 @@ export class TenantCredentialVault {
       if (checked.username!==username || checked.password!==password) throw fail('portal_credential_readback_failed');
       await this.audit(db,context,scope.id,previous?'PORTAL_CREDENTIAL_UPDATED':'PORTAL_CREDENTIAL_CREATED');
       await this.audit(db,context,scope.id,'PORTAL_CREDENTIAL_READBACK_VERIFIED');
+      await db.query('SELECT tender.resume_submission_after_credential_readback($1,$2,$3)',[context.id,companyId,portalId]);
       return this.metadata(stored);
     });
   }

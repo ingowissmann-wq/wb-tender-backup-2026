@@ -20,7 +20,8 @@
     "worker": "node platform/autopilot-pipeline-worker.mjs",
     "scheduler": "node platform/scheduler.mjs",
     "audit:production": "node scripts/production-system-audit.mjs",
-    "verify:artifact": "node scripts/verify-release-artifact.mjs"
+    "verify:artifact": "node scripts/verify-release-artifact.mjs",
+    "submission-worker": "node platform/submission-worker-service.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "11.0.2",
