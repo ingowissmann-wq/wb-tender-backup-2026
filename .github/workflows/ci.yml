@@ -136,3 +136,6 @@ jobs:
 
       - name: Prove CRM revisions, audit and tenant isolation against PostgreSQL
         run: DATABASE_URL_FILE="$RUNNER_TEMP/rollout-database-url" WB_TENDER_ROLLOUT_ISOLATED_TEST=true node tests/tenant-crm-postgres.integration.mjs
+
+      - name: Prove private employee self-service and onboarding against PostgreSQL
+        run: DATABASE_URL_FILE="$RUNNER_TEMP/rollout-database-url" WB_TENDER_ROLLOUT_ISOLATED_TEST=true node tests/tenant-people-postgres.integration.mjs
