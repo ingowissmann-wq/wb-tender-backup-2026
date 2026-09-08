@@ -1,3 +1,4 @@
+import {installPortalAuthenticationBoundary,portalAuthenticationHosts,portalAuthenticationRequestAllowed,validatePortalCredentialField} from './portal-auth-boundary.mjs';
 import { chromium } from "playwright";
 import { domainToASCII } from "node:url";
 
@@ -49,16 +50,16 @@ async function semanticInput(page,kind){
   }
   return null;
 }
-async function clickSemantic(page,words=loginWords){for(const frame of page.frames()){const match=await firstVisible([frame.getByRole("button",{name:words}),frame.getByRole("link",{name:words}),frame.locator('button[type="submit"],input[type="submit"],input[type="image"]')]);if(match){await Promise.allSettled([page.waitForLoadState("domcontentloaded",{timeout:15000}),match.click({timeout:10000})]);return true}}return false}
+async function clickSemantic(page,words=loginWords){for(const frame of page.frames()){const match=await firstVisible([frame.getByRole("button",{name:words}),frame.getByRole("link",{name:words})]);if(match){await Promise.allSettled([page.waitForLoadState("domcontentloaded",{timeout:15000}),match.click({timeout:10000})]);return true}}return false}
 async function consent(page){for(const frame of page.frames()){const match=await firstVisible([frame.getByRole("button",{name:consentWords}),frame.getByRole("link",{name:consentWords})]);if(match){await match.click({timeout:5000}).catch(()=>{});return}}}
 async function bodyText(page){return String(await page.locator("body").innerText({timeout:5000}).catch(()=>"" )).slice(0,20000)}
 const sessionInvalidWords=/session.{0,25}(abgelaufen|expired)|sitzung.{0,25}abgelaufen|erneut.{0,20}anmeld/i;
 const authenticatedWords=/abmeld|logout|mein konto|profil|organisation|vergabeverfahren|vergabeunterlagen|bieterbereich|workflowopen|wf_evalink/i;
-const safeBrowserFailure=(error,phase)=>({
+export const safeBrowserFailure=(error,phase)=>({
   resultCode:portalNavigationFailure(error)?"PORTAL_NICHT_ERREICHBAR":"TECHNISCHER_CONNECTORFEHLER",
   failurePhase:phase,
   failureClass:String(error?.name||"Error").slice(0,80),
-  failureReason:String(error?.message||"browser operation failed").replace(/https?:\/\/[^\s]+/gi,"[portal-url]").slice(0,240)
+  failureReason:portalNavigationFailure(error)?"Portal navigation unavailable":"Portal browser operation failed"
 });
 export async function browserSessionState(context,page){
   const storageState=await context.storageState(),sessionStorage=[];
@@ -114,11 +115,13 @@ export function classifyDeutscheEvergabeWorkflow(html=""){
 }
 
 export async function authenticatePortalWithBrowser({portal,credential,targetUrl=null,timeoutMs=120000,headless=true}={}){
-  const allowed=hostsFor(portal),configuredEntry=new URL(portal.authentication_entry_url||portal.login_path||"/",`https://${portal.canonical_domain}`).href,entry=new URL(configuredEntry).pathname==="/"&&targetUrl?targetUrl:configuredEntry;
-  if(!hostAllowed(new URL(entry).hostname,allowed))return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};
+  const allowed=portalAuthenticationHosts(portal),configuredEntry=new URL(portal.authentication_entry_url||portal.login_path||"/",`https://${portal.canonical_domain}`).href,entry=new URL(configuredEntry).pathname==="/"&&targetUrl?targetUrl:configuredEntry;
+  if(!portalAuthenticationRequestAllowed({url:entry,allowedHosts:allowed}))return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};
   const browser=await chromium.launch({headless,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||"/usr/bin/chromium-browser",args:["--disable-dev-shm-usage","--no-sandbox"]});
-  const context=await browser.newContext({acceptDownloads:true,javaScriptEnabled:true,locale:"de-DE"}),page=await context.newPage();
-  let forbidden=false,phase="INITIAL_NAVIGATION";
+  const context=await browser.newContext({acceptDownloads:false,serviceWorkers:"block",javaScriptEnabled:true,locale:"de-DE"});
+  let forbidden=false,phase="INITIAL_NAVIGATION";const allowedPostUrls=new Set();
+  await installPortalAuthenticationBoundary(context,portal,credential,()=>{forbidden=true},allowedPostUrls);
+  const page=await context.newPage();
   page.on("framenavigated",frame=>{if(frame===page.mainFrame()){try{const url=new URL(frame.url());if(url.protocol!=="about:"&&!hostAllowed(url.hostname,allowed))forbidden=true}catch{}}});
   try{
     const navigation=await page.goto(entry,{waitUntil:"domcontentloaded",timeout:timeoutMs});await consent(page);if(forbidden)return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};
@@ -130,12 +133,12 @@ export async function authenticatePortalWithBrowser({portal,credential,targetUrl
       password=page.locator('input[type="password"]').first();
       if(!await visible(password)){password=null;username=null}else{const form=password.locator("xpath=ancestor::form[1]");username=form.locator('input:not([type="submit"]):not([type="image"]):not([type="hidden"])[autocomplete="username"],input[type="email"],input:not([type="submit"]):not([type="image"]):not([type="hidden"])[name*="user" i],input:not([type="submit"]):not([type="image"]):not([type="hidden"])[name*="email" i],input:not([type="submit"]):not([type="image"]):not([type="hidden"])[name*="login" i],input[type="text"]').last();if(!await visible(username))username=null;portalSubmit=form.locator('button[type="submit"],input[type="submit"],input[type="image"],button:not([type])').first();if(!await visible(portalSubmit))portalSubmit=null}
     }else{username=await semanticInput(page,"username");password=await semanticInput(page,"password")}
-    if(!username&&!password){if(await clickSemantic(page)){await page.waitForTimeout(900);await consent(page);username=await semanticInput(page,"username");password=await semanticInput(page,"password")}}
+    if(!username&&!password){if(await clickSemantic(page,/anmeld|login|sign\s*in/i)){await page.waitForTimeout(900);await consent(page);username=await semanticInput(page,"username");password=await semanticInput(page,"password")}}
     if(!username&&!password){const pageText=await bodyText(page),cookies=await context.cookies(),cookie=cookieHeaderForUrl(cookies,targetUrl||entry);if(accountWords.test(pageText)&&cookie){const session=await browserSessionState(context,page);return {resultCode:"LOGIN_ERFOLGREICH",session,sessionExpiresAt:new Date(Date.now()+3600000).toISOString(),documentAccess:true,authenticatedUrl:page.url(),verifiedAt:new Date().toISOString()}}return {resultCode:"LOGIN_FORMULAR_GEAENDERT"}}
     if(!username&&password===null)return {resultCode:"LOGIN_FORMULAR_GEAENDERT"};
-    if(username){await username.fill(String(credential.username||""));password=await semanticInput(page,"password");if(!password){await clickSemantic(page);await page.waitForTimeout(750);await consent(page);password=await semanticInput(page,"password")}}
+    if(username){if(!await validatePortalCredentialField(username,allowed,allowedPostUrls))return {resultCode:"LOGIN_FORMULAR_UNSICHER"};await username.fill(String(credential.username||""));password=await semanticInput(page,"password");if(!password){await clickSemantic(page);await page.waitForTimeout(750);await consent(page);password=await semanticInput(page,"password")}}
     if(!password)return {resultCode:"LOGIN_FORMULAR_GEAENDERT"};
-    phase="CREDENTIAL_SUBMISSION";await password.fill(String(credential.password||""));if(portalSubmit)await Promise.all([page.waitForNavigation({waitUntil:"domcontentloaded",timeout:30000}).catch(()=>null),portalSubmit.click({timeout:10000,noWaitAfter:true}).catch(error=>{if(error?.name!=="TimeoutError")throw error})]);else await clickSemantic(page);await page.waitForTimeout(1200);await consent(page);if(forbidden)return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};
+    phase="CREDENTIAL_SUBMISSION";if(forbidden||!await validatePortalCredentialField(password,allowed,allowedPostUrls))return {resultCode:"LOGIN_FORMULAR_UNSICHER"};await password.fill(String(credential.password||""));if(portalSubmit)await Promise.all([page.waitForNavigation({waitUntil:"domcontentloaded",timeout:30000}).catch(()=>null),portalSubmit.click({timeout:10000,noWaitAfter:true}).catch(error=>{if(error?.name!=="TimeoutError")throw error})]);else await clickSemantic(page);await page.waitForTimeout(1200);await consent(page);if(forbidden)return {resultCode:"LOGIN_REDIRECT_UNERWARTET"};
     const text=await bodyText(page),otp=await firstVisible(page.frames().flatMap(frame=>[
       frame.locator('input[autocomplete="one-time-code"]'),
       frame.locator('input[name*="otp" i],input[id*="otp" i],input[name*="mfa" i],input[id*="mfa" i],input[name*="tan" i],input[id*="tan" i],input[name*="verification-code" i],input[id*="verification-code" i]')
