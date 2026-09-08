@@ -57,10 +57,10 @@ for (const inline of [
   "STRIPE_WEBHOOK_SECRET", "SAAS_SMTP_PASSWORD", "SAAS_INVITATION_PEPPER", "SAAS_VERIFICATION_PEPPER",
 ]) if (String(process.env[inline] || "").length) fail(`inline secret is forbidden: ${inline}`, 64);
 const applicationPrefix = /^(?:WB_|SAAS_|STRIPE_|E2E_|PORTAL_|DATABASE_|BACKUP_|SESSION_|FIELD_|PRODUCTION_)/;
-const sensitiveSuffix = /(?:PASSWORD|TOKEN|SECRET|KEY|SESSION|CREDENTIAL|DATABASE_URL)$/;
+const sensitiveSuffix = /(?:PASSWORD|TOKEN|SECRET|KEY|KEYRING|SESSION|CREDENTIAL|DATABASE_URL)$/;
 for (const [name, value] of Object.entries(process.env)) {
   if (value && applicationPrefix.test(name) && sensitiveSuffix.test(name) && !name.endsWith("_FILE")) fail(`inline secret is forbidden: ${name}`, 64);
-  if (value && applicationPrefix.test(name) && name.endsWith("_FILE") && /(?:PASSWORD|TOKEN|SECRET|KEY|SESSION|CREDENTIAL|DATABASE_URL)_FILE$/.test(name)
+  if (value && applicationPrefix.test(name) && name.endsWith("_FILE") && /(?:PASSWORD|TOKEN|SECRET|KEY|KEYRING|SESSION|CREDENTIAL|DATABASE_URL)_FILE$/.test(name)
       && !(preCanaryPhase && name === "PRODUCTION_SESSION_FILE")) secureFile(name, { rootOnly: name === "PRODUCTION_SESSION_FILE" });
 }
 

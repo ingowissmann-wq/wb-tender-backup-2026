@@ -20,7 +20,7 @@ test('booking rejects missing consent, free-form plans, subscription trials and 
   for(const [plan,amount] of [['NORMAL',349000],['PROFESSIONAL',639000],['ENTERPRISE',1239000]])assert.equal(bookingContract({...terms,purchaseKind:'PACKAGE',plan}).amountSubtotal,amount);
   assert.equal(bookingContract({...terms,purchaseKind:'PACKAGE',plan:'NORMAL',billingPath:'INVOICE_BILLIE',renewal:true}).amountSubtotal,99000);
 });
-function fixture({kind='TRIAL',checkoutStatus='CREATED',duplicate=false,currentKind=null,currentStatus='PENDING_PAYMENT'}={}){
+function fixture({kind='TRIAL',checkoutStatus='CREATED',duplicate=false,currentKind=null,currentStatus='PENDING_PAYMENT',newIdentity=false,companyFailure=false}={}){
   const queries=[];
   const current={plan_code:'ENTERPRISE',status:currentStatus,purchase_kind:currentKind};
   const checkout={purchase_kind:kind,plan_code:kind==='TRIAL'?'ENTERPRISE':'NORMAL',booking_id:booking,billing_path:'AUTO_CARD',consent_version:BOOKING_TERMS_VERSION,consented_at:now,amount_subtotal:kind==='TRIAL'?29900:349000,status:checkoutStatus,renewal:false};
@@ -30,7 +30,9 @@ function fixture({kind='TRIAL',checkoutStatus='CREATED',duplicate=false,currentK
     if(sql.startsWith('SELECT * FROM saas.subscriptions'))return{rows:[current]};
     if(sql.startsWith('SELECT * FROM saas.checkout_sessions'))return{rows:[checkout]};
     if(sql.startsWith('SELECT email_verified_at'))return{rows:[{email_verified_at:now,iam_provisioned_at:now}]};
-    if(sql.startsWith('SELECT iam_provisioned_at'))return{rows:[{iam_provisioned_at:now}]};
+    if(sql.startsWith('SELECT iam_provisioned_at'))return{rows:[{iam_provisioned_at:newIdentity?null:now}]};
+    if(sql.startsWith('SELECT saas.provision_pending_native_identity'))return{rows:[{user_id:booking}]};
+    if(sql.startsWith('INSERT INTO saas.tenant_companies')){if(companyFailure)throw new Error('synthetic_company_failure');return{rows:[{id:tenant}]};}
     if(sql.startsWith('SELECT customer_identity_hash'))return{rows:[{customer_identity_hash:'synthetic'}]};
     if(sql.startsWith('SELECT code,position'))return{rows:[{code:'ENTERPRISE',position:3,seat_limit:null,company_limit:null},{code:'NORMAL',position:1,seat_limit:3,company_limit:1}]};
     if(sql.startsWith('SELECT (SELECT count'))return{rows:[{seats:1,companies:1}]};
@@ -77,7 +79,23 @@ test('commercial gate supports native authentication and file peppers without fi
   const env={PATH:process.env.PATH,WB_TENDER_SAAS_ENABLED:'true',SAAS_IAM_ADAPTER:'native',SAAS_BILLING_ADAPTER:'stripe',SAAS_BILLING_PROVIDER:'stripe',SAAS_EMAIL_ADAPTER:'smtp',SAAS_EMAIL_PROVIDER:'smtp',WB_TENDER_TENANT_STORAGE_ADAPTER:'filesystem'};
   for(const name of ['WB_TENDER_TENANT_ISOLATION_VERIFIED','WB_TENDER_WB_BACKFILL_VERIFIED','WB_ADMIN_SAAS_ENABLED','WB_ADMIN_TENANCY_ENFORCED','WB_ADMIN_REAL_MODULE_ISOLATION_VERIFIED','WB_TENDER_LEGAL_APPROVED','WB_TENDER_COMMERCIAL_PRICES_APPROVED'])env[name]='true';
   for(const name of ['WB_TENDER_RUNTIME_DB_ROLE','STRIPE_PRICE_NORMAL','STRIPE_PRICE_PROFESSIONAL','STRIPE_PRICE_ENTERPRISE','STRIPE_PRICE_ACTIVATION','STRIPE_PRICE_SETUP_NORMAL','STRIPE_PRICE_SETUP_PROFESSIONAL','STRIPE_PRICE_SETUP_ENTERPRISE','WB_TENDER_PUBLIC_BASE_URL','WB_TENDER_TERMS_URL','WB_TENDER_PRIVACY_URL','WB_TENDER_IMPRINT_URL','WB_TENDER_DPA_URL'])env[name]='synthetic_configuration';
-  for(const name of ['STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','SAAS_VERIFICATION_PEPPER','SAAS_INVITATION_PEPPER','SAAS_SMTP_HOST','SAAS_SMTP_PORT','SAAS_SMTP_SECURE','SAAS_SMTP_USER','SAAS_SMTP_PASSWORD','SAAS_SMTP_FROM'])env[name+'_FILE']='/run/secrets/synthetic';
+  for(const name of ['STRIPE_SECRET_KEY','STRIPE_WEBHOOK_SECRET','SAAS_VERIFICATION_PEPPER','SAAS_INVITATION_PEPPER','SAAS_PORTAL_CREDENTIAL_KEYRING','SAAS_SMTP_HOST','SAAS_SMTP_PORT','SAAS_SMTP_SECURE','SAAS_SMTP_USER','SAAS_SMTP_PASSWORD','SAAS_SMTP_FROM'])env[name+'_FILE']='/run/secrets/synthetic';
   const output=execFileSync(process.execPath,['scripts/saas-commercial-readiness-gate.mjs'],{env,encoding:'utf8'});assert.equal(JSON.parse(output).passed,true);
   assert.throws(()=>execFileSync(process.execPath,['scripts/saas-commercial-readiness-gate.mjs'],{env:{...env,SAAS_INVITATION_PEPPER:'inline-forbidden'},stdio:'pipe'}));
+  assert.throws(()=>execFileSync(process.execPath,['scripts/saas-commercial-readiness-gate.mjs'],{env:{...env,SAAS_PORTAL_CREDENTIAL_KEYRING_FILE:''},stdio:'pipe'}));
+  assert.throws(()=>execFileSync(process.execPath,['scripts/saas-commercial-readiness-gate.mjs'],{env:{...env,SAAS_PORTAL_CREDENTIAL_KEYRING:'inline-forbidden'},stdio:'pipe'}));
+});
+
+test('first paid activation creates the registered company atomically and later package bookings preserve it',async()=>{
+ for(const kind of ['TRIAL','PACKAGE']){
+  const db=fixture({kind,newIdentity:true});await applyBillingEvent(db,event(kind),'{}',now);
+  const companies=db.queries.filter(([sql])=>sql.startsWith('INSERT INTO saas.tenant_companies'));
+  assert.equal(companies.length,1);assert.deepEqual(companies[0][1],[tenant]);
+  assert.ok(db.queries.some(([sql])=>sql.includes('REGISTERED_COMPANY_ACTIVATED')));
+  assert.equal(db.queries.at(-1)[0],'COMMIT');
+ }
+ const existing=fixture({kind:'PACKAGE'});await applyBillingEvent(existing,event('PACKAGE'),'{}',now);
+ assert.equal(existing.queries.some(([sql])=>sql.startsWith('INSERT INTO saas.tenant_companies')),false);
+ const failed=fixture({newIdentity:true,companyFailure:true});await assert.rejects(applyBillingEvent(failed,event(),'{}',now),/synthetic_company_failure/);
+ assert.equal(failed.queries.at(-1)[0],'ROLLBACK');assert.equal(failed.queries.some(([sql])=>sql.includes('enqueue_booking_confirmation')),false);
 });

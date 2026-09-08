@@ -25,7 +25,7 @@ if (enabled) {
       requireValue(`${name}_FILE`, `${name.toLowerCase()}_file_missing`);
     }
   }
-  for (const name of ["SAAS_VERIFICATION_PEPPER", "SAAS_INVITATION_PEPPER"]) {
+  for (const name of ["SAAS_VERIFICATION_PEPPER", "SAAS_INVITATION_PEPPER", "SAAS_PORTAL_CREDENTIAL_KEYRING"]) {
     if (process.env[name]) blockers.push(`${name.toLowerCase()}_inline_value_forbidden`);
     requireValue(`${name}_FILE`, `${name.toLowerCase()}_file_missing`);
   }
