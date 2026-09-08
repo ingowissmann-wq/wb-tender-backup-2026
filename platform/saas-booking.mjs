@@ -8,7 +8,7 @@ export function bookingContract(input) {
   const billingPath = input.billingPath;
   if (!['TRIAL','PACKAGE'].includes(purchaseKind)) throw new Error('billing_purchase_kind_invalid');
   if (purchaseKind === 'TRIAL' ? plan !== 'TRIAL' : !PACKAGE_PRICES[plan]) throw new Error('billing_plan_invalid');
-  if (!['AUTO_CARD','INVOICE_BANK_TRANSFER','INVOICE_BILLIE'].includes(billingPath)) throw new Error('billing_path_invalid');
+  if (!['AUTO_CARD','INVOICE_BILLIE'].includes(billingPath)) throw new Error('billing_path_invalid');
   if (input.consentVersion !== BOOKING_TERMS_VERSION || ![true,'on'].includes(input.bookingConfirmed)) throw new Error('billing_explicit_booking_required');
   const renewal = input.renewal === true;
   if (renewal && (purchaseKind !== 'PACKAGE' || billingPath === 'AUTO_CARD')) throw new Error('billing_manual_renewal_required');

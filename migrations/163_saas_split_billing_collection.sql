@@ -1,10 +1,10 @@
 BEGIN;
 ALTER TABLE saas.pending_registrations
   ADD COLUMN IF NOT EXISTS billing_path text NOT NULL DEFAULT 'AUTO_CARD'
-  CHECK(billing_path IN('AUTO_CARD','INVOICE_BANK_TRANSFER','INVOICE_BILLIE'));
+  CHECK(billing_path IN('AUTO_CARD','INVOICE_BILLIE'));
 ALTER TABLE saas.checkout_sessions
   ADD COLUMN IF NOT EXISTS billing_path text NOT NULL DEFAULT 'AUTO_CARD'
-  CHECK(billing_path IN('AUTO_CARD','INVOICE_BANK_TRANSFER','INVOICE_BILLIE'));
+  CHECK(billing_path IN('AUTO_CARD','INVOICE_BILLIE'));
 ALTER TABLE saas.subscriptions
   ADD COLUMN IF NOT EXISTS billing_collection text NOT NULL DEFAULT 'AUTO_CARD'
   CHECK(billing_collection IN('AUTO_CARD','MANUAL_INVOICE'));

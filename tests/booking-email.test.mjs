@@ -8,7 +8,7 @@ test('booking confirmation makes trial expiry and manual package renewal explici
  const messages=[];adapter.transport={sendMail:async message=>{messages.push(message);return {accepted:[message.to],messageId:message.messageId};}};
  await adapter.sendBookingConfirmation({to:'test@wb-test.invalid',bookingId:'test-booking',purchaseKind:'TRIAL',planName:'14 Tage Komplettzugang',amountSubtotal:29900,billingPath:'AUTO_CARD',periodEnd:'2026-09-21T00:00:00Z'});
  assert.match(messages[0].text,/299,00/);assert.match(messages[0].text,/Keine automatische Verlängerung/);assert.match(messages[0].text,/keine Umwandlung/);
- for(const billingPath of ['INVOICE_BANK_TRANSFER','INVOICE_BILLIE']){
+ for(const billingPath of ['INVOICE_BILLIE']){
  await adapter.sendBookingConfirmation({to:'test@wb-test.invalid',bookingId:'test-'+billingPath,purchaseKind:'PACKAGE',planName:'Pro',amountSubtotal:349000,billingPath,periodEnd:'2026-10-07T00:00:00Z'});
  assert.match(messages.at(-1).text,/Weitere Monate buchen und bezahlen Sie gesondert/);
  assert.doesNotMatch(messages.at(-1).text,/monatlich per Karte/);

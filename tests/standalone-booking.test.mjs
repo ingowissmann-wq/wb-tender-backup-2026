@@ -7,13 +7,13 @@ import { effectiveAccess } from '../platform/saas-catalog.mjs';
 const tenant='11111111-1111-4111-8111-111111111111', booking='22222222-2222-4222-8222-222222222222';
 const now=new Date('2026-09-07T12:00:00Z');
 const terms={consentVersion:BOOKING_TERMS_VERSION,bookingConfirmed:true,billingPath:'AUTO_CARD'};
-test('booking rejects missing consent, free-form plans, subscription trials and SEPA',()=>{
+test('booking rejects missing consent, free-form plans, subscription trials and unknown payment methods',()=>{
   for(const input of [
     {...terms,plan:'TRIAL'},
     {...terms,purchaseKind:'TRIAL',plan:'NORMAL'},
     {...terms,purchaseKind:'PACKAGE',plan:'TRIAL'},
     {...terms,purchaseKind:'TRIAL',plan:'TRIAL',bookingConfirmed:false},
-    {...terms,purchaseKind:'TRIAL',plan:'TRIAL',billingPath:'SEPA'},
+    {...terms,purchaseKind:'TRIAL',plan:'TRIAL',billingPath:'UNKNOWN_METHOD'},
     {...terms,purchaseKind:'TRIAL',plan:'TRIAL',renewal:true},
   ])assert.throws(()=>bookingContract(input),/billing_/);
   assert.equal(bookingContract({...terms,purchaseKind:'TRIAL',plan:'TRIAL'}).amountSubtotal,29900);

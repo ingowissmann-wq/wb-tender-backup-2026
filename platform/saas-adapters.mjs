@@ -72,13 +72,13 @@ export class StripeBillingAdapter {
   async createCheckout({ tenantId, plan, purchaseKind, billingPath, bookingId, consentVersion, renewal = false }) {
     const trial = purchaseKind === "TRIAL";
     if (!["TRIAL", "PACKAGE"].includes(purchaseKind)) throw new Error("billing_purchase_kind_invalid");
-    if (!["AUTO_CARD", "INVOICE_BANK_TRANSFER", "INVOICE_BILLIE"].includes(billingPath)) throw new Error("stripe_billing_path_invalid");
+    if (!["AUTO_CARD", "INVOICE_BILLIE"].includes(billingPath)) throw new Error("stripe_billing_path_invalid");
     if (!bookingId || consentVersion !== "standalone-2026-09-07") throw new Error("billing_explicit_booking_required");
     if (trial && (plan !== "TRIAL" || renewal)) throw new Error("billing_trial_contract_invalid");
     if (!trial && !["NORMAL", "PROFESSIONAL", "ENTERPRISE"].includes(plan)) throw new Error("stripe_plan_price_not_configured");
     if (renewal && billingPath === "AUTO_CARD") throw new Error("billing_manual_renewal_required");
     const automatic = !trial && billingPath === "AUTO_CARD";
-    const method = billingPath === "AUTO_CARD" ? "card" : billingPath === "INVOICE_BANK_TRANSFER" ? "customer_balance" : "billie";
+    const method = billingPath === "AUTO_CARD" ? "card" : "billie";
     const body = new URLSearchParams({
       mode: automatic ? "subscription" : "payment",
       "payment_method_types[0]": method,
@@ -124,28 +124,6 @@ export class StripeBillingAdapter {
       for (const key of ["tenant_id", "plan_code", "purchase_kind", "billing_path", "booking_id", "consent_version"])
         body.set(`subscription_data[metadata][${key}]`, body.get(`metadata[${key}]`));
     }
-    if (method === "customer_balance") {
-      // A separate customer balance per explicit booking prevents an unrelated
-      // booking from consuming a transfer intended for another product.
-      const customerBody = new URLSearchParams({
-        "metadata[tenant_id]": tenantId, "metadata[booking_id]": bookingId,
-      });
-      const customerResponse = await fetch(`${this.apiBase}/v1/customers`, {
-        method: "POST", headers: { authorization: `Bearer ${this.secretKey}`,
-          "content-type": "application/x-www-form-urlencoded",
-          "idempotency-key": `wb-booking-customer-${bookingId}` }, body: customerBody,
-      });
-      const customer = await customerResponse.json();
-      if (!customerResponse.ok || !/^cus_[A-Za-z0-9_]+$/.test(customer.id || "") ||
-          customer.metadata?.tenant_id !== tenantId || customer.metadata?.booking_id !== bookingId)
-        throw new Error("stripe_bank_customer_binding_invalid");
-      body.set("customer", customer.id);
-      body.set("customer_update[address]", "auto");
-      body.set("customer_update[name]", "auto");
-      body.set("payment_method_options[customer_balance][funding_type]", "bank_transfer");
-      body.set("payment_method_options[customer_balance][bank_transfer][type]", "eu_bank_transfer");
-      body.set("payment_method_options[customer_balance][bank_transfer][eu_bank_transfer][country]", "DE");
-    }
     const response = await fetch(`${this.apiBase}/v1/checkout/sessions`, { method: "POST", headers: { authorization: `Bearer ${this.secretKey}`, "content-type": "application/x-www-form-urlencoded", "idempotency-key": `wb-booking-${bookingId}` }, body });
     const payload = await response.json();
     if (!response.ok || !payload.id || !payload.url) throw new Error(`stripe_checkout_failed_${response.status}`);
@@ -190,7 +168,7 @@ export class StripeBillingAdapter {
     if (checkoutEvent) {
       const metadata = object.metadata || {};
       const trial = metadata.purchase_kind === "TRIAL";
-      if (!["AUTO_CARD", "INVOICE_BANK_TRANSFER", "INVOICE_BILLIE"].includes(metadata.billing_path)) throw new Error("billing_path_invalid");
+      if (!["AUTO_CARD", "INVOICE_BILLIE"].includes(metadata.billing_path)) throw new Error("billing_path_invalid");
       if (!["TRIAL", "PACKAGE"].includes(metadata.purchase_kind) || !metadata.booking_id || metadata.consent_version !== "standalone-2026-09-07") throw new Error("billing_booking_metadata_invalid");
       if (trial && (object.mode !== "payment" || object.subscription || metadata.plan_code !== "TRIAL" || metadata.renewal !== "false")) throw new Error("billing_trial_contract_invalid");
       if (!trial && (!["NORMAL", "PROFESSIONAL", "ENTERPRISE"].includes(metadata.plan_code) || (metadata.billing_path === "AUTO_CARD" ? object.mode !== "subscription" || !object.subscription : object.mode !== "payment" || Boolean(object.subscription)))) throw new Error("billing_package_contract_invalid");
