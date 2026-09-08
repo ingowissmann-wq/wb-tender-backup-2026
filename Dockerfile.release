@@ -20,7 +20,13 @@ RUN npm ci --omit=dev --audit=false --fund=false \
  && rm -rf /root/.npm /tmp/*
 COPY --chown=root:root . /app/
 COPY --chown=root:root deployment/wb-tender-ingestion-entrypoint /usr/local/bin/wb-tender-ingestion-entrypoint
-RUN chmod 0555 /usr/local/bin/wb-tender-ingestion-entrypoint \
+# Git worktrees created under umask 077 contain 0700 directories and 0600 files.
+# Normalize readability in the image while retaining root ownership and executable bits.
+RUN chmod -R a+rX /app \
+ && chmod 0555 /usr/local/bin/wb-tender-ingestion-entrypoint
+ENV HOME=/tmp/wb-tender-runtime
+USER 1001:1001
+RUN node scripts/verify-runtime-user.mjs \
  && node scripts/verify-browser-runtime.mjs
 ARG RELEASE_VERSION
 ARG SOURCE_FINGERPRINT
