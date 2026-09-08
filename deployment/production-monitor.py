@@ -15,9 +15,10 @@ SERVICES = ('api', 'worker', 'scheduler', 'db')
 HOSTS = {'wb-tender.com', 'www.wb-tender.com', 'www.enwi.online'}
 
 
-def container_failures(records):
+def container_failures(records, submission_enabled=False):
     errors, images = [], []
-    for service in SERVICES:
+    services = SERVICES + ('submission-worker',) if submission_enabled else SERVICES
+    for service in services:
         record = records.get(service, {})
         if record.get('project') != PROJECT:
             errors.append(service + ':project_binding')
@@ -30,10 +31,34 @@ def container_failures(records):
             if not str(record.get('image', '')).startswith('sha256:'):
                 errors.append(service + ':image_missing')
             for flag in ('EXTERNAL_SUBMISSION_ENABLED', 'WB_TENDER_ALLOW_EXTERNAL_SUBMISSION'):
-                if record.get('flags', {}).get(flag) != 'false':
+                if record.get('flags', {}).get(flag) != ('true' if submission_enabled else 'false'):
                     errors.append(service + ':external_submission')
+            if submission_enabled and record.get('executionMode') != 'DEDICATED_VALIDATED_WORKER':
+                errors.append(service + ':submission_execution_mode')
     if len(set(images)) != 1:
         errors.append('release_images_differ')
+    return errors
+
+
+def submission_worker_failures(record, expected_commit):
+    if not isinstance(record, dict):
+        return ['submission-worker:health_response_missing']
+    errors = []
+    if record.get('status') != 'ok' or record.get('component') != 'submission-worker':
+        errors.append('submission-worker:health_response_invalid')
+    if not expected_commit or record.get('sourceCommit') != expected_commit:
+        errors.append('submission-worker:release_binding')
+    if record.get('externalSubmissionEnabled') is not True:
+        errors.append('submission-worker:submission_disabled')
+    if record.get('lastError') is not None:
+        errors.append('submission-worker:operation_failed')
+    metrics = record.get('metrics')
+    required = ('duplicateAttempts24h', 'queued', 'urgentDeadlines', 'portalErrors',
+                'abandonedUploads', 'missingReceipts', 'pendingNotifications', 'staleWorkers')
+    if not isinstance(metrics, dict) or any(type(metrics.get(key)) is not int or metrics[key] < 0 for key in required):
+        errors.append('submission-worker:metrics_invalid')
+    elif metrics['staleWorkers'] > 0:
+        errors.append('submission-worker:heartbeat_stale')
     return errors
 
 
@@ -113,7 +138,12 @@ def collect_scanner():
 
 def collect():
     report = {'checkedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'services': {}, 'errors': []}
-    for service in SERVICES:
+    submission_setting = os.environ.get('WB_TENDER_MONITOR_SUBMISSION_ENABLED', 'false')
+    if submission_setting not in ('true', 'false'):
+        report['errors'].append('submission_monitor_configuration_invalid')
+    submission_enabled = submission_setting == 'true'
+    services = SERVICES + ('submission-worker',) if submission_enabled else SERVICES
+    for service in services:
         try:
             data = json.loads(command(['docker', 'inspect', PROJECT + '-' + service]))[0]
             flags = dict(item.split('=', 1) for item in data['Config'].get('Env', []) if '=' in item)
@@ -122,10 +152,19 @@ def collect():
                 'image': data['Image'], 'health': data['State'].get('Health', {}).get('Status'),
                 'restarts': data['RestartCount'],
                 'flags': {key: flags.get(key) for key in ('EXTERNAL_SUBMISSION_ENABLED', 'WB_TENDER_ALLOW_EXTERNAL_SUBMISSION')},
+                'executionMode': flags.get('SUBMISSION_EXECUTION_MODE'),
+                'sourceCommit': data['Config'].get('Labels', {}).get('org.opencontainers.image.revision'),
             }
         except Exception:
             report['errors'].append(service + ':inspection_failed')
-    report['errors'] += container_failures(report['services'])
+    report['errors'] += container_failures(report['services'], submission_enabled)
+    if submission_enabled:
+        try:
+            probe = "const http=require('http');const r=http.get('http://127.0.0.1:'+Number(process.env.PORT||4241)+'/healthz',res=>{if(res.statusCode!==200)process.exitCode=1;res.pipe(process.stdout)});r.setTimeout(5000,()=>r.destroy());r.on('error',()=>process.exit(1));"
+            report['submissionWorker'] = json.loads(command(['docker', 'exec', PROJECT + '-submission-worker', 'node', '-e', probe]))
+            report['errors'] += submission_worker_failures(report['submissionWorker'], report['services'].get('api', {}).get('sourceCommit'))
+        except Exception:
+            report['errors'].append('submission-worker:probe_failed')
     try:
         report['scanner'] = collect_scanner()
         report['errors'] += scanner_failures(report['scanner'])

@@ -29,8 +29,8 @@ for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger
   cmp -s "$temporary/before/$item" "$temporary/trusted/$item"
 done
 RELEASE_ID=0000000000000000000000000000000000000001 "$root/deployment/apply-release-migrations.sh" | tee "$temporary/migrations.log"
-[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/migrations.log")" -eq 22 ]]
-[[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT count(*) FROM tender.release_migrations")" == 22 ]]
+[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/migrations.log")" -eq 23 ]]
+[[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT count(*) FROM tender.release_migrations")" == 23 ]]
 psql "$url" -v ON_ERROR_STOP=1 -f "$root/tests/saas-usage-limits.integration.sql" >/dev/null
 bash "$root/tests/saas-usage-concurrency.integration.sh"
 psql "$url" -v ON_ERROR_STOP=1 -f "$root/tests/portal-resolution-evidence.integration.sql" >/dev/null
@@ -85,9 +85,9 @@ SQL
 mkdir "$temporary/prefix-before" "$temporary/prefix-after"
 STATE_OUTPUT_DIR="$temporary/prefix-before" "$root/deployment/capture-rollout-db-state.sh"
 "$root/deployment/apply-release-migrations.sh" >"$temporary/production-pending.log"
-[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/production-pending.log")" == 17 ]]
+[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/production-pending.log")" == 18 ]]
 APPLIED_MIGRATIONS_FILE="$temporary/production-pending.log" LEDGER_EXISTED_BEFORE=true SNAPSHOT_EXISTED_BEFORE=true "$root/deployment/rollback-applied-release-migrations.sh"
 STATE_OUTPUT_DIR="$temporary/prefix-after" "$root/deployment/capture-rollout-db-state.sh"
 for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger.sha256 migration-snapshots.present migration-snapshots.sha256; do cmp -s "$temporary/prefix-before/$item" "$temporary/prefix-after/$item"; done
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT description FROM app.schema_migrations WHERE version='0160-critical-region-portal-resolution'")" == 'Preserve pre-existing application marker' ]]
-printf '{"passed":true,"isolatedPostgres":true,"pendingMigrations":22,"productionPrefixPendingMigrations":17,"runtimeLoginInheritedLeastPrivilege":true,"runtimeSessionsDrainedBeforeRollback":true,"exactReverseRollback":true,"schemaLedgerSnapshotPlansRestored":true,"installedViewAndPriceMetadataPreserved":true}\n'
+printf '{"passed":true,"isolatedPostgres":true,"pendingMigrations":23,"productionPrefixPendingMigrations":18,"runtimeLoginInheritedLeastPrivilege":true,"runtimeSessionsDrainedBeforeRollback":true,"exactReverseRollback":true,"schemaLedgerSnapshotPlansRestored":true,"installedViewAndPriceMetadataPreserved":true}\n'

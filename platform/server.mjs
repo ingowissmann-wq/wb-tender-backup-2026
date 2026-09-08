@@ -1,3 +1,6 @@
+import {submissionRuntimePolicy,assertSubmissionSchema} from './submission-runtime-policy.mjs';
+import {registerSubmissionCredentialRecovery} from './submission-credential-recovery.mjs';
+import {registerSubmissionDispatchRoutes} from './submission-dispatch-routes.mjs';
 import {registerTenantEnterpriseApi} from './tenant-enterprise-api.mjs';
 import {registerTenantCsmRoutes} from './tenant-csm-routes.mjs';
 import Fastify from "fastify";
@@ -99,11 +102,13 @@ const secret = (name) => {
   if (!value) throw new Error(`${name.toLowerCase()}_file_required`);
   return value;
 };
+submissionRuntimePolicy();
 const readOnlyCandidate = process.env.WB_TENDER_READ_ONLY_CANDIDATE === "true";
 const rawPool = new pg.Pool({
   connectionString: secret("DATABASE_URL"),
   ...(readOnlyCandidate ? { options: "-c default_transaction_read_only=on" } : {}),
 });
+await assertSubmissionSchema(rawPool);
 const requestDatabase = createRequestScopedPool(rawPool);
 const pool = requestDatabase.pool;
 const sectors = enabled ? new DatabaseSync(process.env.CAREER_DATABASE_PATH, {
@@ -706,6 +711,12 @@ registerAutopilotRoutes(app, {
   invitationPepper: optionalSecret("SAAS_INVITATION_PEPPER"),
   visibleTender,
 });
+const freshSubmissionMfa = async req => {
+ const token=req.cookies.wb_session;if(!token)return false;
+ const row=(await pool.query("SELECT mfa_verified_at FROM iam.sessions WHERE id_hash=$1 AND revoked_at IS NULL AND expires_at>now()",[hashSession(token,sessionPepper)])).rows[0];
+ return Boolean(row?.mfa_verified_at && new Date(row.mfa_verified_at).getTime()>=Date.now()-5*60_000);
+};
+registerSubmissionCredentialRecovery(app,{pool,requirePermission,csrf,isFreshWbMfa:freshSubmissionMfa,keyFile:process.env.PORTAL_CREDENTIAL_KEY_FILE});
 const submissionContinuationSecret = optionalSecret("SUBMISSION_CONTINUATION_SECRET") || sessionPepper;
 registerLiveSubmissionRoutes(app, {
   pool, requirePermission, csrf,
@@ -793,6 +804,7 @@ registerTenantLotRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasC
 registerTenantCalculationRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantDocumentReviewRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantOfferPackageRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
+registerSubmissionDispatchRoutes(app,{pool,storage:tenantStorage,authenticate:saasAuthenticate,csrf:saasCsrf,isFreshWbMfa:freshSubmissionMfa});
 registerTenantPeopleRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantCrmRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantCsmRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });

@@ -3,6 +3,25 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 const assess=records=>JSON.parse(execFileSync('python3',['-B','-c',"import importlib.util,json,sys; s=importlib.util.spec_from_file_location('monitor','deployment/production-monitor.py'); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(json.dumps(m.container_failures(json.load(sys.stdin))))"],{input:JSON.stringify(records),encoding:'utf8'}));
 const healthy=()=>Object.fromEntries(['api','worker','scheduler','db'].map(service=>[service,{project:'wb-tender-production',image:'sha256:'+ 'a'.repeat(64),health:'healthy',restarts:0,flags:{EXTERNAL_SUBMISSION_ENABLED:'false',WB_TENDER_ALLOW_EXTERNAL_SUBMISSION:'false'}}]));
+test('dedicated submission monitoring requires the worker and matching release while credential waits remain business states',()=>{
+ const script=`import importlib.util,copy
+s=importlib.util.spec_from_file_location('monitor','deployment/production-monitor.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+records={name:{'project':m.PROJECT,'image':'sha256:'+'a'*64,'health':'healthy','restarts':0,'executionMode':'DEDICATED_VALIDATED_WORKER','flags':{'EXTERNAL_SUBMISSION_ENABLED':'true','WB_TENDER_ALLOW_EXTERNAL_SUBMISSION':'true'}} for name in (*m.SERVICES,'submission-worker')}
+assert m.container_failures(records,True)==[]
+assert m.container_failures(records)
+missing=copy.deepcopy(records);del missing['submission-worker'];assert m.container_failures(missing,True)
+mixed=copy.deepcopy(records);mixed['submission-worker']['image']='sha256:'+'b'*64;assert 'release_images_differ' in m.container_failures(mixed,True)
+wrong=copy.deepcopy(records);wrong['scheduler']['executionMode']='IMMEDIATE';assert 'scheduler:submission_execution_mode' in m.container_failures(wrong,True)
+metrics={k:0 for k in ('duplicateAttempts24h','queued','urgentDeadlines','portalErrors','abandonedUploads','missingReceipts','pendingNotifications','staleWorkers')}
+response={'status':'ok','component':'submission-worker','sourceCommit':'a'*40,'externalSubmissionEnabled':True,'lastError':None,'metrics':metrics}
+assert m.submission_worker_failures(response,'a'*40)==[]
+assert 'submission-worker:release_binding' in m.submission_worker_failures(response,'b'*40)
+assert m.submission_worker_failures(dict(response,metrics={}), 'a'*40)
+metrics['portalErrors']=14;assert m.submission_worker_failures(response,'a'*40)==[]
+metrics['staleWorkers']=1;assert 'submission-worker:heartbeat_stale' in m.submission_worker_failures(response,'a'*40)
+print('PASS')`;
+ assert.equal(execFileSync('python3',['-B','-c',script],{encoding:'utf8'}).trim(),'PASS');
+});
 test('monitor fails on a foreign project, divergent images, restarts and submission flags',()=>{
  assert.deepEqual(assess(healthy()),[]);
  const foreign=healthy();foreign.api.project='another-project';assert.ok(assess(foreign).includes('api:project_binding'));
