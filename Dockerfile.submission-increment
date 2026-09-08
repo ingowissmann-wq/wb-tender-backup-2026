@@ -1,6 +1,8 @@
 FROM wb-tender-release:livego-d178f0f9374c
 USER 0:0
 WORKDIR /app
+COPY --chown=0:0 --chmod=0644 ["deployment/production-monitor.py", "/app/deployment/"]
+COPY --chown=0:0 --chmod=0644 ["tests/production-monitor.test.mjs", "/app/tests/"]
 COPY --chown=0:0 --chmod=0755 ["deployment/apply-release-migrations.sh", "deployment/rollback-applied-release-migrations.sh", "/app/deployment/"]
 COPY --chown=0:0 --chmod=0644 ["docs/submission/management-dispatch.md", "/app/docs/submission/"]
 COPY --chown=0:0 --chmod=0644 ["migrations/177_management_submission_dispatch.down.sql", "migrations/177_management_submission_dispatch.sql", "/app/migrations/"]
