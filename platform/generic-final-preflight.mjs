@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 
 const hash = (value) => crypto.createHash("sha256").update(String(value)).digest("hex");
 const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
-export const REQUIREMENT_CLASSIFIER_VERSION = "wb-bid-time-requirement/1.0.0";
+export const REQUIREMENT_CLASSIFIER_VERSION = "wb-bid-time-requirement/1.1.0";
 
 const BID_TIME = /\b(?:mit|zusammen\s+mit)\s+(?:dem\s+)?angebot\b|\b(?:dem\s+)?angebot\s+(?:beizufügen|beizulegen)|\bbei\s+(?:der\s+)?angebotsabgabe\b|\bbis\s+(?:zum\s+)?ablauf\s+der\s+angebotsfrist\b/i;
 const POST_AWARD = /\b(?:nach|unverzüglich\s+nach)\s+(?:der\s+)?zuschlag(?:s|-?serteilung)?\b|\bnach\s+auftragserteilung\b/i;
@@ -12,6 +12,10 @@ const CONTRACT_CONTEXT = /\b(?:dienstleistungsvertrag|leistungsbeschreibung|auft
 
 export function classifyRequirementEvidence(value) {
   const text = clean(value);
+  if (/\bnicht\s+(?:zwingend\s+)?(?:erforderlich|notwendig|einzureichen|beizufügen|vorzulegen|hochzuladen)\b/i.test(text)) return {
+    classification: "INFORMATIONAL_TEXT", eligible: false, actionType: "NONE",
+    reason: "Die konkrete Einreichungspflicht wird in dieser Fundstelle ausdrücklich verneint.", rule: "EXPLICIT_NEGATED_OBLIGATION",
+  };
   if (POST_AWARD.test(text)) return {
     classification: "POST_AWARD_EVIDENCE",
     eligible: false,
@@ -76,20 +80,23 @@ export function discoverSourceRequirements({ pages, sourceDocumentId, sourceRefe
     if (!text) continue;
     const sentences = text.split(/(?<=[.!?;:])\s+(?=[A-ZÄÖÜ0-9])/);
     for (let index = 0; index < sentences.length; index += 1) {
-      const excerpt = clean(sentences.slice(Math.max(0,index-1), index+2).join(" ")).slice(0,1800);
+      // A neighbouring obligation cannot change this sentence's due time.
+      const excerpt = clean(sentences[index]).slice(0,1800);
       if (!normative.test(excerpt)) continue;
       const match = classifiers.find((entry) => entry[3].test(excerpt));
       if (!match) continue;
       const evidenceClassification = classifyRequirementEvidence(excerpt);
       if (!evidenceClassification.eligible) continue;
       const [kind, actionGroup, category] = match;
-      const evidenceHash = hash(`${sourceDocumentId}|${page?.page || page?.pageNumber || index + 1}|${excerpt}`);
+      const suppliedPage=typeof page==='object'?(page?.page??page?.pageNumber):null;
+      const sourcePage=Number.isInteger(suppliedPage)&&suppliedPage>0?suppliedPage:null;
+      const evidenceHash = hash(`${sourceDocumentId}|${sourcePage??'PAGE_UNSPECIFIED'}|${excerpt}`);
       found.push({
         requirementKey: `${kind}:${category}:${evidenceHash.slice(0,20)}`,
         requirementKind: kind,
         title: titleFor(kind, category, excerpt), description: excerpt,
         sourceType: "TENDER_DOCUMENT", sourceDocumentId,
-        sourcePage: Number(page?.page || page?.pageNumber || index + 1),
+        sourcePage,
         sourceReference, sourceExcerpt: excerpt, sourceEvidenceSha256: evidenceHash,
         scopeType: lotKey ? "LOT" : "PROCEDURE", category, mandatory: true,
         submissionRelevant: true,
@@ -109,11 +116,10 @@ export function discoverSourceRequirements({ pages, sourceDocumentId, sourceRefe
       });
     }
   }
-  // One human action represents one semantic obligation on one source page. OCR
-  // sentence windows frequently overlap and must not multiply board work.
+  // Deduplicate identical evidence, not different obligations in the same category.
   const canonical = new Map();
   for (const item of found) {
-    const key=[item.sourceDocumentId,item.sourcePage,item.requirementKind,item.category,item.scopeType,lotKey||'PROCEDURE'].join('|');
+    const key=[item.sourceDocumentId,item.sourcePage,item.requirementKind,item.category,item.scopeType,lotKey||'PROCEDURE',item.sourceEvidenceSha256].join('|');
     const prior=canonical.get(key);
     if (!prior || item.sourceExcerpt.length>prior.sourceExcerpt.length) canonical.set(key,item);
   }
