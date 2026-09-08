@@ -20,6 +20,7 @@ import { SAAS_PERMISSION_FEATURES, loadSaasContext, registerSaasRoutes } from ".
 import { registerTenantPortalRoutes } from "./tenant-portal.mjs";
 import { registerTenantCredentialRoutes } from "./tenant-credential-routes.mjs";
 import { registerTenantDocumentReviewRoutes } from "./tenant-document-review-routes.mjs";
+import { registerTenantOfferPackageRoutes } from "./tenant-offer-package-routes.mjs";
 import { registerTenantManagementRoutes } from "./tenant-management-routes.mjs";
 import { registerTenantCalculationRoutes } from "./tenant-calculation-routes.mjs";
 import { registerTenantLotRoutes } from "./tenant-lot-routes.mjs";
@@ -785,6 +786,7 @@ registerTenantCompanyProfileRoutes(app, { pool, authenticate: saasAuthenticate, 
 registerTenantLotRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantCalculationRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantDocumentReviewRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
+registerTenantOfferPackageRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantManagementRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
 const uiAuth = { preHandler: requirePermission("tender.view_assigned") };
 app.get("/wb-holding-logo.png", uiAuth, async (_, r) =>
