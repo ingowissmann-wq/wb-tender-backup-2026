@@ -1,7 +1,9 @@
-# Kundenhandbuch: rechtsverbindliche Angebotsabgabe
+# Kundenhandbuch: Angebot vorbereiten und prüfen
 
-Eine Angebotsabgabe ist möglich, wenn für die konkrete Ausschreibung und das ausgewählte Los alle Pflichtdokumente fachlich validiert und unveränderlich im angezeigten Paket-Hash gebunden sind. Das System verwendet ausschließlich den eindeutig zugeordneten, gesellschaftsbezogenen Portalzugang. Die Veröffentlichungsquelle (beispielsweise TED) ist nicht automatisch das Teilnahme- oder Abgabeportal. Eine mehrdeutige Zuordnung bleibt gesperrt und wird als Prüfbedarf angezeigt.
+WB-Tender führt die interne Bearbeitung über Loszuordnung, dokumentgebundene Kalkulation, Nachweisprüfung und Managementfreigabe zum Angebotspaket. Die genaue Bedienung beschreiben [Dokumentenprüfung](customer-document-review.md), [Kalkulation](customer-lot-calculation.md), [Managementprüfung](customer-management-review.md) und [Angebotspaket](customer-offer-package.md).
 
-Die erste Person bereitet die versionsgebundene Freigabe vor. Eine zweite berechtigte Person bestätigt sie mit frischer WB-MFA. Eine davon verschiedene dritte ausführende Person gibt anschließend mit frischer WB-MFA den exakten, ausschreibungsspezifischen Bestätigungstext ein. Erst dann darf ein produktiv validierter, global und portalbezogen freigegebener Adapter den Versand beginnen. Kill-Switch und Provider-Allowlist können den Vorgang jederzeit vor dem Portal-Commit stoppen.
+Die externe Angebotsübermittlung bleibt deaktiviert. Weder eine Kalkulationsfreigabe noch ein freigegebenes ZIP bedeutet, dass ein Angebot an ein Vergabeportal gesendet wurde. Ein heruntergeladenes Paket ist kein externer Eingangsbeleg. Die technische Sendesperre liefert HTTP 423.
 
-Der Status **RECEIPT_CONFIRMED** bedeutet, dass ein verifizierter Eingangsbeleg mit Portalreferenz und Prüfsumme vorliegt. **SUBMISSION_UNCERTAIN (Unknown Outcome)** bedeutet, dass nach möglichem Portal-Commit kein verifizierter Beleg ermittelt werden konnte. In diesem Fall sendet das System niemals automatisch erneut, sondern gleicht den Portalstatus nur lesend ab und fordert gegebenenfalls eine manuelle Prüfung. **REJECTED_BY_PORTAL** bezeichnet eine nachgewiesene Ablehnung durch das Portal; ein interner Status allein gilt nicht als Eingangsbeleg.
+Die Veröffentlichungsquelle, beispielsweise TED, ist nicht automatisch das Abgabeportal. Portalzugänge werden genau einem Mandanten, einer Gesellschaft und einem Portal zugeordnet. Mehrdeutige Zuordnungen erfordern eine Prüfung.
+
+Eine künftige externe Übermittlung setzt die reale Validierung des konkreten Portaladapters und seine ausdrückliche Freigabe voraus. Vorher wird keine externe Versandfunktion als nutzbar angeboten.
