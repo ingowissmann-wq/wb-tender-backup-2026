@@ -1,0 +1,11 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+COPY --chown=node:node integrations/wb-admin-portal/production-dist-baseline/api/autoseo.js /app/apps/api/dist/autoseo.js
+COPY deployment/admin-public-blog-order-patch.mjs /tmp/admin-public-blog-order-patch.mjs
+USER root
+RUN node /tmp/admin-public-blog-order-patch.mjs && rm /tmp/admin-public-blog-order-patch.mjs
+USER pwuser
+
+LABEL wb.admin.overlay="autoseo-tenant-upsert-and-blog-order" \
+      wb.admin.overlay.scope="autoseo-handler-and-public-blog-query"
