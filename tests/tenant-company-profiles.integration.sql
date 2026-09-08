@@ -25,6 +25,13 @@ INSERT INTO tenant_portal.lot_calculation_versions(id,tenant_id,assignment_id,ve
 INSERT INTO tenant_portal.lot_calculation_files(tenant_id,calculation_id,file_id) VALUES('a1680000-0000-4000-8000-000000000001','b1700000-0000-4000-8000-000000000001','a1700000-0000-4000-8000-000000000001');
 INSERT INTO tenant_portal.management_decisions(id,tenant_id,calculation_id,decision,reason,request_sha256,approved_payload_sha256,manifest,created_by)
  VALUES('c1710000-0000-4000-8000-000000000001','a1680000-0000-4000-8000-000000000001','b1700000-0000-4000-8000-000000000001','APPROVED','SYNTHETIC management review',repeat('e',64),repeat('f',64),'{}','c1680000-0000-4000-8000-000000000001');
+INSERT INTO tenant_portal.lot_document_reviews(id,tenant_id,assignment_id,version,status,source_manifest,requirements,request_sha256,snapshot_sha256,created_by)
+ SELECT 'd1720000-0000-4000-8000-000000000001',tenant_id,id,1,'REVIEW_REQUIRED','[]','[]',repeat('a',64),repeat('b',64),'c1680000-0000-4000-8000-000000000001' FROM tenant_portal.lot_assignment_versions;
+INSERT INTO tenant_portal.lot_document_review_files(tenant_id,review_id,file_id,purpose) VALUES('a1680000-0000-4000-8000-000000000001','d1720000-0000-4000-8000-000000000001','a1700000-0000-4000-8000-000000000001','PROCUREMENT_SOURCE');
+DO $$ BEGIN
+ BEGIN UPDATE tenant_portal.lot_document_reviews SET requirements='[{}]'; RAISE EXCEPTION 'document_history_modified'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN INSERT INTO tenant_portal.lot_document_review_files(tenant_id,review_id,file_id,purpose) VALUES('a1680000-0000-4000-8000-000000000001','d1720000-0000-4000-8000-000000000001','a1700000-0000-4000-8000-000000000002','BID_EVIDENCE'); RAISE EXCEPTION 'foreign_review_file_accepted'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+END $$;
 DO $$ BEGIN BEGIN UPDATE tenant_portal.management_decisions SET decision='REJECTED'; RAISE EXCEPTION 'management_history_modified'; EXCEPTION WHEN insufficient_privilege THEN NULL; END; END $$;
 DO $$ BEGIN
  BEGIN UPDATE tenant_portal.lot_calculation_versions SET result='{"changed":true}'; RAISE EXCEPTION 'historical_calculation_modified'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
@@ -49,7 +56,7 @@ DO $$ BEGIN
  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
 END $$;
 SELECT set_config('app.tenant_id','a1680000-0000-4000-8000-000000000002',true);
-DO $$ BEGIN IF EXISTS(SELECT 1 FROM tenant_portal.company_profile_versions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_assignment_versions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_calculation_versions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_calculation_files) OR EXISTS(SELECT 1 FROM tenant_portal.management_decisions) THEN RAISE EXCEPTION 'foreign_profile_visible'; END IF; END $$;
+DO $$ BEGIN IF EXISTS(SELECT 1 FROM tenant_portal.company_profile_versions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_assignment_versions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_calculation_versions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_calculation_files) OR EXISTS(SELECT 1 FROM tenant_portal.management_decisions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_document_reviews) OR EXISTS(SELECT 1 FROM tenant_portal.lot_document_review_files) THEN RAISE EXCEPTION 'foreign_profile_visible'; END IF; END $$;
 SELECT set_config('app.tenant_id','',true);
 DO $$ BEGIN IF EXISTS(SELECT 1 FROM tenant_portal.company_profile_versions) THEN RAISE EXCEPTION 'unbound_profile_visible'; END IF; END $$;
 ROLLBACK;
