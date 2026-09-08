@@ -4,6 +4,7 @@ import {
   REQUIREMENT_CLASSIFIER_VERSION,
   classifyRequirementEvidence,
   discoverSourceRequirements,
+  extractPages,
 } from "../platform/generic-final-preflight.mjs";
 
 const sourceDocumentId="11111111-1111-4111-8111-111111111111";
@@ -76,4 +77,10 @@ test('extracted text without a verified page number never invents a PDF page',()
 test('explicitly negated upload duties are not promoted to missing mandatory evidence',()=>{
  assert.deepEqual(discover('Der Versicherungsnachweis ist mit dem Angebot nicht einzureichen.'),[]);
  assert.equal(discover('Der Versicherungsnachweis darf nicht älter als drei Monate sein und ist mit dem Angebot einzureichen.').length,1);
+});
+
+test('unpaginated extracted text stays unpaginated through the complete discovery adapter',()=>{
+ const pages=extractPages({text:'Der Versicherungsnachweis ist mit dem Angebot einzureichen.'});
+ assert.equal(pages[0].page,null);
+ assert.equal(discoverSourceRequirements({pages,sourceDocumentId})[0].sourcePage,null);
 });

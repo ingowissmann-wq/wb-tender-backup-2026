@@ -147,7 +147,7 @@ export function extractPages(extractedData) {
   const value = typeof extractedData === "string" ? JSON.parse(extractedData) : extractedData || {};
   if (Array.isArray(value.pages)) return value.pages;
   if (Array.isArray(value.documents)) return value.documents.flatMap((document) => document.pages || []);
-  if (value.text) return [{ page: 1, text: value.text }];
+  if (value.text) return [{ page: null, text: value.text }];
   return [];
 }
 
