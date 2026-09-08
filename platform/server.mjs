@@ -21,6 +21,7 @@ import { registerTenantPortalRoutes } from "./tenant-portal.mjs";
 import { registerTenantCredentialRoutes } from "./tenant-credential-routes.mjs";
 import { registerTenantDocumentReviewRoutes } from "./tenant-document-review-routes.mjs";
 import { registerTenantOfferPackageRoutes } from "./tenant-offer-package-routes.mjs";
+import { registerTenantPeopleRoutes } from './tenant-people-routes.mjs';
 import { registerTenantCrmRoutes } from './tenant-crm-routes.mjs';
 import { registerTenantWorkflowRoutes } from './tenant-workflow-routes.mjs';
 import { registerTenantInsightsRoutes } from './tenant-insights-routes.mjs';
@@ -790,6 +791,7 @@ registerTenantLotRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasC
 registerTenantCalculationRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantDocumentReviewRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantOfferPackageRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
+registerTenantPeopleRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantCrmRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantWorkflowRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantInsightsRoutes(app, { pool, authenticate: saasAuthenticate });

@@ -1,3 +1,4 @@
+import {TenantPeople} from './tenant-people.mjs';
 import {TenantWorkflowTasks} from './tenant-workflow-tasks.mjs';
 import {tenantInsights} from './tenant-insights.mjs';
 import { dispatchTenantJob } from './tenant-job-dispatch.mjs';
@@ -57,6 +58,7 @@ const tenantAdmin = async (req, reply) => {
 const tenantOwner = async (req, reply) => {
   if (req.identity?.saas?.role !== 'OWNER') return reply.code(403).send({ error: "tenant_owner_required" });
 };
+async function peopleReply(reply,operation){try{return await operation();}catch(error){return reply.code(error.statusCode||(error.code==='23505'?409:503)).send({error:error.statusCode?error.message:error.code==='23505'?'employee_or_task_conflict':'people_temporarily_unavailable'});}}
 const cleanText = (value, max = 500) => String(value || "").trim().slice(0, max);
 // Keep the membership locked until the enclosing tenant transaction commits.
 async function activeMember(db, tenantId, userId) {
@@ -124,6 +126,7 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
         ORDER BY offer_deadline NULLS LAST LIMIT 100`, [q]);
       return { module: metadata, implementation: contract.implementation, items: rows.rows };
     }
+    if(req.moduleKey===MODULE_KEYS.PEOPLE){if(!['OWNER','ADMIN'].includes(req.identity?.saas?.role))return reply.code(403).send({error:'tenant_admin_required'});return peopleReply(reply,()=>new TenantPeople(pool).list(req.tenant))}
     if(req.moduleKey===MODULE_KEYS.FLOW){if(!['OWNER','ADMIN'].includes(req.identity?.saas?.role))return reply.code(403).send({error:'tenant_admin_required'});return new TenantWorkflowTasks(pool).list(req.tenant)}
     if(req.moduleKey===MODULE_KEYS.INSIGHTS){if(!['OWNER','ADMIN'].includes(req.identity?.saas?.role))return reply.code(403).send({error:'tenant_admin_required'});reply.header('Cache-Control','no-store');try{return await tenantInsights(pool,req.tenant)}catch{return reply.code(503).send({error:'insights_temporarily_unavailable'})}}
     if (!contract.table) return { module: metadata, implementation: contract.implementation, items: [] };
@@ -136,6 +139,7 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
 
   app.get("/api/tenant-portal/modules/:module/export", { preHandler: [authenticate, tenantGuard, dynamicModuleGuard] }, async (req,reply) => {
     const contract = MODULE_ROUTE_CONTRACTS[req.moduleKey];
+    if(req.moduleKey===MODULE_KEYS.PEOPLE){if(!['OWNER','ADMIN'].includes(req.identity?.saas?.role))return reply.code(403).send({error:'tenant_admin_required'});return peopleReply(reply,()=>new TenantPeople(pool).list(req.tenant))}
     if(req.moduleKey===MODULE_KEYS.FLOW){if(!['OWNER','ADMIN'].includes(req.identity?.saas?.role))return reply.code(403).send({error:'tenant_admin_required'});return new TenantWorkflowTasks(pool).list(req.tenant)}
     if(req.moduleKey===MODULE_KEYS.INSIGHTS){if(!['OWNER','ADMIN'].includes(req.identity?.saas?.role))return reply.code(403).send({error:'tenant_admin_required'});reply.header('Cache-Control','no-store');try{return await tenantInsights(pool,req.tenant,{auditExport:true})}catch{return reply.code(503).send({error:'insights_temporarily_unavailable'})}}
     if (!contract.table) return { tenantId: req.tenant.id, module: req.moduleKey, implementation: contract.implementation, items: [], truncated: false };
@@ -148,7 +152,7 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
     if(!UUID.test(String(req.params.id||""))) return reply.code(404).send({error:"item_not_found"});
     let query,params;
     if(req.moduleKey===MODULE_KEYS.CSM){query=`UPDATE tenant_portal.csm_customers SET name=coalesce($3,name),health=coalesce($4,health),status=coalesce($5,status),lifecycle_stage=coalesce($6,lifecycle_stage),renewal_at=coalesce($7,renewal_at),follow_up_at=coalesce($8,follow_up_at),updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *`;params=[req.tenant.id,req.params.id,cleanText(req.body?.name,160)||null,req.body?.health||null,req.body?.status||null,req.body?.lifecycleStage||null,req.body?.renewalAt||null,req.body?.followUpAt||null];}
-    else if(req.moduleKey===MODULE_KEYS.PEOPLE){if(!['OWNER','ADMIN'].includes(req.identity.saas.role))return reply.code(403).send({error:'tenant_admin_required'});query=`UPDATE tenant_portal.employee_profiles SET display_name=coalesce($3,display_name),employment_status=coalesce($4,employment_status),job_title=coalesce($5,job_title),team_name=coalesce($6,team_name),phone=coalesce($7,phone),updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *`;params=[req.tenant.id,req.params.id,cleanText(req.body?.displayName,160)||null,req.body?.employmentStatus||null,cleanText(req.body?.jobTitle,160)||null,cleanText(req.body?.teamName,160)||null,cleanText(req.body?.phone,60)||null];}
+    else if(req.moduleKey===MODULE_KEYS.PEOPLE){if(!['OWNER','ADMIN'].includes(req.identity.saas.role))return reply.code(403).send({error:'tenant_admin_required'});return peopleReply(reply,()=>new TenantPeople(pool).update(req.tenant,req.params.id,req.body));}
     else return reply.code(405).send({error:'module_item_update_not_supported'});
     const row=await withTenantContext(pool,req.tenant,async(db)=>{const item=(await db.query(query,params)).rows[0];if(item)await db.query("INSERT INTO saas.audit_events(tenant_id,actor_user_id,action,target_type,target_id) VALUES($1,$2,'MODULE_ITEM_UPDATED',$3,$4)",[req.tenant.id,req.identity.userId,req.moduleKey,req.params.id]);return item;});
     return row||reply.code(404).send({error:'item_not_found'});
@@ -218,15 +222,6 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
     if(!UUID.test(String(req.params.id||"")))return reply.code(404).send({error:'customer_not_found'});
     const result=await withTenantContext(pool,req.tenant,async(db)=>{const customer=(await db.query("SELECT * FROM tenant_portal.csm_customers WHERE tenant_id=$1 AND id=$2",[req.tenant.id,req.params.id])).rows[0];if(!customer)return null;return{customer,interactions:(await db.query("SELECT * FROM tenant_portal.csm_interactions WHERE tenant_id=$1 AND customer_id=$2 ORDER BY occurred_at DESC",[req.tenant.id,req.params.id])).rows,cases:(await db.query("SELECT * FROM tenant_portal.csm_service_cases WHERE tenant_id=$1 AND customer_id=$2 ORDER BY created_at DESC",[req.tenant.id,req.params.id])).rows,tasks:(await db.query("SELECT * FROM tenant_portal.csm_tasks WHERE tenant_id=$1 AND customer_id=$2 ORDER BY created_at DESC",[req.tenant.id,req.params.id])).rows};});
     return result||reply.code(404).send({error:'customer_not_found'});
-  });
-
-  app.post("/api/tenant-portal/people/employees", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.PEOPLE),tenantAdmin,csrf] }, async (req,reply) => {
-    const name=cleanText(req.body?.displayName,160); if(name.length<2) return reply.code(400).send({error:"employee_name_invalid"});
-    const row=await withTenantContext(pool,req.tenant,async(db)=>(await db.query("INSERT INTO tenant_portal.employee_profiles(tenant_id,user_id,display_name,work_email,personal_email,phone,employee_number,employment_status,job_title,team_name,start_date) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",[req.tenant.id,await activeMember(db,req.tenant.id,req.body?.userId),name,cleanText(req.body?.workEmail,254)||null,cleanText(req.body?.personalEmail,254)||null,cleanText(req.body?.phone,60)||null,cleanText(req.body?.employeeNumber,80)||null,req.body?.employmentStatus||'ONBOARDING',cleanText(req.body?.jobTitle,160)||null,cleanText(req.body?.teamName,160)||null,req.body?.startDate||null])).rows[0]); return reply.code(201).send(row);
-  });
-  app.post("/api/tenant-portal/people/employees/:id/onboarding", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.PEOPLE),tenantAdmin,csrf] }, async (req,reply) => {
-    if(!UUID.test(String(req.params.id||""))) return reply.code(404).send({error:"employee_not_found"});
-    const row=await withTenantContext(pool,req.tenant,async(db)=>(await db.query("INSERT INTO tenant_portal.people_onboarding_tasks(tenant_id,employee_id,title,assignee_user_id,due_at,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",[req.tenant.id,req.params.id,cleanText(req.body?.title,240),await activeMember(db,req.tenant.id,req.body?.assigneeUserId),req.body?.dueAt||null,req.identity.userId])).rows[0]); return reply.code(201).send(row);
   });
 
   app.get("/api/tenant-portal/control/members", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CONTROL),tenantAdmin] }, async (req) => withTenantContext(pool,req.tenant,async(db)=>({items:(await db.query("SELECT m.user_id,m.role,m.status,m.created_at,u.email FROM saas.tenant_memberships m JOIN iam.users u ON u.id=m.user_id WHERE m.tenant_id=$1 ORDER BY m.created_at",[req.tenant.id])).rows})));
