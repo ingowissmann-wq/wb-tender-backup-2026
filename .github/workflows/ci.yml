@@ -125,3 +125,8 @@ jobs:
           printf 'postgresql://postgres@127.0.0.1:5432/postgres\n' >"$db_file"
           chmod 0600 "$db_file"
           DATABASE_URL_FILE="$db_file" WB_TENDER_ROLLOUT_ISOLATED_TEST=true tests/rollout-db.integration.sh
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - name: Prove per-lot inbox SQL and reimport against PostgreSQL
+        run: DATABASE_URL_FILE="$RUNNER_TEMP/rollout-database-url" WB_TENDER_ROLLOUT_ISOLATED_TEST=true node tests/inbox-lot-postgres.integration.mjs

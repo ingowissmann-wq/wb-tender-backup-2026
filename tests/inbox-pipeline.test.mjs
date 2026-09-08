@@ -35,3 +35,19 @@ test("portal test jobs use the validated request lot without an undefined body a
 test("portal test job target lookup has contiguous typed PostgreSQL parameters",()=>{const route=routes.slice(routes.indexOf('"/api/portal-access/:portalId/jobs"'),routes.indexOf('"/api/management-inbox/autopilot/:tenderId/board-brief"')),lookup=route.slice(route.indexOf("const target ="),route.indexOf(").rows;"));assert.match(lookup,/registered\.portal_id=\$5 AND registered\.credential_id=\$6/);assert.match(lookup,/\(\$7='' OR relevance\.lot_key/);assert.match(lookup,/company\.company_id, portal\.id, credential\.id,requestedLot/);assert.doesNotMatch(lookup,/company\.company_id, false, portal\.id/);assert.doesNotMatch(lookup,/\$8/)});
 test("portal access preserves an exact mapped portal even before enrichment exists",()=>{assert.match(routes,/FROM tender\.portal_registry p LEFT JOIN latest_enrichment e ON true/);assert.match(routes,/WHERE p\.id=\$3\s*\n\s*\)/)});
 test("API and UI use the same management inbox endpoint",()=>{const ui=readFileSync(new URL("../platform/assets/inbox-regions.js",import.meta.url),"utf8");assert.match(ui,/\/management-inbox\?/);assert.match(routes,/"\/api\/management-inbox"/)});
+
+test('lot performance places exclude siblings and all parent region/text evidence',async()=>{
+ const {lotRegionTender}=await import('../platform/inbox-pipeline.mjs');
+ const raw={lots:[{id:'A',title:'Bewachung'},{id:'B',title:'Berlin'}],locations:[{region:'DE300'}],raw:{tender:{items:[{relatedLot:'A',deliveryAddress:{region:'DE122'}},{relatedLot:'B',deliveryAddress:{region:'DE300'}}]}}};
+ const scoped=lotRegionTender({lot_key:'A',title:'bundesweit',description:'Berlin',regions:['DE300'],eligible_lot_count:2},raw);
+ assert.deepEqual(scoped.regions,[]);assert.equal(scoped.title,'Bewachung');assert.equal(scoped.description,'');assert.equal(scoped.locations.length,1);assert.equal(scoped.locations[0].region,'DE122');
+ assert.equal(classifyRegion({company:security,tender:scoped,config:{A08:'Karlsruhe',versionId:'v',versionNo:1},applicable:true}).classification,'CORE_REGION');
+ assert.deepEqual(lotRegionTender({lot_key:'C'},raw).locations,[]);
+ assert.deepEqual(lotRegionTender({lot_key:null,eligible_lot_count:2},raw).locations,[]);
+});
+test('stale canonical lot locations cannot override current notice evidence',async()=>{
+ const {lotRegionTender}=await import('../platform/inbox-pipeline.mjs');
+ const row={lot_key:'A',tender_version_id:'new',lot_source_version_id:'old',lot_locations:[{nuts:'DE122'}]};
+ assert.deepEqual(lotRegionTender(row).locations,[]);
+ assert.deepEqual(lotRegionTender({...row,lot_source_version_id:'new'}).locations,[{nuts:'DE122'}]);
+});

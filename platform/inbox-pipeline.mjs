@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import {classifyRegion} from "./region-gate.mjs";
 
-export const INBOX_PIPELINE_VERSION="wb-daily-inbox-pipeline/2.1.0-performance-evidence";
+export const INBOX_PIPELINE_VERSION="wb-daily-inbox-pipeline/2.2.0-exact-lot-regions";
 const json=value=>JSON.stringify(value??null);
 const hash=value=>crypto.createHash("sha256").update(json(value)).digest("hex");
 const unique=values=>[...new Set((values||[]).flat().filter(value=>value!==null&&value!==undefined&&String(value).trim()).map(value=>String(value).trim()))];
@@ -10,6 +10,24 @@ export function extractSourceLocations(tender,normalized={}){
   if(Array.isArray(normalized.locations))return normalized.locations;
   if(normalized.sourceCode==="DOE"||tender.source_code==="DOE")return (normalized.raw?.tender?.items||[]).map(item=>item?.deliveryAddress).filter(Boolean).map(address=>({region:address.region||null,nuts:address.nuts||null,locality:address.locality||address.city||null,postalCode:address.postalCode||address.postal_code||null,country:address.countryName||address.country||null}));
   return unique(normalized.raw?.["place-of-performance"]||tender.regions||[]).map(region=>({region}));
+}
+
+// Selected lots use only explicitly bound performance-place evidence.
+export function lotRegionTender(row,normalized={}){
+  const key=row.lot_key;
+  if(!key || key==="__NOTICE__"){
+    if(Number(row.eligible_lot_count)!==1)return {...row,title:"",description:"",regions:[],locations:[]};
+    return {...row,locations:extractSourceLocations(row,normalized)};
+  }
+  const lots=Array.isArray(normalized.lots)?normalized.lots:normalized.raw?.tender?.lots||[];
+  const matches=lots.filter(lot=>String(lot.id??lot.lotKey??"")===key);
+  const lot=matches.length===1?matches[0]:null;
+  const addresses=(normalized.raw?.tender?.items||[]).filter(item=>String(item.relatedLot??"")===key).map(item=>item.deliveryAddress).filter(Boolean);
+  const locations=addresses.map(address=>({region:address.region||null,nuts:address.nuts||null,locality:address.locality||address.city||null,postalCode:address.postalCode||address.postal_code||null,country:address.countryName||address.country||null}));
+  if(lot&&Array.isArray(lot.locations))locations.push(...lot.locations);
+  if(row.lot_source_version_id===row.tender_version_id&&Array.isArray(row.lot_locations))locations.push(...row.lot_locations);
+  const stable=[...new Map(locations.map(location=>[JSON.stringify(location),location])).entries()].sort(([a],[b])=>a.localeCompare(b)).map(([,location])=>location);
+  return {...row,title:lot?.title||"",description:lot?.description||"",regions:[],locations:stable};
 }
 
 export function documentPipelineStatus(documents=[]){
@@ -43,19 +61,22 @@ async function loadConfiguration(client,companyIds){
 
 async function targetRows(client,tenderIds,scope={}){
   if(!tenderIds.length)return[];
-  return (await client.query(`SELECT DISTINCT ON(t.id,r.company_id) t.*,r.company_id,r.lot_key,r.evaluation_version relevance_version,r.snapshot_sha256 relevance_snapshot,r.service_line,r.relevance_status,r.service_scope_gate,r.reason relevance_reason,c.legal_name,c.technical_key,c.sector_slug,c.sector_status,tv.id tender_version_id,tv.normalized_data,configuration_scope.tenant_id,configuration_scope.canonical_service,configuration_scope.profile_id
+  return (await client.query(`SELECT DISTINCT ON(t.id,r.company_id,eligible.lot_key) t.*,r.company_id,eligible.lot_key,canonical_lot.id canonical_lot_id,canonical_lot.locations lot_locations,lot_source.tender_version_id lot_source_version_id,(SELECT count(*) FROM tender.current_participation_eligible_lots all_lots WHERE all_lots.tender_id=t.id) eligible_lot_count,r.evaluation_version relevance_version,r.snapshot_sha256 relevance_snapshot,r.service_line,r.relevance_status,r.service_scope_gate,r.reason relevance_reason,c.legal_name,c.technical_key,c.sector_slug,c.sector_status,tv.id tender_version_id,tv.normalized_data,configuration_scope.tenant_id,configuration_scope.canonical_service,configuration_scope.profile_id
     FROM tender.tenders t
     JOIN tender.service_relevance_evaluations r ON r.tender_id=t.id AND r.primary_company=true AND r.relevance_status='RELEVANT' AND r.service_scope_gate='PASSED'
     JOIN tender.enterprise_company_links c ON c.company_id=r.company_id AND c.active=true
     JOIN tender.configuration_scopes configuration_scope ON configuration_scope.company_id=r.company_id AND configuration_scope.profile_id=c.tender_profile_id AND configuration_scope.canonical_service=CASE r.service_line WHEN 'facility-management' THEN 'facility_management' WHEN 'emergency-services' THEN 'emergency_services' ELSE r.service_line END
     JOIN LATERAL(SELECT id,normalized_data FROM tender.tender_versions WHERE tender_id=t.id ORDER BY version DESC LIMIT 1)tv ON true
+    JOIN tender.current_participation_eligible_lots eligible ON eligible.tender_id=t.id AND (eligible.lot_key=r.lot_key OR (r.lot_key IS NULL AND eligible.lot_key='__NOTICE__'))
+    JOIN tender.lots canonical_lot ON canonical_lot.tender_id=t.id AND canonical_lot.external_id=eligible.lot_key
+    LEFT JOIN tender.source_references lot_source ON lot_source.id=canonical_lot.source_reference_id
     WHERE t.id=ANY($1::uuid[]) AND t.data_class='PUBLIC_REAL' AND t.source_lifecycle_status='ACTIVE' AND t.participation_status IN('ELIGIBLE','PARTIALLY_ELIGIBLE')
       AND ($2::uuid IS NULL OR r.company_id=$2) AND ($3='' OR configuration_scope.canonical_service=$3)
       AND ($4::uuid IS NULL OR configuration_scope.tenant_id=$4) AND ($5::uuid IS NULL OR configuration_scope.profile_id=$5)
       AND NOT EXISTS(SELECT 1 FROM tender.service_relevance_evaluations newer WHERE newer.tender_id=r.tender_id AND newer.company_id=r.company_id AND newer.lot_key IS NOT DISTINCT FROM r.lot_key AND newer.evaluation_version>r.evaluation_version)
       AND EXISTS(SELECT 1 FROM tender.current_participation_eligible_lots eligible WHERE eligible.tender_id=t.id AND (r.lot_key IS NULL OR eligible.lot_key=r.lot_key))
       AND NOT EXISTS(SELECT 1 FROM tender.tender_tombstones tomb WHERE tomb.source_code=t.source_code AND tomb.external_id=t.external_id AND tomb.tombstone_status='DELETED')
-    ORDER BY t.id,r.company_id,r.evaluation_version DESC`,[tenderIds,scope.companyId||null,scope.canonicalService||"",scope.tenantId||null,scope.profileId||null])).rows;
+    ORDER BY t.id,r.company_id,eligible.lot_key,r.evaluation_version DESC`,[tenderIds,scope.companyId||null,scope.canonicalService||"",scope.tenantId||null,scope.profileId||null])).rows;
 }
 
 async function existingDocuments(client,tenderId){return (await client.query(`SELECT d.fetch_status,d.resolution_status FROM tender.enrichment_documents d JOIN tender.enrichment_versions e ON e.id=d.enrichment_version_id WHERE e.tender_id=$1 AND e.historical=false`,[tenderId])).rows}
@@ -68,21 +89,24 @@ export async function runInboxPipeline(pool,{tenderIds=[],sourceRunId=null,runKi
     runId=(await pool.query("INSERT INTO tender.inbox_pipeline_runs(source_run_id,run_kind,status,cutoff_at,metadata) VALUES($1,$2,'RUNNING',$3,$4::jsonb) RETURNING id",[sourceRunId,runKind,cutoffAt,json({pipelineVersion:INBOX_PIPELINE_VERSION,batchSize})])).rows[0].id;
     const client=await pool.connect();
     try{
-      const targets=await targetRows(client,ids,scope||{}),configs=await loadConfiguration(client,unique(targets.map(row=>row.company_id))),configurationHash=hash([...configs.entries()]),inputHash=hash(targets.map(row=>[row.id,row.raw_sha256,row.relevance_snapshot]));
+      const targets=await targetRows(client,ids,scope||{}),configs=await loadConfiguration(client,unique(targets.map(row=>row.company_id))),configurationHash=hash([...configs.entries()]),inputHash=hash(targets.map(row=>[row.id,row.lot_key,row.canonical_lot_id,row.tender_version_id,row.relevance_snapshot]));
       const completedBatch=(await client.query("SELECT id FROM tender.region_evaluation_batches WHERE algorithm_version=$1 AND configuration_snapshot_sha256=$2 AND input_snapshot_sha256=$3 AND status='COMPLETED'",[INBOX_PIPELINE_VERSION,configurationHash,inputHash])).rows[0];
       batchId=completedBatch?.id||(await client.query("INSERT INTO tender.region_evaluation_batches(algorithm_version,configuration_snapshot_sha256,input_snapshot_sha256,status) VALUES($1,$2,$3,'RUNNING') RETURNING id",[INBOX_PIPELINE_VERSION,configurationHash,inputHash])).rows[0].id;
       for(let offset=0;offset<targets.length;offset+=Math.max(1,Math.min(500,Number(batchSize)||100))){
         await client.query("BEGIN");
         try{
           for(const row of targets.slice(offset,offset+Math.max(1,Math.min(500,Number(batchSize)||100)))){
-            const locations=extractSourceLocations(row,row.normalized_data||{}),tender={...row,locations},company={company_id:row.company_id,legal_name:row.legal_name,technical_key:row.technical_key,sector_slug:row.sector_slug,sector_status:row.sector_status},config=configs.get(`${row.company_id}:${row.service_line}`)||{},region=classifyRegion({company,tender,config,applicable:true}),documents=await existingDocuments(client,row.id),documentStatus=documentPipelineStatus(documents),decision=inboxDecision(region),fingerprint=hash({pipeline:INBOX_PIPELINE_VERSION,tenderVersion:row.tender_version_id,relevance:row.relevance_snapshot,tenant:config.tenantId,company:row.company_id,service:config.canonicalService,profile:config.profileId,activeVersion:config.versionId,regionProfileVersion:config.regionProfileVersionId,config:region.ruleSnapshot,locations:region.sourceData}),prior=(await client.query("SELECT id,workflow_status,responsible_user_id FROM tender.management_inbox WHERE tender_id=$1 AND company_id=$2 ORDER BY created_at DESC LIMIT 1",[row.id,row.company_id])).rows[0];
+            const tender=lotRegionTender(row,row.normalized_data||{}),locations=tender.locations,company={company_id:row.company_id,legal_name:row.legal_name,technical_key:row.technical_key,sector_slug:row.sector_slug,sector_status:row.sector_status},config=configs.get(`${row.company_id}:${row.service_line}`)||{},region=classifyRegion({company,tender,config,applicable:true}),documents=await existingDocuments(client,row.id),documentStatus=documentPipelineStatus(documents),decision=inboxDecision(region),fingerprint=hash({pipeline:INBOX_PIPELINE_VERSION,tenderVersion:row.tender_version_id,lotKey:row.lot_key,lotId:row.canonical_lot_id,relevance:row.relevance_snapshot,tenant:config.tenantId,company:row.company_id,service:config.canonicalService,profile:config.profileId,activeVersion:config.versionId,regionProfileVersion:config.regionProfileVersionId,config:region.ruleSnapshot,locations:region.sourceData}),prior=(await client.query(`SELECT inbox.id,inbox.workflow_status,inbox.responsible_user_id FROM tender.management_inbox inbox
+              WHERE inbox.tender_id=$1 AND inbox.company_id=$2 AND inbox.tenant_id=$3 AND inbox.profile_id=$4 AND inbox.canonical_service=$5
+                AND EXISTS(SELECT 1 FROM tender.region_evaluations evaluation WHERE evaluation.inbox_id=inbox.id AND evaluation.lot_id=$6)
+              ORDER BY inbox.created_at DESC,inbox.id DESC LIMIT 1`,[row.id,row.company_id,config.tenantId,config.profileId,config.canonicalService,row.canonical_lot_id])).rows[0];
             const inserted=await client.query(`INSERT INTO tender.management_inbox(tender_id,tender_version_id,event_kind,tenant_id,company_id,sector_slug,service_line,canonical_service,profile_id,region_profile_version_id,decision,hard_gates,missing_information,risks,recommended_next_step,workflow_status,responsible_user_id,source_code,source_run_id,event_fingerprint)
               VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,'[]'::jsonb,$14,$15,$16,$17,$18,$19)
               ON CONFLICT(event_fingerprint) DO NOTHING RETURNING id`,[row.id,row.tender_version_id,prior?"UPDATED":"NEW",config.tenantId,row.company_id,row.sector_slug,row.service_line,config.canonicalService,config.profileId,config.regionProfileVersionId,decision.decision,json(["EXCLUDED_REGION","OUTSIDE_CORE_REGION"].includes(region.classification)?[region.classification]:[]),json(documentStatus.includes("FAILED")?["DOCUMENT_DOWNLOAD_FAILED"]:["REGION_UNRESOLVED","MULTI_REGION_REVIEW","REGION_CONFIG_CONFLICT"].includes(region.classification)?["LOCATION_UNRESOLVED"]:[]),decision.next,prior?.workflow_status||"NEW",prior?.responsible_user_id||null,row.source_code,sourceRunId,fingerprint]);
             const inboxId=inserted.rows[0]?.id||(await client.query("SELECT id FROM tender.management_inbox WHERE event_fingerprint=$1",[fingerprint])).rows[0].id;
-            const latest=(await client.query("SELECT id,source_data->>'pipelineFingerprint' fingerprint FROM tender.region_evaluations WHERE tender_id=$1 AND tenant_id=$2 AND company_id=$3 AND canonical_service=$4 AND profile_id=$5 AND lot_id IS NULL ORDER BY evaluation_version DESC LIMIT 1",[row.id,config.tenantId,row.company_id,config.canonicalService,config.profileId])).rows[0];
-            if(latest?.fingerprint!==fingerprint){const version=Number((await client.query("SELECT coalesce(max(evaluation_version),0)+1 version FROM tender.region_evaluations WHERE tender_id=$1 AND company_id=$2 AND lot_id IS NULL",[row.id,row.company_id])).rows[0].version);await client.query(`INSERT INTO tender.region_evaluations(batch_id,tender_id,inbox_id,lot_id,tenant_id,company_id,canonical_service,profile_id,region_profile_version_id,evaluation_version,classification,detected_states,detected_nuts,source_data,parameter_key,configuration_version_id,configuration_version_no,rule_snapshot,regional_decision,matching_status,explanation,open_conditions,next_action)
-              VALUES($1,$2,$3,NULL,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15,$16,$17::jsonb,$18,$19,$20,$21::jsonb,$22)`,[batchId,row.id,inboxId,config.tenantId,row.company_id,config.canonicalService,config.profileId,config.regionProfileVersionId,version,region.classification,json(region.detectedStates),json(region.nuts),json({...region.sourceData,pipelineVersion:INBOX_PIPELINE_VERSION,pipelineFingerprint:fingerprint}),region.parameterKey,region.configVersionId,region.configVersion,json(region.ruleSnapshot),region.decision,region.matchingStatus,region.reason,json(region.openConditions),region.nextAction]);stats.regionCreated++}
+            const latest=(await client.query("SELECT id,source_data->>'pipelineFingerprint' fingerprint FROM tender.region_evaluations WHERE tender_id=$1 AND tenant_id=$2 AND company_id=$3 AND canonical_service=$4 AND profile_id=$5 AND lot_id=$6 ORDER BY evaluation_version DESC LIMIT 1",[row.id,config.tenantId,row.company_id,config.canonicalService,config.profileId,row.canonical_lot_id])).rows[0];
+            if(latest?.fingerprint!==fingerprint){const version=Number((await client.query("SELECT coalesce(max(evaluation_version),0)+1 version FROM tender.region_evaluations WHERE tender_id=$1 AND company_id=$2 AND lot_id=$3",[row.id,row.company_id,row.canonical_lot_id])).rows[0].version);await client.query(`INSERT INTO tender.region_evaluations(batch_id,tender_id,inbox_id,lot_id,tenant_id,company_id,canonical_service,profile_id,region_profile_version_id,evaluation_version,classification,detected_states,detected_nuts,source_data,parameter_key,configuration_version_id,configuration_version_no,rule_snapshot,regional_decision,matching_status,explanation,open_conditions,next_action)
+              VALUES($1,$2,$3,$23,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15,$16,$17::jsonb,$18,$19,$20,$21::jsonb,$22)`,[batchId,row.id,inboxId,config.tenantId,row.company_id,config.canonicalService,config.profileId,config.regionProfileVersionId,version,region.classification,json(region.detectedStates),json(region.nuts),json({...region.sourceData,pipelineVersion:INBOX_PIPELINE_VERSION,sourceLotKey:row.lot_key,pipelineFingerprint:fingerprint}),region.parameterKey,region.configVersionId,region.configVersion,json(region.ruleSnapshot),region.decision,region.matchingStatus,region.reason,json(region.openConditions),region.nextAction,row.canonical_lot_id]);stats.regionCreated++}
             await client.query(`INSERT INTO tender.inbox_pipeline_items(run_id,tender_id,company_id,lot_key,classification_status,region_status,document_status,matching_status,inbox_status,exclusion_reason,pipeline_fingerprint,location_evidence)
               VALUES($1,$2,$3,$4,'CLASSIFIED',$5,$6,'MATCHED',$7,$8,$9,$10::jsonb)`,[runId,row.id,row.company_id,row.lot_key||"",region.classification,documentStatus,inserted.rowCount?"CREATED":"UNCHANGED",decision.exclusion,fingerprint,json({states:region.detectedStates,nuts:region.nuts,hasPostalCode:locations.some(item=>Boolean(item.postalCode)),locationCount:locations.length})]);
             stats.checked++;stats.matched++;stats.inboxCreated+=inserted.rowCount;stats.documentFailures+=documentStatus.includes("FAILED")?1:0;if(region.classification==="CORE_REGION")stats.core++;else if(region.classification==="STRATEGIC_REGION")stats.strategic++;else if(region.classification==="OUTSIDE_CORE_REGION")stats.outside++;else stats.unresolved++;
