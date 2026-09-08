@@ -21,6 +21,7 @@ import { registerTenantPortalRoutes } from "./tenant-portal.mjs";
 import { registerTenantCredentialRoutes } from "./tenant-credential-routes.mjs";
 import { registerTenantDocumentReviewRoutes } from "./tenant-document-review-routes.mjs";
 import { registerTenantOfferPackageRoutes } from "./tenant-offer-package-routes.mjs";
+import { registerTenantWorkflowRoutes } from './tenant-workflow-routes.mjs';
 import { registerTenantInsightsRoutes } from './tenant-insights-routes.mjs';
 import { registerTenantManagementRoutes } from "./tenant-management-routes.mjs";
 import { registerTenantCalculationRoutes } from "./tenant-calculation-routes.mjs";
@@ -788,6 +789,7 @@ registerTenantLotRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasC
 registerTenantCalculationRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantDocumentReviewRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantOfferPackageRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
+registerTenantWorkflowRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantInsightsRoutes(app, { pool, authenticate: saasAuthenticate });
 registerTenantManagementRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
 const uiAuth = { preHandler: requirePermission("tender.view_assigned") };

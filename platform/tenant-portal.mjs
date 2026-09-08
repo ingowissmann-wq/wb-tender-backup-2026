@@ -1,3 +1,4 @@
+import {TenantWorkflowTasks} from './tenant-workflow-tasks.mjs';
 import {tenantInsights} from './tenant-insights.mjs';
 import { dispatchTenantJob } from './tenant-job-dispatch.mjs';
 import { MODULE_CATALOG, MODULE_KEYS, normalizeModuleKey } from "./saas-catalog.mjs";
@@ -15,7 +16,7 @@ export const MODULE_ROUTE_CONTRACTS = Object.freeze({
   [MODULE_KEYS.TENDER_AUTOPILOT]: { table: "tender_workspaces", implementation: "PARTIAL_TENANT_FOUNDATION" },
   [MODULE_KEYS.CRM]: { table: "crm_accounts", implementation: "SECURE_EMPTY_SHELL" },
   [MODULE_KEYS.CSM]: { table: "csm_customers", implementation: "TENANT_OWNED" },
-  [MODULE_KEYS.FLOW]: { table: "blocks", implementation: "SECURE_EMPTY_SHELL" },
+  [MODULE_KEYS.FLOW]: { table: null, implementation: "VERSIONED_TENANT_TASKS" },
   [MODULE_KEYS.PEOPLE]: { table: "employee_profiles", implementation: "TENANT_OWNED" },
   [MODULE_KEYS.DOCS]: { table: "files", implementation: "TENANT_OWNED_STORAGE" },
   [MODULE_KEYS.CONTROL]: { table: null, implementation: "TENANT_ADMIN" },
@@ -101,8 +102,9 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
   });
   app.get("/saas/assets/tenant-app.js", {preHandler:[authenticate]}, async(_,reply)=>reply.type('text/javascript').send(tenantAppJs));
   app.get("/saas/app/:module", {preHandler:[authenticate,tenantGuard,dynamicModuleGuard]}, async(req,reply)=>{
+    if(req.moduleKey===MODULE_KEYS.FLOW)return reply.redirect('/saas/app/workflow');
     const metadata=MODULE_CATALOG.find((module)=>module.key===req.moduleKey);
-    return reply.type('text/html').send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${html(metadata.name)}</title><link rel="stylesheet" href="/saas/assets/commercial.css"><script src="/saas/assets/tenant-app.js" defer></script></head><body><header><strong>WB Business Suite</strong><a href="/saas/app/companies">Gesellschaften</a><a href="/saas/app/lot-assignments">Lose bearbeiten</a><a href="/saas/app/management">Management</a>${req.identity.saas.modules?.includes(MODULE_KEYS.INSIGHTS)?'<a href="/saas/app/insights">Auswertungen</a>':''}<a href="/saas/app/portal-access">Portalzugänge</a><a href="/saas/account">Mein Paket</a></header><main class="panel" data-module="${html(req.moduleKey)}"><h1>${html(metadata.name)}</h1><form><label>Suche<input name="q" maxlength="120"></label><button>Suchen</button> <a href="/api/tenant-portal/modules/${encodeURIComponent(req.moduleKey)}/export">Export</a></form><pre id="items" aria-live="polite">Laden …</pre></main></body></html>`);
+    return reply.type('text/html').send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${html(metadata.name)}</title><link rel="stylesheet" href="/saas/assets/commercial.css"><script src="/saas/assets/tenant-app.js" defer></script></head><body><header><strong>WB Business Suite</strong><a href="/saas/app/companies">Gesellschaften</a><a href="/saas/app/workflow">Aufgaben</a><a href="/saas/app/lot-assignments">Lose bearbeiten</a><a href="/saas/app/management">Management</a>${req.identity.saas.modules?.includes(MODULE_KEYS.INSIGHTS)?'<a href="/saas/app/insights">Auswertungen</a>':''}<a href="/saas/app/portal-access">Portalzugänge</a><a href="/saas/account">Mein Paket</a></header><main class="panel" data-module="${html(req.moduleKey)}"><h1>${html(metadata.name)}</h1><form><label>Suche<input name="q" maxlength="120"></label><button>Suchen</button> <a href="/api/tenant-portal/modules/${encodeURIComponent(req.moduleKey)}/export">Export</a></form><pre id="items" aria-live="polite">Laden …</pre></main></body></html>`);
   });
   app.get("/api/tenant-portal/summary", { preHandler: [authenticate, tenantGuard, requireSaasModule(MODULE_KEYS.CONTROL)] }, async (req) =>
     withTenantContext(pool, req.tenant, async (db) => {
@@ -121,6 +123,7 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
         ORDER BY offer_deadline NULLS LAST LIMIT 100`, [q]);
       return { module: metadata, implementation: contract.implementation, items: rows.rows };
     }
+    if(req.moduleKey===MODULE_KEYS.FLOW){if(!['OWNER','ADMIN'].includes(req.identity?.saas?.role))return reply.code(403).send({error:'tenant_admin_required'});return new TenantWorkflowTasks(pool).list(req.tenant)}
     if(req.moduleKey===MODULE_KEYS.INSIGHTS){if(!['OWNER','ADMIN'].includes(req.identity?.saas?.role))return reply.code(403).send({error:'tenant_admin_required'});reply.header('Cache-Control','no-store');try{return await tenantInsights(pool,req.tenant)}catch{return reply.code(503).send({error:'insights_temporarily_unavailable'})}}
     if (!contract.table) return { module: metadata, implementation: contract.implementation, items: [] };
     const search = String(req.query?.q || "").slice(0, 120);
@@ -132,6 +135,7 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
 
   app.get("/api/tenant-portal/modules/:module/export", { preHandler: [authenticate, tenantGuard, dynamicModuleGuard] }, async (req,reply) => {
     const contract = MODULE_ROUTE_CONTRACTS[req.moduleKey];
+    if(req.moduleKey===MODULE_KEYS.FLOW){if(!['OWNER','ADMIN'].includes(req.identity?.saas?.role))return reply.code(403).send({error:'tenant_admin_required'});return new TenantWorkflowTasks(pool).list(req.tenant)}
     if(req.moduleKey===MODULE_KEYS.INSIGHTS){if(!['OWNER','ADMIN'].includes(req.identity?.saas?.role))return reply.code(403).send({error:'tenant_admin_required'});reply.header('Cache-Control','no-store');try{return await tenantInsights(pool,req.tenant,{auditExport:true})}catch{return reply.code(503).send({error:'insights_temporarily_unavailable'})}}
     if (!contract.table) return { tenantId: req.tenant.id, module: req.moduleKey, implementation: contract.implementation, items: [], truncated: false };
     const rows = await withTenantContext(pool, req.tenant, async (db) =>
