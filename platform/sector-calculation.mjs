@@ -1,7 +1,15 @@
 import {snapshotHash} from "./canonical-truth.mjs";
 import {normalizeUnit, normalizeDecimal} from "./unit-catalog.mjs";
 
-export const CALCULATION_FORMULA_VERSION="WB_COST_CATALOG_V4";
+export const CALCULATION_FORMULA_VERSION="WB_COST_CATALOG_V4.1";
+const validityBoundary=(value,end=false)=>{
+ if(typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)){
+  const parsed=Date.parse(value+'T00:00:00Z');
+  if(!Number.isFinite(parsed)||new Date(parsed).toISOString().slice(0,10)!==value)return NaN;
+  return parsed+(end?86400000:0);
+ }
+ return Date.parse(value);
+};
 const money=value=>Math.round((value+Number.EPSILON)*100)/100;
 
 // Every cost uses its catalog unit. A missing value is never a zero cost.
@@ -16,7 +24,7 @@ export function calculateSectorTender({serviceArea,parameters={},facts={},proven
  for(const key of keys){
   const item=parameters[key];
   if(!item||typeof item!=="object"||!item.sourceVersionId||!item.parameterId||!item.validFrom){missing.push(`${key} freigegebene Quelle`);continue;}
-  if(!Number.isFinite(Date.parse(item.validFrom))||Date.parse(item.validFrom)>point||(item.validUntil&&(!Number.isFinite(Date.parse(item.validUntil))||Date.parse(item.validUntil)<point))){missing.push(`${key} Gültigkeit`);continue;}
+  if(!Number.isFinite(validityBoundary(item.validFrom))||validityBoundary(item.validFrom)>point||(item.validUntil&&(!Number.isFinite(validityBoundary(item.validUntil,true))||(typeof item.validUntil==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(item.validUntil)?point>=validityBoundary(item.validUntil,true):point>validityBoundary(item.validUntil,true))))){missing.push(`${key} Gültigkeit`);continue;}
   const unit=normalizeUnit(key,item.unit);if(!unit){missing.push(`${key} Einheit`);continue;}units[key]=unit.id;
   if(key==='C02'){if(!item.value||!String(typeof item.value==='object'?JSON.stringify(item.value):item.value).trim())missing.push('C02 Tarifgrundlage');values[key]=item.value;}
   else if(key==='C03')values[key]=item.value;
@@ -39,6 +47,7 @@ export function calculateSectorTender({serviceArea,parameters={},facts={},proven
  else for(const [kind,rate] of Object.entries(supplementRates)){
   const pct=need(`C03 ${kind}`,rate);if(pct===0)continue;
   const quantity=need(`${kind} Zuschlagsstunden`,facts.supplementHours?.[kind]);
+  if(!provenance.supplementHours?.[kind]?.source)missing.push(`${kind} Zuschlagsstunden Quelle`);
   if(pct!==null&&quantity!==null){if(quantity>hours)missing.push(`${kind} Zuschlagsstunden überschreiten Gesamtstunden`);else supplements+=money(quantity*values.C01*pct/100);}
  }
  const percent=(base,key)=>money(base*values[key]/100);

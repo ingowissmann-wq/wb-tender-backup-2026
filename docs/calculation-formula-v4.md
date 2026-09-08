@@ -1,4 +1,4 @@
-# Kalkulationsformel WB_COST_CATALOG_V4
+# Kalkulationsformel WB_COST_CATALOG_V4.1
 
 Die produktive Engine ist `calculateSectorTender`. Der frühere generische Rechner ist deaktiviert: Er erlaubte quellenlose Werte und pauschale Ersatzwerte. Seine Werkzeugroute liefert einen ausdrücklichen Konfliktstatus und verweist auf den gesellschafts- und losbezogenen Workflow.
 
@@ -28,3 +28,5 @@ Die Vorbewertung berechnet keinen eigenen Preis mehr. Sie kann lediglich `BEREIT
 Der Kalkulationsschritt verwendet Dokumente des exakt gebundenen Loses sowie explizit als `TENDER_GLOBAL` gekennzeichnete gemeinsame Dokumente ohne widersprüchliche Losbindung. Dateinamen allein begründen keine gemeinsame Gültigkeit. Profil-Snapshots werden zusätzlich auf Gesellschaft und Leistungsart begrenzt. Ohne verifizierte Dokumente darf kein vollständiger Kalkulationserfolg entstehen.
 
 Excel-Spalten folgen ihren tatsächlichen Zelladressen, auch wenn vorherige Zellen fehlen. Leere XML-Zellen bleiben erhalten. Explizite Datenvalidierungen mit `allowBlank=false` werden quellengebunden geprüft: numerische Grenzen, Ganzzahlen, Textlängen und wörtliche Wertelisten. Unbekannte Formeln, Verweise oder übergroße Bereiche erfordern Prüfung und blockieren das Ergebnis. Ein Zellname wie C23 hat ohne Arbeitsmappe, Blatt und Regel keine universelle fachliche Bedeutung. Die Prüfungen sowie Dokument-Hashes und Losbindungen fließen in den Input-Snapshot ein. Arbeitsmappen ohne explizite Validierungsregeln benötigen weiterhin eine fachlich belegte Dokumentvorlage; das Fehlen von Excel-Regeln beweist keine Vollständigkeit der Bietereingaben.
+
+Version 4.1 verlangt für Zuschlagsstunden bei jedem nicht null gesetzten Zuschlagssatz einen eigenen Quellenbeleg, auch bei ausdrücklich null Stunden. Reine Datumsgrenzen gelten einschließlich des ganzen angegebenen UTC-Tages; ungültige Kalendertage werden abgewiesen. Die Kosten- und DB1/DB2/DB3-Formeln bleiben unverändert. Historische Freigaben älterer Formelversionen gelten nicht als aktuelle Freigabe.
