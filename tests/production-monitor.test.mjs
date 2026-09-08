@@ -38,3 +38,50 @@ assert 'scanner:signatures_stale' in m.scanner_failures(r,now-datetime.timedelta
 print('PASS')`;
  assert.equal(execFileSync('python3',['-B','-c',script],{encoding:'utf8'}).trim(),'PASS');
 });
+
+test('operational alerts deduplicate repeated failures and send one recovery notification',()=>{
+ const script=`import importlib.util
+s=importlib.util.spec_from_file_location('alert','deployment/production-monitor-alert.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+assert m.alert_decision({'errors':[]},{},1000) is None
+fingerprint=m.alert_decision({'errors':['scanner:health','disk_space_low']},{},1000)
+p={'fingerprint':fingerprint,'sentAt':1000,'hadErrors':True}
+assert m.alert_decision({'errors':['disk_space_low','scanner:health']},p,1001) is None
+assert m.alert_decision({'errors':['disk_space_low','scanner:health']},p,23000)==fingerprint
+assert m.alert_decision({'errors':['disk_space_low']},p,1001)!=fingerprint
+recovery=m.alert_decision({'errors':[]},p,1001)
+assert recovery is not None
+assert m.alert_decision({'errors':[]},{'fingerprint':recovery,'sentAt':1001,'hadErrors':False},1002) is None
+print('PASS')`;
+ assert.equal(execFileSync('python3',['-B','-c',script],{encoding:'utf8'}).trim(),'PASS');
+});
+
+test('operational SMTP alerts require TLS and preserve acceptance when QUIT fails',()=>{
+ const script=`import importlib.util,tempfile,pathlib,json
+s=importlib.util.spec_from_file_location('alert','deployment/production-monitor-alert.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+values={'smtp_host':'smtp.synthetic.invalid','smtp_port':'587','smtp_secure':'false','smtp_user':'own@synthetic.invalid','smtp_password':'synthetic-secret','smtp_from':'WB <own@synthetic.invalid>'}
+m.secret=lambda key:values[key]
+calls=[]
+class Connection:
+ def __init__(self,*args,**kwargs): calls.append('connect')
+ def ehlo(self): calls.append('ehlo')
+ def starttls(self,context): calls.append('tls')
+ def login(self,user,password): assert 'tls' in calls;calls.append('login')
+ def send_message(self,message):
+  assert str(message['To'])==values['smtp_user'];assert 'synthetic-secret' not in str(message);calls.append('send');return {}
+ def quit(self): raise OSError('synthetic quit failure')
+ def close(self): calls.append('close')
+m.smtplib.SMTP=Connection
+with tempfile.TemporaryDirectory() as directory:
+ root=pathlib.Path(directory);report={'checkedAt':'2026-09-08T00:00:00Z','errors':['scanner:health']}
+ result=m.notify(report,root);assert result['delivery']=='SMTP_ACCEPTED';assert calls.count('send')==1
+ assert 'synthetic-secret' not in (root/'last-alert.json').read_text();assert (root/'last-alert.json').stat().st_mode & 0o777==0o600
+ assert m.notify(report,root)['delivery']=='NOT_DUE';assert calls.count('send')==1
+ before=(root/'last-alert.json').read_bytes()
+ def failed(self,message): raise OSError('synthetic failure')
+ Connection.send_message=failed
+ try: m.notify({'checkedAt':report['checkedAt'],'errors':['disk_space_low']},root);raise AssertionError('delivery failure accepted')
+ except OSError: pass
+ assert (root/'last-alert.json').read_bytes()==before
+print('PASS')`;
+ assert.equal(execFileSync('python3',['-B','-c',script],{encoding:'utf8'}).trim(),'PASS');
+});

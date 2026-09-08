@@ -1,0 +1,11 @@
+[Unit]
+Description=Check WB-Tender production every two minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=10s
+Unit=wb-tender-production-monitor.service
+
+[Install]
+WantedBy=timers.target

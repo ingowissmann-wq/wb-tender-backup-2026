@@ -1,5 +1,6 @@
 """Read-only WB-Tender production monitor. Never performs a database restore."""
 import datetime
+import importlib.util
 import json
 import hashlib
 import os
@@ -213,6 +214,15 @@ def main():
     root = Path('/var/lib/wb-tender-production-monitor')
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     report = collect()
+    try:
+        spec = importlib.util.spec_from_file_location('wb_monitor_alert', Path(__file__).with_name('production-monitor-alert.py'))
+        alert = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(alert)
+        report['alert'] = alert.notify(report, root)
+    except Exception:
+        report['alert'] = {'delivery': 'FAILED'}
+        report['errors'].append('operational_alert_delivery_failed')
+        report['healthy'] = False
     target = root / 'current.json'
     temporary = root / ('check-' + str(os.getpid()) + '.json')
     temporary.write_text(json.dumps(report, indent=2) + '\n')
