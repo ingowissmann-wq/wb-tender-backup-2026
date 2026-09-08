@@ -17,6 +17,12 @@ with tempfile.TemporaryDirectory() as temp:
   manifest.write_text(content);manifest.with_name(manifest.name+'.sha256').write_text(hashlib.sha256(manifest.read_bytes()).hexdigest()+'  '+str(manifest)+'\n')
  seal(text)
  assert m.choose_backup(root,now)['archive']==str(archive)
+ seal(text.replace('20260908T110000Z','20260908T110000Z-133250'))
+ assert m.choose_backup(root,now)['archive']==str(archive)
+ seal(text.replace('20260908T110000Z','20260908T110000Z-invalid'))
+ try:m.choose_backup(root,now);raise AssertionError('invalid timestamp accepted')
+ except ValueError:pass
+ seal(text)
  manifest.write_text(text.replace('110000','100000'))
  try:m.choose_backup(root,now);raise AssertionError('corruption accepted')
  except ValueError:pass

@@ -58,7 +58,10 @@ def verified_manifest(path, now=None):
     archive = path.parent / fields['archive']
     if archive.is_symlink() or not archive.is_file() or not archive.stat().st_size:
         raise ValueError('archive_invalid')
-    created = datetime.datetime.strptime(fields['created_utc'], '%Y%m%dT%H%M%SZ').replace(tzinfo=datetime.timezone.utc)
+    timestamp = fields['created_utc']
+    if not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z(?:-[0-9]+)?', timestamp):
+        raise ValueError('manifest_timestamp_invalid')
+    created = datetime.datetime.strptime(timestamp[:16], '%Y%m%dT%H%M%SZ').replace(tzinfo=datetime.timezone.utc)
     age = (now - created).total_seconds()
     if age < 0 or age > 36 * 3600:
         raise ValueError('backup_stale')
