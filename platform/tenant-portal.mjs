@@ -57,6 +57,15 @@ const tenantOwner = async (req, reply) => {
   if (req.identity?.saas?.role !== 'OWNER') return reply.code(403).send({ error: "tenant_owner_required" });
 };
 const cleanText = (value, max = 500) => String(value || "").trim().slice(0, max);
+// Keep the membership locked until the enclosing tenant transaction commits.
+async function activeMember(db, tenantId, userId) {
+  if (userId === undefined || userId === null || userId === '') return null;
+  if (!UUID.test(String(userId))) throw Object.assign(new Error('active_tenant_member_required'), {statusCode: 400});
+  const member = (await db.query("SELECT user_id FROM saas.tenant_memberships WHERE tenant_id=$1 AND user_id=$2 AND status='ACTIVE' FOR SHARE", [tenantId, userId])).rows[0];
+  if (!member) throw Object.assign(new Error('active_tenant_member_required'), {statusCode: 400});
+  return member.user_id;
+}
+
 const html = (value) => String(value||"").replace(/[&<>"']/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
 const tenantAppJs = `const root=document.querySelector('[data-module]'),module=root.dataset.module,form=document.querySelector('form');async function load(){const q=new URLSearchParams(location.search).get('q')||'';const r=await fetch('/api/tenant-portal/modules/'+encodeURIComponent(module)+'?q='+encodeURIComponent(q));const data=await r.json();if(!r.ok)throw new Error(data.error||'Laden fehlgeschlagen');document.querySelector('#items').textContent=JSON.stringify(data.items,null,2)}load().catch(e=>document.querySelector('#items').textContent=e.message);form.addEventListener('submit',e=>{e.preventDefault();location.search=new URLSearchParams(new FormData(form))})`;
 
@@ -189,7 +198,7 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
 
   app.post("/api/tenant-portal/csm/customers", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CSM),csrf] }, async (req,reply) => {
     const name=cleanText(req.body?.name,160); if(name.length<2) return reply.code(400).send({error:"customer_name_invalid"});
-    const row=await withTenantContext(pool,req.tenant,async(db)=>{const item=(await db.query("INSERT INTO tenant_portal.csm_customers(tenant_id,name,health,status,lifecycle_stage,owner_user_id,renewal_at,follow_up_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",[req.tenant.id,name,req.body?.health||'UNASSESSED',req.body?.status||'ACTIVE',req.body?.lifecycleStage||'ONBOARDING',req.body?.ownerUserId||null,req.body?.renewalAt||null,req.body?.followUpAt||null,req.identity.userId])).rows[0];await db.query("INSERT INTO saas.audit_events(tenant_id,actor_user_id,action,target_type,target_id) VALUES($1,$2,'CSM_CUSTOMER_CREATED','csm_customer',$3)",[req.tenant.id,req.identity.userId,item.id]);return item;});
+    const row=await withTenantContext(pool,req.tenant,async(db)=>{const item=(await db.query("INSERT INTO tenant_portal.csm_customers(tenant_id,name,health,status,lifecycle_stage,owner_user_id,renewal_at,follow_up_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",[req.tenant.id,name,req.body?.health||'UNASSESSED',req.body?.status||'ACTIVE',req.body?.lifecycleStage||'ONBOARDING',await activeMember(db,req.tenant.id,req.body?.ownerUserId),req.body?.renewalAt||null,req.body?.followUpAt||null,req.identity.userId])).rows[0];await db.query("INSERT INTO saas.audit_events(tenant_id,actor_user_id,action,target_type,target_id) VALUES($1,$2,'CSM_CUSTOMER_CREATED','csm_customer',$3)",[req.tenant.id,req.identity.userId,item.id]);return item;});
     return reply.code(201).send(row);
   });
   app.post("/api/tenant-portal/csm/customers/:id/interactions", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CSM),csrf] }, async (req,reply) => {
@@ -198,7 +207,7 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
   });
   app.post("/api/tenant-portal/csm/customers/:id/cases", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CSM),csrf] }, async (req,reply) => {
     if(!UUID.test(String(req.params.id||""))) return reply.code(404).send({error:"customer_not_found"});
-    const row=await withTenantContext(pool,req.tenant,async(db)=>(await db.query("INSERT INTO tenant_portal.csm_service_cases(tenant_id,customer_id,title,description,priority,owner_user_id,due_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *",[req.tenant.id,req.params.id,cleanText(req.body?.title,240),cleanText(req.body?.description,10000),req.body?.priority||'NORMAL',req.body?.ownerUserId||null,req.body?.dueAt||null,req.identity.userId])).rows[0]); return reply.code(201).send(row);
+    const row=await withTenantContext(pool,req.tenant,async(db)=>(await db.query("INSERT INTO tenant_portal.csm_service_cases(tenant_id,customer_id,title,description,priority,owner_user_id,due_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *",[req.tenant.id,req.params.id,cleanText(req.body?.title,240),cleanText(req.body?.description,10000),req.body?.priority||'NORMAL',await activeMember(db,req.tenant.id,req.body?.ownerUserId),req.body?.dueAt||null,req.identity.userId])).rows[0]); return reply.code(201).send(row);
   });
   app.get("/api/tenant-portal/csm/customers/:id", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CSM)] }, async (req,reply) => {
     if(!UUID.test(String(req.params.id||"")))return reply.code(404).send({error:'customer_not_found'});
@@ -208,11 +217,11 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
 
   app.post("/api/tenant-portal/people/employees", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.PEOPLE),tenantAdmin,csrf] }, async (req,reply) => {
     const name=cleanText(req.body?.displayName,160); if(name.length<2) return reply.code(400).send({error:"employee_name_invalid"});
-    const row=await withTenantContext(pool,req.tenant,async(db)=>(await db.query("INSERT INTO tenant_portal.employee_profiles(tenant_id,user_id,display_name,work_email,personal_email,phone,employee_number,employment_status,job_title,team_name,start_date) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",[req.tenant.id,req.body?.userId||null,name,cleanText(req.body?.workEmail,254)||null,cleanText(req.body?.personalEmail,254)||null,cleanText(req.body?.phone,60)||null,cleanText(req.body?.employeeNumber,80)||null,req.body?.employmentStatus||'ONBOARDING',cleanText(req.body?.jobTitle,160)||null,cleanText(req.body?.teamName,160)||null,req.body?.startDate||null])).rows[0]); return reply.code(201).send(row);
+    const row=await withTenantContext(pool,req.tenant,async(db)=>(await db.query("INSERT INTO tenant_portal.employee_profiles(tenant_id,user_id,display_name,work_email,personal_email,phone,employee_number,employment_status,job_title,team_name,start_date) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",[req.tenant.id,await activeMember(db,req.tenant.id,req.body?.userId),name,cleanText(req.body?.workEmail,254)||null,cleanText(req.body?.personalEmail,254)||null,cleanText(req.body?.phone,60)||null,cleanText(req.body?.employeeNumber,80)||null,req.body?.employmentStatus||'ONBOARDING',cleanText(req.body?.jobTitle,160)||null,cleanText(req.body?.teamName,160)||null,req.body?.startDate||null])).rows[0]); return reply.code(201).send(row);
   });
   app.post("/api/tenant-portal/people/employees/:id/onboarding", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.PEOPLE),tenantAdmin,csrf] }, async (req,reply) => {
     if(!UUID.test(String(req.params.id||""))) return reply.code(404).send({error:"employee_not_found"});
-    const row=await withTenantContext(pool,req.tenant,async(db)=>(await db.query("INSERT INTO tenant_portal.people_onboarding_tasks(tenant_id,employee_id,title,assignee_user_id,due_at,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",[req.tenant.id,req.params.id,cleanText(req.body?.title,240),req.body?.assigneeUserId||null,req.body?.dueAt||null,req.identity.userId])).rows[0]); return reply.code(201).send(row);
+    const row=await withTenantContext(pool,req.tenant,async(db)=>(await db.query("INSERT INTO tenant_portal.people_onboarding_tasks(tenant_id,employee_id,title,assignee_user_id,due_at,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",[req.tenant.id,req.params.id,cleanText(req.body?.title,240),await activeMember(db,req.tenant.id,req.body?.assigneeUserId),req.body?.dueAt||null,req.identity.userId])).rows[0]); return reply.code(201).send(row);
   });
 
   app.get("/api/tenant-portal/control/members", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CONTROL),tenantAdmin] }, async (req) => withTenantContext(pool,req.tenant,async(db)=>({items:(await db.query("SELECT m.user_id,m.role,m.status,m.created_at,u.email FROM saas.tenant_memberships m JOIN iam.users u ON u.id=m.user_id WHERE m.tenant_id=$1 ORDER BY m.created_at",[req.tenant.id])).rows})));
