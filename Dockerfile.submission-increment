@@ -9,6 +9,8 @@ COPY --chown=0:0 --chmod=0644 ["platform/assets/autopilot-navigation.js", "/app/
 COPY --chown=0:0 --chmod=0644 ["platform/autopilot-pipeline-worker.mjs", "platform/scheduler.mjs", "platform/server.mjs", "platform/source-ingestion.mjs", "platform/submission-browser-adapter.mjs", "platform/submission-credential-recovery.mjs", "platform/submission-dispatch-core.mjs", "platform/submission-dispatch-routes.mjs", "platform/submission-dispatch-sources.mjs", "platform/submission-dispatch-store.mjs", "platform/submission-dispatch-worker.mjs", "platform/submission-live-routes.mjs", "platform/submission-runtime-policy.mjs", "platform/submission-worker-service.mjs", "platform/tenant-credential-vault.mjs", "platform/tenant-offer-package-routes.mjs", "/app/platform/"]
 COPY --chown=0:0 --chmod=0644 ["tests/submission-browser-adapter.test.mjs", "tests/submission-credential-loading.test.mjs", "tests/submission-credential-recovery-postgres.integration.mjs", "tests/submission-dispatch-core.test.mjs", "tests/submission-dispatch-fixture.mjs", "tests/submission-dispatch-postgres.integration.mjs", "tests/submission-dispatch-routes.test.mjs", "tests/submission-dispatch-worker.test.mjs", "tests/submission-notification-postgres.integration.mjs", "tests/submission-runtime-policy.test.mjs", "/app/tests/"]
 RUN chmod 0755 /app/docs/submission
+COPY --chown=0:0 --chmod=0755 ["tests/rollout-db.integration.sh", "/app/tests/"]
+COPY --chown=0:0 --chmod=0644 ["tests/fixtures/rollout-minimal.sql", "/app/tests/fixtures/"]
 ARG RELEASE_COMMIT
 ARG RELEASE_TREE
 ENV RELEASE_COMMIT=${RELEASE_COMMIT} SUBMISSION_EXECUTION_MODE=DEDICATED_VALIDATED_WORKER
