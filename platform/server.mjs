@@ -18,6 +18,7 @@ import { registerLocalPdfJsAssets } from "./pdfjs-assets.mjs";
 import { requireRegisteredTenderPortalScope } from "./registered-portal-scope.mjs";
 import { SAAS_PERMISSION_FEATURES, loadSaasContext, registerSaasRoutes } from "./saas-platform.mjs";
 import { registerTenantPortalRoutes } from "./tenant-portal.mjs";
+import { registerTenantCredentialRoutes } from "./tenant-credential-routes.mjs";
 import { SmtpEmailAdapter, StripeBillingAdapter, UnconfiguredBillingAdapter, UnconfiguredEmailAdapter } from "./saas-adapters.mjs";
 import { TenantFilesystemStorage, UnconfiguredTenantStorage } from "./tenant-storage.mjs";
 import { PostgresLoginStateStore, PostgresSaasSessionStore, SAAS_LOGIN_PATH, SaasOidcClient, registerSaasIamRoutes } from "./saas-iam.mjs";
@@ -774,6 +775,7 @@ registerSaasRoutes(app, {
   upgradeUrl: /^https:\/\//.test(String(process.env.SAAS_UPGRADE_URL || "")) ? process.env.SAAS_UPGRADE_URL : "",
 });
 registerTenantPortalRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf, storage: tenantStorage, invitationPepper: optionalSecret("SAAS_INVITATION_PEPPER"), emailAdapter });
+registerTenantCredentialRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf, keyringFile: process.env.SAAS_PORTAL_CREDENTIAL_KEYRING_FILE });
 const uiAuth = { preHandler: requirePermission("tender.view_assigned") };
 app.get("/wb-holding-logo.png", uiAuth, async (_, r) =>
   r

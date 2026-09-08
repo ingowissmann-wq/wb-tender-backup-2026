@@ -136,8 +136,9 @@ CREATE TABLE saas.audit_events(
 
 -- Existing SaaS schema needed for atomic usage migration and rollback.
 ALTER TABLE saas.subscriptions ADD COLUMN plan_code text, ADD COLUMN current_period_ends_at timestamptz;
-CREATE TABLE saas.tenant_companies(id uuid PRIMARY KEY,tenant_id uuid,status text);
+CREATE TABLE saas.tenant_companies(id uuid PRIMARY KEY,tenant_id uuid,status text,UNIQUE(tenant_id,id));
 CREATE SCHEMA tenant_portal;
+GRANT USAGE ON SCHEMA tenant_portal TO tender_api_runtime;
 CREATE TABLE tenant_portal.jobs(id uuid PRIMARY KEY,tenant_id uuid,module_key text,status text,payload jsonb,claimed_at timestamptz);
 CREATE TABLE tenant_portal.tender_workspaces(id uuid PRIMARY KEY,tenant_id uuid,public_tender_id uuid);
 CREATE FUNCTION saas.tenant_matches(candidate uuid) RETURNS boolean LANGUAGE sql STABLE AS $$
