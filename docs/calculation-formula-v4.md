@@ -20,3 +20,11 @@ DB1 = Preis minus direkte Kosten. DB2 = Preis minus zurechenbare Kosten. DB3 = P
 Ergebnisse enthalten Formelversion, Inputhash und Ergebnishash. Die Engine verwendet keine aktuelle Uhrzeit als versteckten Eingang; das Gültigkeitsdatum ist ausdrücklich erforderlich. Alte Ergebnisse bleiben eigenständige Revisionen. Verpflichtende Felder eines Preisblatts werden mit Zelladresse und Quelle validiert; ein unbelegtes oder leeres C23 kann kein erfolgreiches Ergebnis erzeugen.
 
 Die Referenztests decken Reinigung, Sicherheit und Facility Management, verschiedene Kosteneinheiten, fehlende Pflichtwerte und geänderte Profilrevisionen ab. Dies ist ein Engine-Nachweis. Die Übernahme sämtlicher Mengen, Zuschlagsstunden und Pflichtzellen aus realen Unterlagen in den Kundenworkflow benötigt weiterhin eine gesonderte End-to-End-Abnahme.
+
+## Quellenbindung und Tabellenpflichtfelder
+
+Die Vorbewertung berechnet keinen eigenen Preis mehr. Sie kann lediglich `BEREIT_FUER_KALKULATIONSENGINE` melden; Geldwerte entstehen ausschließlich im versionierten Schritt mit `calculateSectorTender`.
+
+Der Kalkulationsschritt verwendet Dokumente des exakt gebundenen Loses sowie explizit als `TENDER_GLOBAL` gekennzeichnete gemeinsame Dokumente ohne widersprüchliche Losbindung. Dateinamen allein begründen keine gemeinsame Gültigkeit. Profil-Snapshots werden zusätzlich auf Gesellschaft und Leistungsart begrenzt. Ohne verifizierte Dokumente darf kein vollständiger Kalkulationserfolg entstehen.
+
+Excel-Spalten folgen ihren tatsächlichen Zelladressen, auch wenn vorherige Zellen fehlen. Leere XML-Zellen bleiben erhalten. Explizite Datenvalidierungen mit `allowBlank=false` werden quellengebunden geprüft: numerische Grenzen, Ganzzahlen, Textlängen und wörtliche Wertelisten. Unbekannte Formeln, Verweise oder übergroße Bereiche erfordern Prüfung und blockieren das Ergebnis. Ein Zellname wie C23 hat ohne Arbeitsmappe, Blatt und Regel keine universelle fachliche Bedeutung. Die Prüfungen sowie Dokument-Hashes und Losbindungen fließen in den Input-Snapshot ein. Arbeitsmappen ohne explizite Validierungsregeln benötigen weiterhin eine fachlich belegte Dokumentvorlage; das Fehlen von Excel-Regeln beweist keine Vollständigkeit der Bietereingaben.

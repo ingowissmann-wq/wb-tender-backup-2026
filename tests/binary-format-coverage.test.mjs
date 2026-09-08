@@ -94,3 +94,18 @@ test("Düsseldorf NetServer browser download rejects unbound targets before navi
   await assert.rejects(()=>downloadPublicDuesseldorfNetServerArchive("https://evil.example/NetServer/TenderingProcedureDetails?function=_Details&TenderOID=54321-Tender-abc"),/duesseldorf_netserver_target_forbidden/);
   await assert.rejects(()=>downloadPublicDuesseldorfNetServerArchive("https://vergabe.duesseldorf.de/NetServer/TenderingProcedureDetails?function=_DownloadTenderDocuments&TenderOID=54321-Tender-abc"),/duesseldorf_netserver_target_forbidden/);
 });
+
+test('sparse XLSX columns preserve their actual addresses and empty required cells',async()=>{
+ const zip=new JSZip();
+ zip.file('[Content_Types].xml','<Types/>');
+ zip.file('xl/workbook.xml','<workbook><sheets><sheet name="Raumbuch UR" r:id="rId1"/></sheets></workbook>');
+ zip.file('xl/_rels/workbook.xml.rels','<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>');
+ zip.file('xl/worksheets/sheet1.xml','<worksheet><sheetData><row r="23"><c r="C23"/><c r="H23"><v>120</v></c><c r="J23"><f>H23/2</f><v>60</v></c><c r="AA23"><v>4</v></c></row></sheetData><dataValidations><dataValidation type="decimal" sqref="C23" allowBlank="0"><formula1>0</formula1></dataValidation></dataValidations></worksheet>');
+ const parsed=await parseBinaryDocument({buffer:await zip.generateAsync({type:'nodebuffer'}),name:'Raumbuch.xlsx',mediaType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+ const cells=parsed.worksheets[0].rows[0].cells;
+ assert.deepEqual(cells.map(c=>[c.address,c.row,c.column]),[['C23',23,3],['H23',23,8],['J23',23,10],['AA23',23,27]]);
+ assert.equal(cells[0].value,null);assert.equal(cells[2].result,'60');assert.equal(parsed.worksheets[0].dataValidations[0].allowBlank,false);
+ const {deriveCleaningRoomBookFacts}=await import('../platform/cleaning-room-book.mjs');
+ const facts=deriveCleaningRoomBookFacts([{id:'synthetic',filename:'Raumbuch.xlsx',procurement_verification_status:'VERIFIED',extracted_data:parsed}]);
+ assert.equal(facts.find(x=>x.key==='productive_hours_per_year').value,60);assert.equal(facts.find(x=>x.key==='areas').value,120);
+});
