@@ -1,3 +1,4 @@
+import {TenantCsm,csmReply} from './tenant-csm.mjs';
 import {controlHtml,controlJs} from './tenant-control-ui.mjs';
 import {TenantPeople} from './tenant-people.mjs';
 import {TenantWorkflowTasks} from './tenant-workflow-tasks.mjs';
@@ -61,15 +62,6 @@ const tenantOwner = async (req, reply) => {
 };
 async function peopleReply(reply,operation){try{return await operation();}catch(error){return reply.code(error.statusCode||(error.code==='23505'?409:503)).send({error:error.statusCode?error.message:error.code==='23505'?'employee_or_task_conflict':'people_temporarily_unavailable'});}}
 const cleanText = (value, max = 500) => String(value || "").trim().slice(0, max);
-// Keep the membership locked until the enclosing tenant transaction commits.
-async function activeMember(db, tenantId, userId) {
-  if (userId === undefined || userId === null || userId === '') return null;
-  if (!UUID.test(String(userId))) throw Object.assign(new Error('active_tenant_member_required'), {statusCode: 400});
-  const member = (await db.query("SELECT user_id FROM saas.tenant_memberships WHERE tenant_id=$1 AND user_id=$2 AND status='ACTIVE' FOR SHARE", [tenantId, userId])).rows[0];
-  if (!member) throw Object.assign(new Error('active_tenant_member_required'), {statusCode: 400});
-  return member.user_id;
-}
-
 const html = (value) => String(value||"").replace(/[&<>"']/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
 const tenantAppJs = `const root=document.querySelector('[data-module]'),module=root.dataset.module,form=document.querySelector('form');async function load(){const q=new URLSearchParams(location.search).get('q')||'';const r=await fetch('/api/tenant-portal/modules/'+encodeURIComponent(module)+'?q='+encodeURIComponent(q));const data=await r.json();if(!r.ok)throw new Error(data.error||'Laden fehlgeschlagen');document.querySelector('#items').textContent=JSON.stringify(data.items,null,2)}load().catch(e=>document.querySelector('#items').textContent=e.message);form.addEventListener('submit',e=>{e.preventDefault();location.search=new URLSearchParams(new FormData(form))})`;
 
@@ -151,16 +143,14 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
 
   app.patch("/api/tenant-portal/modules/:module/:id", { preHandler: [authenticate,tenantGuard,dynamicModuleGuard,csrf] }, async (req,reply) => {
     if(!UUID.test(String(req.params.id||""))) return reply.code(404).send({error:"item_not_found"});
-    let query,params;
-    if(req.moduleKey===MODULE_KEYS.CSM){query=`UPDATE tenant_portal.csm_customers SET name=coalesce($3,name),health=coalesce($4,health),status=coalesce($5,status),lifecycle_stage=coalesce($6,lifecycle_stage),renewal_at=coalesce($7,renewal_at),follow_up_at=coalesce($8,follow_up_at),updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *`;params=[req.tenant.id,req.params.id,cleanText(req.body?.name,160)||null,req.body?.health||null,req.body?.status||null,req.body?.lifecycleStage||null,req.body?.renewalAt||null,req.body?.followUpAt||null];}
+    if(req.moduleKey===MODULE_KEYS.CSM)return csmReply(reply,async()=> (await new TenantCsm(pool).save(req.tenant,'customer',{...req.body,id:req.params.id},{update:true})).item);
     else if(req.moduleKey===MODULE_KEYS.PEOPLE){if(!['OWNER','ADMIN'].includes(req.identity.saas.role))return reply.code(403).send({error:'tenant_admin_required'});return peopleReply(reply,()=>new TenantPeople(pool).update(req.tenant,req.params.id,req.body));}
     else return reply.code(405).send({error:'module_item_update_not_supported'});
-    const row=await withTenantContext(pool,req.tenant,async(db)=>{const item=(await db.query(query,params)).rows[0];if(item)await db.query("INSERT INTO saas.audit_events(tenant_id,actor_user_id,action,target_type,target_id) VALUES($1,$2,'MODULE_ITEM_UPDATED',$3,$4)",[req.tenant.id,req.identity.userId,req.moduleKey,req.params.id]);return item;});
-    return row||reply.code(404).send({error:'item_not_found'});
   });
   app.delete("/api/tenant-portal/modules/:module/:id", { preHandler: [authenticate,tenantGuard,dynamicModuleGuard,tenantAdmin,csrf] }, async (req,reply) => {
     if(!UUID.test(String(req.params.id||"")))return reply.code(404).send({error:'item_not_found'});
-    const table=req.moduleKey===MODULE_KEYS.CSM?'csm_customers':req.moduleKey===MODULE_KEYS.PEOPLE?'employee_profiles':null;
+    if(req.moduleKey===MODULE_KEYS.CSM)return reply.code(409).send({error:'csm_history_preserved_use_customer_status'});
+    const table=req.moduleKey===MODULE_KEYS.PEOPLE?'employee_profiles':null;
     if(!table)return reply.code(405).send({error:'module_item_delete_not_supported'});
     const row=await withTenantContext(pool,req.tenant,async(db)=>{const item=(await db.query(`DELETE FROM tenant_portal.${table} WHERE tenant_id=$1 AND id=$2 RETURNING id`,[req.tenant.id,req.params.id])).rows[0];if(item)await db.query("INSERT INTO saas.audit_events(tenant_id,actor_user_id,action,target_type,target_id) VALUES($1,$2,'MODULE_ITEM_DELETED',$3,$4)",[req.tenant.id,req.identity.userId,req.moduleKey,req.params.id]);return item;});
     if(!row)return reply.code(404).send({error:'item_not_found'});return reply.code(204).send();
@@ -204,25 +194,6 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
     if (!removed) return reply.code(404).send({ error: "file_not_found" });
     if (storage.configured) await storage.delete(req.tenant.id, req.params.id);
     return reply.code(204).send();
-  });
-
-  app.post("/api/tenant-portal/csm/customers", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CSM),csrf] }, async (req,reply) => {
-    const name=cleanText(req.body?.name,160); if(name.length<2) return reply.code(400).send({error:"customer_name_invalid"});
-    const row=await withTenantContext(pool,req.tenant,async(db)=>{const item=(await db.query("INSERT INTO tenant_portal.csm_customers(tenant_id,name,health,status,lifecycle_stage,owner_user_id,renewal_at,follow_up_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *",[req.tenant.id,name,req.body?.health||'UNASSESSED',req.body?.status||'ACTIVE',req.body?.lifecycleStage||'ONBOARDING',await activeMember(db,req.tenant.id,req.body?.ownerUserId),req.body?.renewalAt||null,req.body?.followUpAt||null,req.identity.userId])).rows[0];await db.query("INSERT INTO saas.audit_events(tenant_id,actor_user_id,action,target_type,target_id) VALUES($1,$2,'CSM_CUSTOMER_CREATED','csm_customer',$3)",[req.tenant.id,req.identity.userId,item.id]);return item;});
-    return reply.code(201).send(row);
-  });
-  app.post("/api/tenant-portal/csm/customers/:id/interactions", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CSM),csrf] }, async (req,reply) => {
-    if(!UUID.test(String(req.params.id||""))) return reply.code(404).send({error:"customer_not_found"});
-    const row=await withTenantContext(pool,req.tenant,async(db)=>(await db.query("INSERT INTO tenant_portal.csm_interactions(tenant_id,customer_id,interaction_type,subject,body,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",[req.tenant.id,req.params.id,req.body?.type||'NOTE',cleanText(req.body?.subject,200),cleanText(req.body?.body,10000),req.identity.userId])).rows[0]); return reply.code(201).send(row);
-  });
-  app.post("/api/tenant-portal/csm/customers/:id/cases", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CSM),csrf] }, async (req,reply) => {
-    if(!UUID.test(String(req.params.id||""))) return reply.code(404).send({error:"customer_not_found"});
-    const row=await withTenantContext(pool,req.tenant,async(db)=>(await db.query("INSERT INTO tenant_portal.csm_service_cases(tenant_id,customer_id,title,description,priority,owner_user_id,due_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *",[req.tenant.id,req.params.id,cleanText(req.body?.title,240),cleanText(req.body?.description,10000),req.body?.priority||'NORMAL',await activeMember(db,req.tenant.id,req.body?.ownerUserId),req.body?.dueAt||null,req.identity.userId])).rows[0]); return reply.code(201).send(row);
-  });
-  app.get("/api/tenant-portal/csm/customers/:id", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CSM)] }, async (req,reply) => {
-    if(!UUID.test(String(req.params.id||"")))return reply.code(404).send({error:'customer_not_found'});
-    const result=await withTenantContext(pool,req.tenant,async(db)=>{const customer=(await db.query("SELECT * FROM tenant_portal.csm_customers WHERE tenant_id=$1 AND id=$2",[req.tenant.id,req.params.id])).rows[0];if(!customer)return null;return{customer,interactions:(await db.query("SELECT * FROM tenant_portal.csm_interactions WHERE tenant_id=$1 AND customer_id=$2 ORDER BY occurred_at DESC",[req.tenant.id,req.params.id])).rows,cases:(await db.query("SELECT * FROM tenant_portal.csm_service_cases WHERE tenant_id=$1 AND customer_id=$2 ORDER BY created_at DESC",[req.tenant.id,req.params.id])).rows,tasks:(await db.query("SELECT * FROM tenant_portal.csm_tasks WHERE tenant_id=$1 AND customer_id=$2 ORDER BY created_at DESC",[req.tenant.id,req.params.id])).rows};});
-    return result||reply.code(404).send({error:'customer_not_found'});
   });
 
   app.get('/saas/app/control',{preHandler:[authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CONTROL),tenantAdmin]},async(_,r)=>r.header('Cache-Control','no-store').type('text/html').send(controlHtml));

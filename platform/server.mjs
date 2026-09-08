@@ -1,3 +1,4 @@
+import {registerTenantCsmRoutes} from './tenant-csm-routes.mjs';
 import Fastify from "fastify";
 import {startBookingEmailWorker} from "./saas-email-worker.mjs";
 import cookie from "@fastify/cookie";
@@ -793,6 +794,7 @@ registerTenantDocumentReviewRoutes(app, { pool, storage: tenantStorage, authenti
 registerTenantOfferPackageRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantPeopleRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantCrmRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
+registerTenantCsmRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantWorkflowRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantInsightsRoutes(app, { pool, authenticate: saasAuthenticate });
 registerTenantManagementRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });

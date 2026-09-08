@@ -46,7 +46,7 @@ test("migration provides real CSM, People, Docs audit and tenant IAM with forced
 });
 
 test("tenant portal exposes guarded CSM, People, Docs and Control flows", async () => {
-  const routes=(await Promise.all(['tenant-portal.mjs','tenant-people-routes.mjs'].map(file=>readFile(new URL('../platform/'+file,import.meta.url),'utf8')))).join('\n');
+  const routes=(await Promise.all(['tenant-portal.mjs','tenant-people-routes.mjs','tenant-csm-routes.mjs'].map(file=>readFile(new URL('../platform/'+file,import.meta.url),'utf8')))).join('\n');
   for(const route of ['csm/customers','people/employees','modules/docs/files','control/members','control/invitations']) assert.match(routes,new RegExp(route));
   assert.match(routes,/requireSaasModule\(MODULE_KEYS\.CSM\)/); assert.match(routes,/tenantAdmin/); assert.match(routes,/tenantOwner/);
 });
