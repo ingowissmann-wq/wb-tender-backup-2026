@@ -6514,7 +6514,7 @@ export function registerAutopilotRoutes(
             bidPackage = resolution.package;
             const documents = (
               await client.query(
-                "SELECT id,category,version,format,status,sha256,storage_key,output_size_bytes FROM tender.generated_documents WHERE bid_package_id=$1 ORDER BY category",
+                "SELECT id,category,version,format,status,sha256,storage_key,output_size_bytes,internal_draft_only FROM tender.generated_documents WHERE bid_package_id=$1 ORDER BY category",
                 [bidPackage.id],
               )
             ).rows;
@@ -6525,8 +6525,14 @@ export function registerAutopilotRoutes(
               packageComplete:
                 bidPackage.status === "BID_PACKAGE_READY_FOR_SUBMISSION" &&
                 documents.length === 5 &&
+                documents.every(document => document.internal_draft_only === false && document.status === "VALIDATED") &&
                 !(bidPackage.missing_items || []).length,
             };
+            if (!generation.packageComplete && bidPackage.status === "BID_PACKAGE_READY_FOR_SUBMISSION") {
+              const missing = [...new Set([...(bidPackage.missing_items || []), "SUBMISSION_DOCUMENT_REVIEW_REQUIRED"])];
+              bidPackage = (await client.query("UPDATE tender.bid_packages SET status='BID_PACKAGE_INCOMPLETE',missing_items=$2::jsonb WHERE id=$1 RETURNING *", [bidPackage.id, JSON.stringify(missing)])).rows[0];
+              generation = {...generation, bidPackage, missing};
+            }
           } else {
             const staleIds = resolution.supersede.map((pkg) => pkg.id);
             if (staleIds.length) {
@@ -6578,10 +6584,7 @@ export function registerAutopilotRoutes(
               bidPackageId: bidPackage.id,
               createdBy: req.identity.userId,
             });
-            bidPackage = {
-              ...generation.bidPackage,
-              status: "BID_PACKAGE_VALIDATED",
-            };
+            bidPackage = generation.bidPackage;
             packageCreated = true;
           }
           const gate = evaluateSubmissionGate({
@@ -6611,7 +6614,7 @@ export function registerAutopilotRoutes(
             ],
           );
           await client.query(
-            "INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'bid_decision_approved',$2,$3::jsonb),($1,'APPROVAL_GRANTED',$2,$3::jsonb),($1,$6,$2,$4::jsonb),($1,'BID_PACKAGE_VALIDATED',$2,$4::jsonb),($1,'SUBMISSION_GATE_CHECKED',$2,$5::jsonb)",
+            "INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'bid_decision_approved',$2,$3::jsonb),($1,'APPROVAL_GRANTED',$2,$3::jsonb),($1,$6,$2,$4::jsonb),($1,$7,$2,$4::jsonb),($1,'SUBMISSION_GATE_CHECKED',$2,$5::jsonb)",
             [
               req.identity.userId,
               req.params.id,
@@ -6642,6 +6645,7 @@ export function registerAutopilotRoutes(
                 externalWrite: false,
               }),
               packageCreated ? "BID_PACKAGE_CREATED" : "BID_PACKAGE_REUSED",
+              generation.packageComplete ? "BID_PACKAGE_VALIDATED" : "BID_PACKAGE_REVIEW_REQUIRED",
             ],
           );
           await client.query("COMMIT");
@@ -6658,9 +6662,9 @@ export function registerAutopilotRoutes(
               "APPROVAL_GRANTED",
               packageCreated ? "BID_PACKAGE_CREATED" : "BID_PACKAGE_REUSED",
               ...(packageCreated
-                ? ["DOCUMENT_GENERATION_COMPLETED", "PACKAGE_COMPLETE"]
+                ? ["DOCUMENT_GENERATION_COMPLETED", "PACKAGE_DRAFTS_GENERATED"]
                 : []),
-              "BID_PACKAGE_VALIDATED",
+              generation.packageComplete ? "BID_PACKAGE_VALIDATED" : "BID_PACKAGE_REVIEW_REQUIRED",
               "SUBMISSION_GATE_CHECKED",
             ],
           };

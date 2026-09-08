@@ -8,11 +8,11 @@ const definitions=[
   {category:"EVIDENCE",code:"BID_EVIDENCE",title:"Nachweise",type:"EVIDENCE_MATRIX",format:"DOCX"},
   {category:"CERTIFICATES",code:"BID_CERTIFICATES",title:"Zertifikate",type:"DOCUMENT_LIST",format:"PDF"},
 ];
-const scalar=value=>value===undefined||value===null?"Nicht verfügbar":typeof value==="object"?JSON.stringify(value):String(value);
+const scalar=value=>value===undefined||value===null?null:typeof value==="object"?JSON.stringify(value):String(value);
 const selectData=(definition,context)=>{
   const totals=context.calculation.totals||{},requirements=context.requirements||[],profile=context.profile?.parameters||context.profile||{};
   const common={Tender:context.tender.title,Auftraggeber:context.tender.buyer,Los:context.bidPackage.lot_key||"Gesamt",Gesellschaft:context.company.legal_name,Vergabenummer:context.tender.procurement_number||context.tender.notice_number||"Nicht verfügbar"};
-  if(definition.category==="PRICE_SHEET")return {...common,Angebotspreis_netto:scalar(totals.offerPriceNet??totals.offerPrice??totals.price),DB1:scalar(totals.db1),DB2:scalar(totals.db2),DB3:scalar(totals.db3),Gewinn:scalar(totals.profit),Preispositionen:scalar(totals.pricePositions||[])};
+  if(definition.category==="PRICE_SHEET")return {...common,Angebotspreis_netto:scalar(totals.totalPrice??totals.offerPriceNet??totals.offerPrice??totals.price),DB1:scalar(totals.db1),DB2:scalar(totals.db2),DB3:scalar(totals.db3),Gewinn:scalar(totals.profit),Preispositionen:scalar(totals.pricePositions||[])};
   if(definition.category==="SPECIFICATION")return {...common,Leistungspositionen:scalar(totals.pricePositions||[]),Leistungsgrundlage:scalar(context.management.payload?.operations||context.management.payload?.calculation||{})};
   if(definition.category==="FORMS")return {...common,Formblätter:scalar(requirements.filter(x=>/form|erklärung|formular/i.test(`${x.category} ${x.requirement}`)).map(x=>({Anforderung:x.requirement,Status:x.status,Pflicht:x.mandatory})))};
   if(definition.category==="EVIDENCE")return {...common,Nachweise:scalar(requirements.filter(x=>/nachweis|eignung|referenz/i.test(`${x.category} ${x.requirement}`)).map(x=>({Anforderung:x.requirement,Status:x.status,Pflicht:x.mandatory}))),Unternehmensnachweise:scalar(profile.A11??profile.references??"Nicht verfügbar")};
@@ -43,9 +43,11 @@ export async function generateBidPackageDocuments(client,{bidPackageId,createdBy
     documents.push(row);
   }
   const missing=definitions.filter(def=>!documents.some(doc=>doc.category===def.category)).map(def=>def.category),documentManifest=documents.map(doc=>({id:doc.id,category:doc.category,version:doc.version,format:doc.format,sha256:doc.sha256,sizeBytes:Number(doc.output_size_bytes)})).sort((a,b)=>a.category.localeCompare(b.category));
-  const status=missing.length?"BID_PACKAGE_INCOMPLETE":"BID_PACKAGE_READY_FOR_SUBMISSION";
-  const manifest={...(context.manifest||{}),documents:documentManifest,documentGeneration:{status:missing.length?"INCOMPLETE":"PACKAGE_COMPLETE",generatorVersion:GENERATOR_VERSION}};
+  const draftsComplete=missing.length===0;
+  missing.push("SUBMISSION_DOCUMENT_REVIEW_REQUIRED");
+  const status="BID_PACKAGE_INCOMPLETE";
+  const manifest={...(context.manifest||{}),documents:documentManifest,documentGeneration:{status:draftsComplete?"INTERNAL_DRAFTS_GENERATED":"INCOMPLETE",generatorVersion:GENERATOR_VERSION,submissionReady:false}};
   const updated=(await client.query("UPDATE tender.bid_packages SET status=$2,manifest=$3::jsonb,manifest_sha256=$4,missing_items=$5::jsonb WHERE id=$1 RETURNING *",[bidPackageId,status,JSON.stringify(manifest),manifestHash(manifest),JSON.stringify(missing)])).rows[0];
-  await client.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'DOCUMENT_GENERATION_COMPLETED',$2,$3::jsonb),($1,'PACKAGE_COMPLETE',$2,$3::jsonb)",[createdBy,context.tender_id,JSON.stringify({bidPackageId,lotKey:context.lot_key,companyId:context.company_id,documents:documentManifest,missing,externalWrite:false})]);
-  return {bidPackage:updated,documents,missing,packageComplete:missing.length===0};
+  await client.query("INSERT INTO tender.audit_events(actor_id,action,tender_id,metadata) VALUES($1,'DOCUMENT_GENERATION_COMPLETED',$2,$3::jsonb),($1,'PACKAGE_DRAFTS_GENERATED',$2,$3::jsonb)",[createdBy,context.tender_id,JSON.stringify({bidPackageId,lotKey:context.lot_key,companyId:context.company_id,documents:documentManifest,missing,externalWrite:false})]);
+  return {bidPackage:updated,documents,missing,draftsComplete,packageComplete:false};
 }
