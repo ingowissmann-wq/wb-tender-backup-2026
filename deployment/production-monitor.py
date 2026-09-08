@@ -3,6 +3,7 @@ import datetime
 import json
 import hashlib
 import os
+import socket
 from pathlib import Path
 import subprocess
 import sys
@@ -60,6 +61,55 @@ def manifest_checksum_verified(manifest):
     return len(entries) == 1 and hashlib.sha256(manifest.read_bytes()).hexdigest() == entries[0]
 
 
+SCANNER_NAME = 'wb-tender-production-malware-scanner'
+SCANNER_IMAGE = 'clamav/clamav@sha256:faa54529dcd972899ef7d01d13e51920c4ac7646a4f985817dd14b159ba6c9c7'
+
+
+def scanner_failures(record, now=None):
+    errors = []
+    for key, expected in (('project', 'wb-tender-malware'), ('configuredImage', SCANNER_IMAGE),
+                          ('health', 'healthy'), ('restarts', 0), ('ping', 'PONG')):
+        if record.get(key) != expected:
+            errors.append('scanner:' + key)
+    ports = record.get('portBindings', {})
+    if ports != {'3310/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '13310'}]}:
+        errors.append('scanner:port_binding')
+    try:
+        version = record.get('version', '')
+        if not version.startswith('ClamAV ') or len(version.split('/')) != 3:
+            raise ValueError('invalid_version')
+        stamp = datetime.datetime.strptime(version.split('/')[-1], '%a %b %d %H:%M:%S %Y').replace(tzinfo=datetime.timezone.utc)
+        age = ((now or datetime.datetime.now(datetime.timezone.utc)) - stamp).total_seconds()
+        if not 0 <= age <= 48 * 3600:
+            errors.append('scanner:signatures_stale')
+    except (ValueError, TypeError):
+        errors.append('scanner:signature_version_invalid')
+    return errors
+
+
+def clamd_command(value):
+    with socket.create_connection(('127.0.0.1', 13310), timeout=5) as connection:
+        connection.sendall(('z' + value + chr(0)).encode('ascii'))
+        response = b''
+        while len(response) < 4096:
+            chunk = connection.recv(4096 - len(response))
+            if not chunk:
+                break
+            response += chunk
+            if b'\x00' in response:
+                return response.split(b'\x00', 1)[0].decode('ascii').strip()
+        raise ValueError('invalid_clamd_response')
+
+
+def collect_scanner():
+    data = json.loads(command(['docker', 'inspect', SCANNER_NAME]))[0]
+    return {'project': data['Config'].get('Labels', {}).get('com.docker.compose.project'),
+            'configuredImage': data['Config'].get('Image'), 'image': data['Image'],
+            'health': data['State'].get('Health', {}).get('Status'), 'restarts': data['RestartCount'],
+            'portBindings': data['HostConfig'].get('PortBindings'),
+            'ping': clamd_command('PING'), 'version': clamd_command('VERSION')}
+
+
 def collect():
     report = {'checkedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'services': {}, 'errors': []}
     for service in SERVICES:
@@ -75,6 +125,11 @@ def collect():
         except Exception:
             report['errors'].append(service + ':inspection_failed')
     report['errors'] += container_failures(report['services'])
+    try:
+        report['scanner'] = collect_scanner()
+        report['errors'] += scanner_failures(report['scanner'])
+    except Exception:
+        report['errors'].append('scanner:inspection_failed')
     opener = urllib.request.build_opener(ProjectRedirect())
     report['http'] = []
     for url in ('https://wb-tender.com/', 'https://www.wb-tender.com/', 'https://www.enwi.online/healthz',
