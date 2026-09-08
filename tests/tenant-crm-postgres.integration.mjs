@@ -1,0 +1,35 @@
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import pg from 'pg';
+import {TenantCrm} from '../platform/tenant-crm.mjs';
+if(process.env.WB_TENDER_ROLLOUT_ISOLATED_TEST!=='true')throw Error('isolated_test_required');
+const url=new URL((await fs.readFile(process.env.DATABASE_URL_FILE,'utf8')).trim());
+if(url.hostname!=='127.0.0.1'||!['5432','15432'].includes(url.port))throw Error('isolated_local_postgres_required');
+const database='wb_crm_test_'+crypto.randomBytes(8).toString('hex'),admin=new pg.Client({connectionString:url.href});await admin.connect();let fixture,runtime,created=false;
+try{
+ await admin.query('CREATE DATABASE '+database);created=true;url.pathname='/'+database;fixture=new pg.Client({connectionString:url.href});await fixture.connect();
+ const role=(await fixture.query("SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname='wb_tender_api_login'")).rows[0];assert.ok(role&&!role.rolsuper&&!role.rolbypassrls);
+ await fixture.query(`CREATE SCHEMA saas;CREATE SCHEMA tenant_portal;
+ CREATE FUNCTION saas.tenant_matches(candidate uuid) RETURNS boolean LANGUAGE sql STABLE AS $$SELECT candidate=NULLIF(current_setting('app.tenant_id',true),'')::uuid$$;
+ CREATE TABLE tenant_portal.crm_accounts(id uuid PRIMARY KEY,tenant_id uuid,name text,stage text,created_by uuid,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now(),UNIQUE(tenant_id,id));
+ CREATE TABLE tenant_portal.crm_contacts(id uuid PRIMARY KEY,tenant_id uuid,account_id uuid,name text,email text,created_by uuid,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now(),FOREIGN KEY(tenant_id,account_id) REFERENCES tenant_portal.crm_accounts(tenant_id,id));
+ CREATE TABLE saas.audit_events(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,tenant_id uuid,actor_user_id uuid,action text,target_type text,target_id text,metadata jsonb,occurred_at timestamptz DEFAULT now());
+ GRANT USAGE ON SCHEMA saas,tenant_portal TO wb_tender_api_login;
+ GRANT SELECT,INSERT,UPDATE ON ALL TABLES IN SCHEMA tenant_portal TO wb_tender_api_login;
+ GRANT SELECT,INSERT ON saas.audit_events TO wb_tender_api_login;
+ GRANT USAGE ON ALL SEQUENCES IN SCHEMA saas TO wb_tender_api_login;`);
+ for(const table of ['tenant_portal.crm_accounts','tenant_portal.crm_contacts','saas.audit_events'])await fixture.query(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;ALTER TABLE ${table} FORCE ROW LEVEL SECURITY;CREATE POLICY own_tenant ON ${table} USING(saas.tenant_matches(tenant_id)) WITH CHECK(saas.tenant_matches(tenant_id));`);
+ runtime=new pg.Pool({connectionString:url.href,max:3});const pool={connect:async()=>{const client=await runtime.connect();await client.query('SET ROLE wb_tender_api_login');return client}},crm=new TenantCrm(pool);
+ const own={id:crypto.randomUUID(),actorUserId:crypto.randomUUID()},foreign={id:crypto.randomUUID(),actorUserId:crypto.randomUUID()};const body={id:crypto.randomUUID(),name:'SYNTHETIC customer',stage:'PROSPECT'};
+ const first=await crm.save(own,'account',body);assert.equal(first.idempotent,false);assert.equal((await crm.save(own,'account',body)).idempotent,true);
+ const updated=await crm.save(own,'account',{...body,stage:'QUALIFIED',expectedRevision:first.item.revision,reason:'SYNTHETIC qualification reviewed'},{update:true});assert.notEqual(updated.item.revision,first.item.revision);
+ await assert.rejects(()=>crm.save(own,'account',{...body,stage:'LOST',expectedRevision:first.item.revision,reason:'SYNTHETIC stale revision rejected'},{update:true}),/crm_version_conflict/);
+ const another=await crm.save(foreign,'account',{...body,id:crypto.randomUUID(),name:'SYNTHETIC foreign'});
+ await assert.rejects(()=>crm.detail(own,another.item.id),/crm_account_not_found/);
+ await assert.rejects(()=>crm.save(own,'contact',{id:crypto.randomUUID(),accountId:another.item.id,name:'Foreign contact'}),/crm_account_not_found/);
+ const contact=await crm.save(own,'contact',{id:crypto.randomUUID(),accountId:body.id,name:'Own contact',email:'synthetic@wb-test.invalid'});assert.equal(contact.item.account_id,body.id);
+ const detail=await crm.detail(own,body.id);assert.equal(detail.contacts.length,1);assert.equal(detail.account.stage,'QUALIFIED');assert.equal((await crm.list(own)).items.length,1);
+ const audit=(await fixture.query('SELECT action FROM saas.audit_events WHERE tenant_id=$1 ORDER BY id',[own.id])).rows;assert.deepEqual(audit.map(x=>x.action),['CRM_ACCOUNT_CREATED','CRM_ACCOUNT_UPDATED','CRM_CONTACT_CREATED']);
+ console.log(JSON.stringify({passed:true,realPostgres:true,forcedRls:true,systemRevisionConflict:true,typedAuditAndIdempotency:true,foreignParentRejected:true}));
+}finally{if(runtime)await runtime.end();if(fixture)await fixture.end();if(created)await admin.query('DROP DATABASE '+database);await admin.end();}

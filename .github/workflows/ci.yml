@@ -133,3 +133,6 @@ jobs:
 
       - name: Prove tenant reporting and export audit against PostgreSQL
         run: DATABASE_URL_FILE="$RUNNER_TEMP/rollout-database-url" WB_TENDER_ROLLOUT_ISOLATED_TEST=true node tests/tenant-insights-postgres.integration.mjs
+
+      - name: Prove CRM revisions, audit and tenant isolation against PostgreSQL
+        run: DATABASE_URL_FILE="$RUNNER_TEMP/rollout-database-url" WB_TENDER_ROLLOUT_ISOLATED_TEST=true node tests/tenant-crm-postgres.integration.mjs
