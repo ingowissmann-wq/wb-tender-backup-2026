@@ -14,13 +14,15 @@ for name in "${applied[@]}"; do
   [[ -z "${seen[$name]:-}" ]] || { echo "duplicate applied migration record: $name" >&2; exit 65; }
   seen[$name]=1
   case "$name" in
-    155_autopilot_overview_latest_lookup.sql|156_approved_tender_commercial_plans.sql|157_release_auth_and_commercial_enforcement.sql|158_tender_login_challenge_runtime_grants.sql|159_runtime_request_scope.sql|160_critical_region_portal_resolution.sql|161_saas_self_service_checkout_and_oidc.sql|162_saas_native_self_service_iam.sql|163_saas_split_billing_collection.sql|164_saas_explicit_standalone_booking.sql|165_saas_atomic_usage_limits.sql|166_saas_booking_email_outbox.sql|167_tenant_portal_credential_vault.sql|168_tenant_company_profile_versions.sql|169_tenant_lot_assignments.sql) ;;
+    155_autopilot_overview_latest_lookup.sql|156_approved_tender_commercial_plans.sql|157_release_auth_and_commercial_enforcement.sql|158_tender_login_challenge_runtime_grants.sql|159_runtime_request_scope.sql|160_critical_region_portal_resolution.sql|161_saas_self_service_checkout_and_oidc.sql|162_saas_native_self_service_iam.sql|163_saas_split_billing_collection.sql|164_saas_explicit_standalone_booking.sql|165_saas_atomic_usage_limits.sql|166_saas_booking_email_outbox.sql|167_tenant_portal_credential_vault.sql|168_tenant_company_profile_versions.sql|169_tenant_lot_assignments.sql|170_tenant_lot_calculations.sql) ;;
     *) echo "refusing unknown rollback migration: $name" >&2; exit 65 ;;
   esac
 done
 for (( index=${#applied[@]}-1; index>=0; index-- )); do
   name=${applied[$index]}
   case "$name" in
+    170_tenant_lot_calculations.sql)
+      psql "$url" -v ON_ERROR_STOP=1 -f migrations/170_tenant_lot_calculations.down.sql ;;
     169_tenant_lot_assignments.sql)
       psql "$url" -v ON_ERROR_STOP=1 -f migrations/169_tenant_lot_assignments.down.sql ;;
     168_tenant_company_profile_versions.sql)

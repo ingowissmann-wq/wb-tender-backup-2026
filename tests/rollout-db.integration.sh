@@ -29,8 +29,8 @@ for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger
   cmp -s "$temporary/before/$item" "$temporary/trusted/$item"
 done
 RELEASE_ID=0000000000000000000000000000000000000001 "$root/deployment/apply-release-migrations.sh" | tee "$temporary/migrations.log"
-[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/migrations.log")" -eq 15 ]]
-[[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT count(*) FROM tender.release_migrations")" == 15 ]]
+[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/migrations.log")" -eq 16 ]]
+[[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT count(*) FROM tender.release_migrations")" == 16 ]]
 psql "$url" -v ON_ERROR_STOP=1 -f "$root/tests/saas-usage-limits.integration.sql" >/dev/null
 bash "$root/tests/saas-usage-concurrency.integration.sh"
 psql "$url" -v ON_ERROR_STOP=1 -f "$root/tests/portal-resolution-evidence.integration.sql" >/dev/null
@@ -67,7 +67,7 @@ for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger
 # would hide a lossy rollback of the later 161 price metadata update.
 export RELEASE_ID=0000000000000000000000000000000000000002
 "$root/deployment/apply-release-migrations.sh" >"$temporary/prefix-seed.log"
-sed -n '/^ROLLBACK_MIGRATION=16[0-9]_/p' "$temporary/prefix-seed.log" >"$temporary/prefix-tail.log"
+sed -n '/^ROLLBACK_MIGRATION=1[67][0-9]_/p' "$temporary/prefix-seed.log" >"$temporary/prefix-tail.log"
 APPLIED_MIGRATIONS_FILE="$temporary/prefix-tail.log" LEDGER_EXISTED_BEFORE=true SNAPSHOT_EXISTED_BEFORE=true "$root/deployment/rollback-applied-release-migrations.sh"
 psql "$url" -v ON_ERROR_STOP=1 <<'SQL'
 CREATE OR REPLACE VIEW tender.current_tender_portal_mapping_truth AS
@@ -84,9 +84,9 @@ SQL
 mkdir "$temporary/prefix-before" "$temporary/prefix-after"
 STATE_OUTPUT_DIR="$temporary/prefix-before" "$root/deployment/capture-rollout-db-state.sh"
 "$root/deployment/apply-release-migrations.sh" >"$temporary/production-pending.log"
-[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/production-pending.log")" == 10 ]]
+[[ "$(grep -c '^APPLIED_MIGRATION=' "$temporary/production-pending.log")" == 11 ]]
 APPLIED_MIGRATIONS_FILE="$temporary/production-pending.log" LEDGER_EXISTED_BEFORE=true SNAPSHOT_EXISTED_BEFORE=true "$root/deployment/rollback-applied-release-migrations.sh"
 STATE_OUTPUT_DIR="$temporary/prefix-after" "$root/deployment/capture-rollout-db-state.sh"
 for item in schema.sha256 plans.sha256 migration-ledger.present migration-ledger.sha256 migration-snapshots.present migration-snapshots.sha256; do cmp -s "$temporary/prefix-before/$item" "$temporary/prefix-after/$item"; done
 [[ "$(psql "$url" -Atv ON_ERROR_STOP=1 -c "SELECT description FROM app.schema_migrations WHERE version='0160-critical-region-portal-resolution'")" == 'Preserve pre-existing application marker' ]]
-printf '{"passed":true,"isolatedPostgres":true,"pendingMigrations":15,"productionPrefixPendingMigrations":10,"runtimeLoginInheritedLeastPrivilege":true,"runtimeSessionsDrainedBeforeRollback":true,"exactReverseRollback":true,"schemaLedgerSnapshotPlansRestored":true,"installedViewAndPriceMetadataPreserved":true}\n'
+printf '{"passed":true,"isolatedPostgres":true,"pendingMigrations":16,"productionPrefixPendingMigrations":11,"runtimeLoginInheritedLeastPrivilege":true,"runtimeSessionsDrainedBeforeRollback":true,"exactReverseRollback":true,"schemaLedgerSnapshotPlansRestored":true,"installedViewAndPriceMetadataPreserved":true}\n'
