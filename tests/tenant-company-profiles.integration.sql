@@ -65,8 +65,18 @@ DO $$ BEGIN
   RAISE EXCEPTION 'foreign_company_profile_accepted';
  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
 END $$;
+INSERT INTO tenant_portal.workflow_task_versions(id,tenant_id,task_id,version,company_id,title,description,status,deadline_source,checklist,reason,request_sha256,created_by)
+VALUES('a1750000-0000-4000-8000-000000000001','a1680000-0000-4000-8000-000000000001','b1750000-0000-4000-8000-000000000001',1,'b1680000-0000-4000-8000-000000000001','SYNTHETIC task','','OPEN','','[{"id":"c1750000-0000-4000-8000-000000000001","label":"Verify own source","done":false}]','SYNTHETIC reviewed source',repeat('a',64),'c1680000-0000-4000-8000-000000000001');
+DO $$ BEGIN
+ BEGIN UPDATE tenant_portal.workflow_task_versions SET status='DONE'; RAISE EXCEPTION 'historical_task_modified'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN DELETE FROM tenant_portal.workflow_task_versions; RAISE EXCEPTION 'historical_task_deleted'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+ BEGIN
+ INSERT INTO tenant_portal.workflow_task_versions(id,tenant_id,task_id,version,company_id,title,description,status,deadline_source,checklist,reason,request_sha256,created_by)
+ SELECT gen_random_uuid(),tenant_id,gen_random_uuid(),1,'b1680000-0000-4000-8000-000000000002',title,description,status,deadline_source,checklist,reason,request_sha256,created_by FROM tenant_portal.workflow_task_versions;
+ RAISE EXCEPTION 'foreign_task_company_accepted'; EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+END $$;
 SELECT set_config('app.tenant_id','a1680000-0000-4000-8000-000000000002',true);
-DO $$ BEGIN IF EXISTS(SELECT 1 FROM tenant_portal.company_profile_versions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_assignment_versions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_calculation_versions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_calculation_files) OR EXISTS(SELECT 1 FROM tenant_portal.management_decisions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_document_reviews) OR EXISTS(SELECT 1 FROM tenant_portal.lot_document_review_files) OR EXISTS(SELECT 1 FROM tenant_portal.offer_packages) OR EXISTS(SELECT 1 FROM tenant_portal.offer_package_files) OR EXISTS(SELECT 1 FROM tenant_portal.offer_package_decisions) THEN RAISE EXCEPTION 'foreign_profile_visible'; END IF; END $$;
+DO $$ BEGIN IF EXISTS(SELECT 1 FROM tenant_portal.workflow_task_versions) OR EXISTS(SELECT 1 FROM tenant_portal.company_profile_versions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_assignment_versions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_calculation_versions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_calculation_files) OR EXISTS(SELECT 1 FROM tenant_portal.management_decisions) OR EXISTS(SELECT 1 FROM tenant_portal.lot_document_reviews) OR EXISTS(SELECT 1 FROM tenant_portal.lot_document_review_files) OR EXISTS(SELECT 1 FROM tenant_portal.offer_packages) OR EXISTS(SELECT 1 FROM tenant_portal.offer_package_files) OR EXISTS(SELECT 1 FROM tenant_portal.offer_package_decisions) THEN RAISE EXCEPTION 'foreign_profile_visible'; END IF; END $$;
 SELECT set_config('app.tenant_id','',true);
 DO $$ BEGIN IF EXISTS(SELECT 1 FROM tenant_portal.company_profile_versions) THEN RAISE EXCEPTION 'unbound_profile_visible'; END IF; END $$;
 ROLLBACK;
