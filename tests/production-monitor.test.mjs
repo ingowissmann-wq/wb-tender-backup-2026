@@ -85,3 +85,20 @@ with tempfile.TemporaryDirectory() as directory:
 print('PASS')`;
  assert.equal(execFileSync('python3',['-B','-c',script],{encoding:'utf8'}).trim(),'PASS');
 });
+
+test('weekly restore monitoring requires a recent completed restore and verified cleanup',()=>{
+ const script=`import importlib.util,datetime
+s=importlib.util.spec_from_file_location('monitor','deployment/production-monitor.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+now=datetime.datetime(2026,9,8,12,tzinfo=datetime.timezone.utc)
+r={'status':'RESTORE_PASS','checkedAt':now.isoformat(),'temporaryResourcesRemoved':True,'productionModified':False}
+assert m.scheduled_restore_failures(r,now)==[]
+assert m.scheduled_restore_failures(r,now+datetime.timedelta(days=9))==['scheduled_restore_state_stale']
+assert m.scheduled_restore_failures(dict(r,temporaryResourcesRemoved=False),now)==['scheduled_restore_result_invalid']
+assert m.scheduled_restore_failures(dict(r,productionModified=True),now)==['scheduled_restore_result_invalid']
+assert m.scheduled_restore_failures(dict(r,status='PREFLIGHT_PASS'),now)
+assert m.scheduled_restore_failures(dict(r,status='BLOCKED_CAPACITY'),now)
+assert m.scheduled_restore_failures(dict(r,status='RESTORING'),now)==[]
+assert m.scheduled_restore_failures(dict(r,status='RESTORING'),now+datetime.timedelta(hours=5))
+print('PASS')`;
+ assert.equal(execFileSync('python3',['-B','-c',script],{encoding:'utf8'}).trim(),'PASS');
+});
