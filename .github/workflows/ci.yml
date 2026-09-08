@@ -130,3 +130,6 @@ jobs:
       - run: npm ci
       - name: Prove per-lot inbox SQL and reimport against PostgreSQL
         run: DATABASE_URL_FILE="$RUNNER_TEMP/rollout-database-url" WB_TENDER_ROLLOUT_ISOLATED_TEST=true node tests/inbox-lot-postgres.integration.mjs
+
+      - name: Prove tenant reporting and export audit against PostgreSQL
+        run: DATABASE_URL_FILE="$RUNNER_TEMP/rollout-database-url" WB_TENDER_ROLLOUT_ISOLATED_TEST=true node tests/tenant-insights-postgres.integration.mjs
