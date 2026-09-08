@@ -1,3 +1,4 @@
+import {registerTenantEnterpriseApi} from './tenant-enterprise-api.mjs';
 import {registerTenantCsmRoutes} from './tenant-csm-routes.mjs';
 import Fastify from "fastify";
 import {startBookingEmailWorker} from "./saas-email-worker.mjs";
@@ -797,6 +798,7 @@ registerTenantCrmRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasC
 registerTenantCsmRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantWorkflowRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 registerTenantInsightsRoutes(app, { pool, authenticate: saasAuthenticate });
+registerTenantEnterpriseApi(app, { pool, authenticate: saasAuthenticate });
 registerTenantManagementRoutes(app, { pool, storage: tenantStorage, authenticate: saasAuthenticate, csrf: saasCsrf });
 const uiAuth = { preHandler: requirePermission("tender.view_assigned") };
 app.get("/wb-holding-logo.png", uiAuth, async (_, r) =>
