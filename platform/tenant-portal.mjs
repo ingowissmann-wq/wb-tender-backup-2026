@@ -14,7 +14,7 @@ const bySlug = new Map(MODULE_CATALOG.flatMap((module) => [[module.slug, module.
 export const MODULE_ROUTE_CONTRACTS = Object.freeze({
   [MODULE_KEYS.TENDER_SCOUT]: { table: null, implementation: "PARTIAL_PUBLIC_DISCOVERY" },
   [MODULE_KEYS.TENDER_AUTOPILOT]: { table: "tender_workspaces", implementation: "PARTIAL_TENANT_FOUNDATION" },
-  [MODULE_KEYS.CRM]: { table: "crm_accounts", implementation: "SECURE_EMPTY_SHELL" },
+  [MODULE_KEYS.CRM]: { table: "crm_accounts", implementation: "TENANT_ACCOUNTS_CONTACTS" },
   [MODULE_KEYS.CSM]: { table: "csm_customers", implementation: "TENANT_OWNED" },
   [MODULE_KEYS.FLOW]: { table: null, implementation: "VERSIONED_TENANT_TASKS" },
   [MODULE_KEYS.PEOPLE]: { table: "employee_profiles", implementation: "TENANT_OWNED" },
@@ -102,6 +102,7 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
   });
   app.get("/saas/assets/tenant-app.js", {preHandler:[authenticate]}, async(_,reply)=>reply.type('text/javascript').send(tenantAppJs));
   app.get("/saas/app/:module", {preHandler:[authenticate,tenantGuard,dynamicModuleGuard]}, async(req,reply)=>{
+    if(req.moduleKey===MODULE_KEYS.CRM)return reply.redirect('/saas/app/crm');
     if(req.moduleKey===MODULE_KEYS.FLOW)return reply.redirect('/saas/app/workflow');
     const metadata=MODULE_CATALOG.find((module)=>module.key===req.moduleKey);
     return reply.type('text/html').send(`<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>${html(metadata.name)}</title><link rel="stylesheet" href="/saas/assets/commercial.css"><script src="/saas/assets/tenant-app.js" defer></script></head><body><header><strong>WB Business Suite</strong><a href="/saas/app/companies">Gesellschaften</a><a href="/saas/app/workflow">Aufgaben</a><a href="/saas/app/lot-assignments">Lose bearbeiten</a><a href="/saas/app/management">Management</a>${req.identity.saas.modules?.includes(MODULE_KEYS.INSIGHTS)?'<a href="/saas/app/insights">Auswertungen</a>':''}<a href="/saas/app/portal-access">Portalzugänge</a><a href="/saas/account">Mein Paket</a></header><main class="panel" data-module="${html(req.moduleKey)}"><h1>${html(metadata.name)}</h1><form><label>Suche<input name="q" maxlength="120"></label><button>Suchen</button> <a href="/api/tenant-portal/modules/${encodeURIComponent(req.moduleKey)}/export">Export</a></form><pre id="items" aria-live="polite">Laden …</pre></main></body></html>`);
