@@ -1,0 +1,23 @@
+[Unit]
+Description=WB-Tender encrypted backup with capacity protection
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 -B /srv/wb-tender-production/backup-current/scheduled-production-backup.py
+TimeoutStartSec=15000
+KillMode=control-group
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+StateDirectory=wb-tender-production-backup
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/wb-tender-production-backup /srv/wb-tender-production/backups
