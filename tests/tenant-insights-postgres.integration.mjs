@@ -1,0 +1,63 @@
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import pg from 'pg';
+import {tenantInsights} from '../platform/tenant-insights.mjs';
+import {CALCULATION_FORMULA_VERSION} from '../platform/sector-calculation.mjs';
+if(process.env.WB_TENDER_ROLLOUT_ISOLATED_TEST!=='true')throw Error('isolated_test_required');
+const url=new URL((await fs.readFile(process.env.DATABASE_URL_FILE,'utf8')).trim());
+if(url.hostname!=='127.0.0.1'||!['5432','15432'].includes(url.port))throw Error('isolated_local_postgres_required');
+const database='wb_insights_test_'+crypto.randomBytes(8).toString('hex');
+const admin=new pg.Client({connectionString:url.href});await admin.connect();let fixture,runtime,created=false;
+try{
+ await admin.query('CREATE DATABASE '+database);created=true;url.pathname='/'+database;
+ fixture=new pg.Client({connectionString:url.href});await fixture.connect();
+ const role=(await fixture.query("SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname='wb_tender_api_login'")).rows[0];assert.ok(role&&!role.rolsuper&&!role.rolbypassrls);
+ await fixture.query(`CREATE SCHEMA saas;CREATE SCHEMA tender;CREATE SCHEMA tenant_portal;
+ CREATE FUNCTION saas.tenant_matches(candidate uuid) RETURNS boolean LANGUAGE sql STABLE AS $$SELECT candidate=NULLIF(current_setting('app.tenant_id',true),'')::uuid$$;
+ CREATE TABLE saas.plans(code text PRIMARY KEY,display_name text,seat_limit integer,company_limit integer);
+ CREATE TABLE saas.subscriptions(tenant_id uuid,plan_code text);
+ CREATE TABLE saas.tenant_memberships(tenant_id uuid,status text);
+ CREATE TABLE saas.tenant_companies(id uuid,tenant_id uuid,display_name text,status text);
+ CREATE TABLE saas.automation_usage(tenant_id uuid,month_start date);
+ CREATE TABLE saas.audit_events(tenant_id uuid,actor_user_id uuid,action text,target_type text,target_id text,metadata jsonb);
+ CREATE TABLE tenant_portal.jobs(id uuid,tenant_id uuid,status text,job_type text,created_at timestamptz);
+ CREATE TABLE tenant_portal.csm_service_cases(tenant_id uuid,status text,due_at timestamptz);
+ CREATE TABLE tenant_portal.lot_assignment_versions(id uuid,tenant_id uuid,workspace_id uuid,lot_key text,version integer,company_id uuid,profile_id uuid,source_version_id uuid,assignment_kind text);
+ CREATE TABLE tenant_portal.tender_workspaces(id uuid,tenant_id uuid,public_tender_id uuid);
+ CREATE TABLE tenant_portal.company_profile_versions(id uuid,tenant_id uuid,company_id uuid,service_line text,valid_from date,valid_until date,version integer);
+ CREATE TABLE tenant_portal.lot_calculation_versions(id uuid,tenant_id uuid,assignment_id uuid,version integer,status text,result jsonb);
+ CREATE TABLE tender.tender_versions(id uuid,tender_id uuid,version integer);
+ CREATE TABLE tender.current_participation_eligible_lots(tender_id uuid,lot_key text);
+ GRANT USAGE ON SCHEMA saas,tender,tenant_portal TO wb_tender_api_login;
+ GRANT SELECT ON ALL TABLES IN SCHEMA saas,tender,tenant_portal TO wb_tender_api_login;
+ GRANT INSERT ON saas.audit_events TO wb_tender_api_login;`);
+ const scoped=(await fixture.query("SELECT table_schema,table_name FROM information_schema.columns WHERE column_name='tenant_id' AND table_schema IN('saas','tenant_portal')")).rows;
+ for(const {table_schema:s,table_name:t} of scoped)await fixture.query(`ALTER TABLE ${s}.${t} ENABLE ROW LEVEL SECURITY;ALTER TABLE ${s}.${t} FORCE ROW LEVEL SECURITY;CREATE POLICY own_tenant ON ${s}.${t} USING(saas.tenant_matches(tenant_id)) WITH CHECK(saas.tenant_matches(tenant_id));`);
+ const tenant=crypto.randomUUID(),foreign=crypto.randomUUID(),company=crypto.randomUUID(),workspace=crypto.randomUUID(),tender=crypto.randomUUID(),version=crypto.randomUUID(),profile=crypto.randomUUID(),assignment=crypto.randomUUID(),actor=crypto.randomUUID();
+ await fixture.query("INSERT INTO saas.plans VALUES('PROFESSIONAL','Business',10,3)");
+ for(const owner of [tenant,foreign]){
+  await fixture.query("INSERT INTO saas.subscriptions VALUES($1,'PROFESSIONAL')",[owner]);
+  await fixture.query("INSERT INTO saas.tenant_memberships VALUES($1,'ACTIVE')",[owner]);
+  await fixture.query("INSERT INTO saas.tenant_companies VALUES($1,$2,$3,'ACTIVE')",[owner===tenant?company:crypto.randomUUID(),owner,owner===tenant?'SYNTHETIC own':'SYNTHETIC foreign']);
+  await fixture.query("INSERT INTO saas.automation_usage VALUES($1,date_trunc('month',now() AT TIME ZONE 'UTC')::date)",[owner]);
+ }
+ await fixture.query('INSERT INTO tender.tender_versions VALUES($1,$2,1)',[version,tender]);
+ await fixture.query("INSERT INTO tender.current_participation_eligible_lots VALUES($1,'LOT-1')",[tender]);
+ await fixture.query('INSERT INTO tenant_portal.tender_workspaces VALUES($1,$2,$3)',[workspace,tenant,tender]);
+ await fixture.query("INSERT INTO tenant_portal.company_profile_versions VALUES($1,$2,$3,'cleaning',current_date-1,NULL,1)",[profile,tenant,company]);
+ await fixture.query("INSERT INTO tenant_portal.lot_assignment_versions VALUES($1,$2,$3,'LOT-1',1,$4,$5,$6,'AUTOMATIC')",[assignment,tenant,workspace,company,profile,version]);
+ await fixture.query("INSERT INTO tenant_portal.lot_calculation_versions VALUES($1,$2,$3,1,'CALCULATED',$4)",[crypto.randomUUID(),tenant,assignment,{formulaVersion:CALCULATION_FORMULA_VERSION,schemaVersion:4}]);
+ runtime=new pg.Pool({connectionString:url.href,max:1});
+ const pool={connect:async()=>{const client=await runtime.connect();await client.query('SET ROLE wb_tender_api_login');return client}};
+ const first=await tenantInsights(pool,{id:tenant,actorUserId:actor},{auditExport:true});
+ assert.equal(first.companies.length,1);assert.equal(first.companies[0].display_name,'SYNTHETIC own');assert.equal(Number(first.companies[0].current_calculated),1);assert.equal(Number(first.usage.automated_tenders),1);
+ const audit=(await fixture.query("SELECT tenant_id,target_id FROM saas.audit_events WHERE action='INSIGHTS_EXPORTED'")).rows;assert.deepEqual(audit,[{tenant_id:tenant,target_id:tenant}]);
+ await fixture.query('INSERT INTO tender.tender_versions VALUES($1,$2,2)',[crypto.randomUUID(),tender]);
+ const stale=await tenantInsights(pool,{id:tenant,actorUserId:actor});assert.equal(Number(stale.companies[0].current_calculated),0);assert.equal(Number(stale.companies[0].review_required),1);
+ const other=await tenantInsights(pool,{id:foreign,actorUserId:actor});assert.equal(other.companies.length,1);assert.equal(other.companies[0].display_name,'SYNTHETIC foreign');assert.equal(Number(other.companies[0].lot_count),0);
+ console.log(JSON.stringify({passed:true,realPostgres:true,forcedRls:true,typedExportAudit:true,sourceChangeInvalidatesCurrentCount:true,foreignTenantCountsExcluded:true}));
+}finally{
+ if(runtime)await runtime.end();if(fixture)await fixture.end();
+ if(created)await admin.query('DROP DATABASE '+database);await admin.end();
+}
