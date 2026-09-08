@@ -73,7 +73,7 @@ export async function browserSessionState(context,page){
   return {cookies,cookie:cookieHeaderForUrl(cookies,page.url()),storageState,sessionStorage,formatVersion:2};
 }
 async function contextFromSession(browser,session){
-  const options={acceptDownloads:true,javaScriptEnabled:true,locale:"de-DE"};
+  const options={acceptDownloads:true,serviceWorkers:"block",javaScriptEnabled:true,locale:"de-DE"};
   if(session?.storageState)options.storageState=session.storageState;
   const context=await browser.newContext(options);
   if(!session?.storageState&&session?.cookies?.length)await context.addCookies(session.cookies);
@@ -96,6 +96,7 @@ export async function restorePortalSessionWithBrowser({portal,session,targetUrl,
   let context;
   try{
     phase="STORAGE_STATE_IMPORT";context=await contextFromSession(browser,session);
+    await installPortalAuthenticationBoundary(context,portal,{});
     const page=await context.newPage();phase="AUTHENTICATED_AREA_VERIFICATION";
     const verification=await authenticatedPortalState(page,allowed,targetUrl,timeoutMs);
     if(!verification.valid)return {resultCode:"SESSION_RESTORE_FAILED",verification};
