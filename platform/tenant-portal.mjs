@@ -156,7 +156,7 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
     return reply.header("content-disposition", `attachment; filename="${safeDownloadName(file.filename)}"`).type(file.media_type).send(bytes);
   });
 
-  app.post("/api/tenant-portal/modules/docs/files", { preHandler: [authenticate, tenantGuard, requireSaasModule(MODULE_KEYS.DOCS), csrf] }, async (req, reply) => {
+  app.post("/api/tenant-portal/modules/docs/files", { preHandler: [authenticate, tenantGuard, requireSaasModule(MODULE_KEYS.DOCS), csrf], bodyLimit: 14*1024*1024 }, async (req, reply) => {
     if (!storage.configured) return reply.code(503).send({ error: "tenant_storage_adapter_not_configured" });
     const filename = safeDownloadName(req.body?.filename), mediaType = cleanText(req.body?.mediaType || "application/octet-stream", 120);
     let bytes; try { bytes = Buffer.from(String(req.body?.contentBase64 || ""), "base64"); } catch { return reply.code(400).send({ error: "file_content_invalid" }); }
@@ -173,10 +173,11 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
 
   app.delete("/api/tenant-portal/modules/docs/files/:id", { preHandler: [authenticate, tenantGuard, requireSaasModule(MODULE_KEYS.DOCS), csrf] }, async (req, reply) => {
     if (!UUID.test(String(req.params.id || ""))) return reply.code(404).send({ error: "file_not_found" });
-    const removed = await withTenantContext(pool, req.tenant, async (db) => {
+    let removed;
+    try { removed = await withTenantContext(pool, req.tenant, async (db) => {
       const row = (await db.query("DELETE FROM tenant_portal.files WHERE tenant_id=$1 AND id=$2 RETURNING id",[req.tenant.id,req.params.id])).rows[0];
       if (row) await db.query("INSERT INTO tenant_portal.storage_audit(tenant_id,file_id,action,actor_user_id) VALUES($1,NULL,'DELETE',$2)",[req.tenant.id,req.identity.userId]); return row;
-    });
+    }); } catch(error) { if(error.code==='23503')return reply.code(409).send({error:'file_required_by_calculation_history'});throw error; }
     if (!removed) return reply.code(404).send({ error: "file_not_found" });
     if (storage.configured) await storage.delete(req.tenant.id, req.params.id);
     return reply.code(204).send();
