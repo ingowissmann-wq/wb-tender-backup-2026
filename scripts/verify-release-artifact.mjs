@@ -4,6 +4,9 @@ import crypto from "node:crypto";
 const required = [
   "package.json",
   "Dockerfile.release",
+  "scripts/verify-browser-runtime.mjs",
+  "platform/portal-auth-boundary.mjs",
+  "platform/tenant-portal-sessions.mjs",
   "platform/server.mjs",
   "platform/request-scoped-pool.mjs",
   "platform/field-encryption-key.mjs",
