@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import pg from 'pg';
+import {TenantCsm} from '../platform/tenant-csm.mjs';
+if(process.env.WB_TENDER_ROLLOUT_ISOLATED_TEST!=='true')throw Error('isolated_test_required');
+const url=new URL((await fs.readFile(process.env.DATABASE_URL_FILE,'utf8')).trim());if(url.hostname!=='127.0.0.1'||!['5432','15432'].includes(url.port))throw Error('isolated_local_postgres_required');
+const database='wb_csm_test_'+crypto.randomBytes(8).toString('hex'),admin=new pg.Client({connectionString:url.href});await admin.connect();let fixture,runtime,created=false;
+try{
+ await admin.query('CREATE DATABASE '+database);created=true;url.pathname='/'+database;fixture=new pg.Client({connectionString:url.href});await fixture.connect();
+ const role=(await fixture.query("SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname='wb_tender_api_login'")).rows[0];assert.ok(role&&!role.rolsuper&&!role.rolbypassrls);
+ await fixture.query(`CREATE SCHEMA saas;CREATE SCHEMA tenant_portal;
+ CREATE FUNCTION saas.tenant_matches(candidate uuid) RETURNS boolean LANGUAGE sql STABLE AS $$SELECT candidate=NULLIF(current_setting('app.tenant_id',true),'')::uuid$$;
+ CREATE TABLE saas.tenant_memberships(tenant_id uuid,user_id uuid,status text,PRIMARY KEY(tenant_id,user_id));
+ CREATE TABLE tenant_portal.csm_customers(id uuid PRIMARY KEY,tenant_id uuid,name text,health text,status text,lifecycle_stage text,owner_user_id uuid,renewal_at date,follow_up_at date,created_by uuid,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now(),UNIQUE(tenant_id,id),FOREIGN KEY(tenant_id,owner_user_id) REFERENCES saas.tenant_memberships(tenant_id,user_id));
+ CREATE TABLE tenant_portal.csm_service_cases(id uuid PRIMARY KEY,tenant_id uuid,customer_id uuid,title text,description text,status text,priority text,owner_user_id uuid,due_at timestamptz,created_by uuid,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now(),FOREIGN KEY(tenant_id,customer_id) REFERENCES tenant_portal.csm_customers(tenant_id,id),FOREIGN KEY(tenant_id,owner_user_id) REFERENCES saas.tenant_memberships(tenant_id,user_id));
+ CREATE TABLE tenant_portal.csm_interactions(id uuid PRIMARY KEY,tenant_id uuid,customer_id uuid,interaction_type text,subject text,body text,created_by uuid,created_at timestamptz DEFAULT now(),occurred_at timestamptz DEFAULT now(),FOREIGN KEY(tenant_id,customer_id) REFERENCES tenant_portal.csm_customers(tenant_id,id));
+ CREATE TABLE saas.audit_events(id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,tenant_id uuid,actor_user_id uuid,action text,target_type text,target_id text,metadata jsonb,occurred_at timestamptz DEFAULT now());
+ GRANT USAGE ON SCHEMA saas,tenant_portal TO wb_tender_api_login;GRANT SELECT,INSERT,UPDATE ON ALL TABLES IN SCHEMA tenant_portal TO wb_tender_api_login;GRANT SELECT,UPDATE ON saas.tenant_memberships TO wb_tender_api_login;GRANT SELECT,INSERT ON saas.audit_events TO wb_tender_api_login;GRANT USAGE ON ALL SEQUENCES IN SCHEMA saas TO wb_tender_api_login;`);
+ for(const table of ['saas.tenant_memberships','tenant_portal.csm_customers','tenant_portal.csm_service_cases','tenant_portal.csm_interactions','saas.audit_events'])await fixture.query(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;ALTER TABLE ${table} FORCE ROW LEVEL SECURITY;CREATE POLICY own_tenant ON ${table} USING(saas.tenant_matches(tenant_id)) WITH CHECK(saas.tenant_matches(tenant_id));`);
+ runtime=new pg.Pool({connectionString:url.href,max:2});const pool={connect:async()=>{const client=await runtime.connect();await client.query('SET ROLE wb_tender_api_login');return client}},csm=new TenantCsm(pool),own={id:crypto.randomUUID(),actorUserId:crypto.randomUUID()},foreign={id:crypto.randomUUID(),actorUserId:crypto.randomUUID()};
+ for(const ctx of [own,foreign])await fixture.query("INSERT INTO saas.tenant_memberships VALUES($1,$2,'ACTIVE')",[ctx.id,ctx.actorUserId]);
+ const input={id:crypto.randomUUID(),name:'Synthetic service customer',ownerUserId:own.actorUserId};const customer=await csm.save(own,'customer',input);assert.equal((await csm.save(own,'customer',input)).idempotent,true);assert.equal((await csm.list(foreign)).items.length,0);await assert.rejects(()=>csm.detail(foreign,customer.item.id),/customer_not_found/);
+ await assert.rejects(()=>csm.save(own,'customer',{name:'Foreign owner',ownerUserId:foreign.actorUserId}),/active_tenant_member_required/);
+ const caseInput={id:crypto.randomUUID(),customerId:customer.item.id,title:'Service failure',dueAt:'2026-01-01',ownerUserId:own.actorUserId};const opened=await csm.save(own,'case',caseInput);assert.equal((await csm.save(own,'case',caseInput)).idempotent,true);assert.equal((await csm.detail(own,customer.item.id)).cases[0].overdue,true);
+ await assert.rejects(()=>csm.save(foreign,'case',{customerId:customer.item.id,title:'Foreign parent'}),/customer_not_found/);
+ await assert.rejects(()=>csm.save(own,'case',{...caseInput,status:'CLOSED',expectedRevision:opened.item.revision,confirmed:true,reason:'Invalid direct closure'},{update:true}),/csm_case_transition_invalid/);
+ const resolved=await csm.save(own,'case',{...caseInput,status:'RESOLVED',expectedRevision:opened.item.revision,confirmed:true,reason:'Customer issue investigated and resolved'},{update:true});
+ await assert.rejects(()=>csm.save(own,'case',{...caseInput,status:'WAITING',expectedRevision:opened.item.revision,confirmed:true,reason:'Stale update must fail'},{update:true}),/csm_version_conflict/);
+ await csm.save(own,'case',{...caseInput,status:'CLOSED',expectedRevision:resolved.item.revision,confirmed:true,reason:'Resolution checked and closure confirmed'},{update:true});
+ const note={id:crypto.randomUUID(),customerId:customer.item.id,subject:'Customer call',body:'Synthetic note'};await csm.save(own,'interaction',note);assert.equal((await csm.save(own,'interaction',note)).idempotent,true);
+ assert.equal((await csm.list(own)).items[0].open_cases,0);assert.equal((await csm.detail(own,customer.item.id)).interactions.length,1);
+ console.log(JSON.stringify({passed:true,realPostgres:true,forcedRls:true,customerParentAndActiveOwner:true,idempotentCustomerCaseInteraction:true,revisionConflicts:true,resolutionBeforeClosure:true,audit:true}));
+}finally{if(runtime)await runtime.end();if(fixture)await fixture.end();if(created)await admin.query('DROP DATABASE '+database);await admin.end();}
