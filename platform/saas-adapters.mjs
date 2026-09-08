@@ -262,7 +262,7 @@ export class SmtpEmailAdapter {
     to = String(to || email || "").trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to) || /[\r\n]/.test(to)) throw new Error("smtp_recipient_invalid");
     const url = this.invitationUrl({ tenantId, token });
-    const result = await this.transport.sendMail({ from: this.from, to, subject: "WB Business Suite – Einladung", text: `Sie wurden mit der Rolle ${role} eingeladen: ${url}\n\nMelden Sie sich mit Ihrer geschäftlichen Identität und MFA an.`, html: `<p>Sie wurden mit der Rolle <strong>${role}</strong> zur WB Business Suite eingeladen.</p><p><a href="${url}">Einladung annehmen</a></p><p>Melden Sie sich mit Ihrer geschäftlichen Identität und MFA an.</p>` });
+    const result = await this.transport.sendMail({ from: this.from, to, subject: "WB Business Suite – Einladung", text: `Sie wurden mit der Rolle ${role} eingeladen: ${url}\n\nRichten Sie über den Einladungslink Ihr eigenes Passwort und Ihren Authenticator ein. Bei einem bestehenden Konto melden Sie sich an und bestätigen die Einladung.`, html: `<p>Sie wurden mit der Rolle <strong>${role}</strong> zur WB Business Suite eingeladen.</p><p><a href="${url}">Einladung annehmen</a></p><p>Richten Sie über den Einladungslink Ihr eigenes Passwort und Ihren Authenticator ein. Bei einem bestehenden Konto melden Sie sich an und bestätigen die Einladung.</p>` });
     if (!result.accepted?.length) throw new Error("smtp_recipient_rejected");
     return { accepted: true, messageId: result.messageId };
   }

@@ -1,3 +1,4 @@
+import {controlHtml,controlJs} from './tenant-control-ui.mjs';
 import {TenantPeople} from './tenant-people.mjs';
 import {TenantWorkflowTasks} from './tenant-workflow-tasks.mjs';
 import {tenantInsights} from './tenant-insights.mjs';
@@ -224,13 +225,22 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
     return result||reply.code(404).send({error:'customer_not_found'});
   });
 
-  app.get("/api/tenant-portal/control/members", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CONTROL),tenantAdmin] }, async (req) => withTenantContext(pool,req.tenant,async(db)=>({items:(await db.query("SELECT m.user_id,m.role,m.status,m.created_at,u.email FROM saas.tenant_memberships m JOIN iam.users u ON u.id=m.user_id WHERE m.tenant_id=$1 ORDER BY m.created_at",[req.tenant.id])).rows})));
+  app.get('/saas/app/control',{preHandler:[authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CONTROL),tenantAdmin]},async(_,r)=>r.header('Cache-Control','no-store').type('text/html').send(controlHtml));
+  app.get('/saas/assets/control.js',async(_,r)=>r.type('text/javascript').send(controlJs));
+  app.get("/api/tenant-portal/control/members", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CONTROL),tenantAdmin] }, async (req) => withTenantContext(pool,req.tenant,async(db)=>({actorUserId:req.identity.userId,canManage:req.identity.saas.role==='OWNER',items:(await db.query("SELECT m.user_id,m.role,m.status,m.created_at,u.email FROM saas.tenant_memberships m JOIN iam.users u ON u.id=m.user_id WHERE m.tenant_id=$1 ORDER BY m.created_at",[req.tenant.id])).rows})));
   app.post("/api/tenant-portal/control/invitations", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CONTROL),tenantAdmin,csrf] }, async (req,reply) => {
     if(!invitationPepper || invitationPepper.length<32 || !emailAdapter.configured) return reply.code(503).send({error:"invitation_delivery_not_configured"});
     const email=cleanText(req.body?.email,254).toLowerCase(),role=req.body?.role||'MEMBER',token=crypto.randomBytes(32).toString('base64url'),hash=crypto.createHmac('sha256',invitationPepper).update(token).digest('hex');
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!['ADMIN','MEMBER','BILLING'].includes(role)) return reply.code(400).send({error:"invitation_invalid"});
     const tenantContext={tenantId:req.tenant.id,actorUserId:req.identity.userId};
-    const item=await withTenantContext(pool,tenantContext,async(db)=>(await db.query("INSERT INTO saas.tenant_invitations(tenant_id,email,role,token_hash,expires_at,invited_by) VALUES($1,$2,$3,$4,now()+interval '72 hours',$5) RETURNING id,email,role,status,expires_at",[req.tenant.id,email,role,hash,req.identity.userId])).rows[0]);
+    let item;
+    try {item=await withTenantContext(pool,tenantContext,async db=>{
+      await db.query("SELECT pg_advisory_xact_lock(hashtextextended('saas-plan:'||$1::text,0))",[req.tenant.id]);
+      if((await db.query("SELECT 1 FROM saas.tenant_memberships m JOIN iam.users u ON u.id=m.user_id WHERE m.tenant_id=$1 AND lower(u.email)=$2",[req.tenant.id,email])).rowCount)throw new Error('membership_already_exists');
+      if((await db.query("SELECT 1 FROM saas.tenant_invitations WHERE tenant_id=$1 AND lower(email)=$2 AND status='PENDING'",[req.tenant.id,email])).rowCount)throw new Error('invitation_already_pending');
+      const row=(await db.query("INSERT INTO saas.tenant_invitations(tenant_id,email,role,token_hash,expires_at,invited_by) VALUES($1,$2,$3,$4,now()+interval '72 hours',$5) RETURNING id,email,role,status,expires_at",[req.tenant.id,email,role,hash,req.identity.userId])).rows[0];
+      await db.query("INSERT INTO saas.audit_events(tenant_id,actor_user_id,action,target_type,target_id,metadata) VALUES($1,$2,'MEMBERSHIP_INVITED','tenant_invitation',$3,$4)",[req.tenant.id,req.identity.userId,row.id,{role}]);return row;
+    });}catch(error){if(['membership_already_exists','invitation_already_pending'].includes(error.message))return reply.code(409).send({error:error.message});throw error;}
     try {
       await emailAdapter.sendInvitation({ email, tenantId:req.tenant.id, token, role });
       return reply.code(201).send({...item,delivery:'QUEUED'});
@@ -243,7 +253,12 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
   app.patch("/api/tenant-portal/control/members/:userId", { preHandler: [authenticate,tenantGuard,requireSaasModule(MODULE_KEYS.CONTROL),tenantOwner,csrf] }, async (req,reply) => {
     if(!UUID.test(String(req.params.userId||""))||req.params.userId===req.identity.userId) return reply.code(409).send({error:"membership_change_invalid"});
     const role=req.body?.role,status=req.body?.status;if(!['ADMIN','MEMBER','BILLING'].includes(role)||!['ACTIVE','SUSPENDED'].includes(status)) return reply.code(400).send({error:"membership_change_invalid"});
-    const row=await withTenantContext(pool,req.tenant,async(db)=>(await db.query("UPDATE saas.tenant_memberships SET role=$3,status=$4 WHERE tenant_id=$1 AND user_id=$2 AND role<>'OWNER' RETURNING user_id,role,status",[req.tenant.id,req.params.userId,role,status])).rows[0]);
+    let row;try{row=await withTenantContext(pool,req.tenant,async db=>{
+      await db.query("SELECT pg_advisory_xact_lock(hashtextextended('saas-plan:'||$1::text,0))",[req.tenant.id]);
+      const previous=(await db.query("SELECT role,status FROM saas.tenant_memberships WHERE tenant_id=$1 AND user_id=$2 AND role<>'OWNER' FOR UPDATE",[req.tenant.id,req.params.userId])).rows[0];if(!previous)return null;
+      const updated=(await db.query("UPDATE saas.tenant_memberships SET role=$3,status=$4 WHERE tenant_id=$1 AND user_id=$2 AND role<>'OWNER' RETURNING user_id,role,status",[req.tenant.id,req.params.userId,role,status])).rows[0];
+      await db.query("INSERT INTO saas.audit_events(tenant_id,actor_user_id,action,target_type,target_id,metadata) VALUES($1,$2,'MEMBERSHIP_UPDATED','iam_user',$3,$4)",[req.tenant.id,req.identity.userId,req.params.userId,{previous,next:{role,status}}]);return updated;
+    });}catch(error){if(error.message.includes('saas_plan_limit_exceeded'))return reply.code(409).send({error:'seat_limit_exceeded'});throw error;}
     if(!row)return reply.code(404).send({error:"membership_not_found"});return row;
   });
 
