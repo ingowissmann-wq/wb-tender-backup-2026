@@ -13,7 +13,7 @@ const scenario=(serviceArea='cleaning')=>({
 test('catalog units and all three contribution targets produce an independently calculated reference',()=>{
  const input=scenario();
  for(const [key,value] of Object.entries({C04:20,C05:10,C06:5,C07:2,C08:10,C09:1,C11:100,C12:2,C17:120,C18:5,C19:20,C20:15,C21:10}))input.parameters[key].value=value;
- input.parameters.C03.value.night=10;input.facts.supplementHours.night=20;
+ input.parameters.C03.value.night=10;input.facts.supplementHours.night=20;input.provenance.supplementHours={night:{source:'VERIFIED_SHIFT_SCHEDULE'}};
  input.facts.quantities={C11:2};input.provenance.quantities={C11:{source:'VERIFIED_BILL_OF_QUANTITIES'}};
  const result=calculateSectorTender(input);
  assert.equal(result.status,'CALCULATED');
@@ -53,3 +53,15 @@ test('required spreadsheet cell C23 blocks price generation until a sourced posi
  assert.throws(()=>legacy.calculateScenario({},{}),/legacy_calculation_engine_disabled/);
  assert.throws(()=>legacy.sensitivity({},{}),/legacy_calculation_engine_disabled/);
  });
+
+test('supplement hours require their own evidence even when the supplied amount is zero',()=>{
+ const input=scenario('security');input.parameters.C03.value.night=25;
+ assert.ok(calculateSectorTender(input).missing.includes('night Zuschlagsstunden Quelle'));
+ input.provenance.supplementHours={night:{source:'APPROVED_NO_NIGHT_SHIFTS'}};
+ assert.equal(calculateSectorTender(input).status,'CALCULATED');
+});
+test('date-only validity includes the complete stated day and rejects impossible calendar dates',()=>{
+ const input=scenario();input.parameters.C01.validUntil='2026-09-07';input.effectiveAt='2026-09-07T23:59:59.999Z';
+ assert.equal(calculateSectorTender(input).status,'CALCULATED');input.effectiveAt='2026-09-08T00:00:00Z';assert.ok(calculateSectorTender(input).missing.includes('C01 Gültigkeit'));
+ input.parameters.C01.validUntil=null;input.parameters.C01.validFrom='2026-02-30';assert.ok(calculateSectorTender(input).missing.includes('C01 Gültigkeit'));
+});
