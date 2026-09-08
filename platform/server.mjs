@@ -19,6 +19,7 @@ import { requireRegisteredTenderPortalScope } from "./registered-portal-scope.mj
 import { SAAS_PERMISSION_FEATURES, loadSaasContext, registerSaasRoutes } from "./saas-platform.mjs";
 import { registerTenantPortalRoutes } from "./tenant-portal.mjs";
 import { registerTenantCredentialRoutes } from "./tenant-credential-routes.mjs";
+import { registerTenantLotRoutes } from "./tenant-lot-routes.mjs";
 import { registerTenantCompanyProfileRoutes } from "./tenant-company-profile-routes.mjs";
 import { SmtpEmailAdapter, StripeBillingAdapter, UnconfiguredBillingAdapter, UnconfiguredEmailAdapter } from "./saas-adapters.mjs";
 import { TenantFilesystemStorage, UnconfiguredTenantStorage } from "./tenant-storage.mjs";
@@ -778,6 +779,7 @@ registerSaasRoutes(app, {
 registerTenantPortalRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf, storage: tenantStorage, invitationPepper: optionalSecret("SAAS_INVITATION_PEPPER"), emailAdapter });
 registerTenantCredentialRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf, keyringFile: process.env.SAAS_PORTAL_CREDENTIAL_KEYRING_FILE });
 registerTenantCompanyProfileRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
+registerTenantLotRoutes(app, { pool, authenticate: saasAuthenticate, csrf: saasCsrf });
 const uiAuth = { preHandler: requirePermission("tender.view_assigned") };
 app.get("/wb-holding-logo.png", uiAuth, async (_, r) =>
   r
