@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly WB-Tender isolated restore verification
+
+[Timer]
+OnCalendar=Sun *-*-* 03:45:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+Unit=wb-tender-production-restore.service
+
+[Install]
+WantedBy=timers.target

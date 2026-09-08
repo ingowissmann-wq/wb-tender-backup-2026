@@ -207,6 +207,17 @@ SELECT json_build_object(
         backup_state = None
     report['scheduledBackup'] = {key: backup_state.get(key) for key in ('status', 'checkedAt', 'backupCreated', 'availableBytes', 'requiredBytes')} if isinstance(backup_state, dict) else None
     report['errors'].extend(scheduled_backup_failures(backup_state))
+    try:
+        command(['systemctl', 'is-active', '--quiet', 'wb-tender-production-restore.timer'])
+        command(['systemctl', 'is-enabled', '--quiet', 'wb-tender-production-restore.timer'])
+    except Exception:
+        report['errors'].append('weekly_restore_timer_inactive')
+    try:
+        restore_state = json.loads(Path('/var/lib/wb-tender-production-restore/current.json').read_text())
+    except (OSError, ValueError):
+        restore_state = None
+    report['scheduledRestore'] = {key: restore_state.get(key) for key in ('status', 'checkedAt', 'completedAt', 'temporaryResourcesRemoved')} if isinstance(restore_state, dict) else None
+    report['errors'].extend(scheduled_restore_failures(restore_state))
     usage = os.statvfs('/srv/wb-tender-production')
     report['diskFreePercent'] = round(100 * usage.f_bavail / usage.f_blocks, 2)
     if report['diskFreePercent'] < 15:
@@ -231,6 +242,24 @@ def scheduled_backup_failures(record, now=None):
         return ['scheduled_backup_state_invalid']
     if status == 'BACKUP_PASS' and record.get('backupCreated') is not True:
         return ['scheduled_backup_result_invalid']
+    return []
+
+
+def scheduled_restore_failures(record, now=None):
+    if not isinstance(record, dict):
+        return ['scheduled_restore_state_missing']
+    status = record.get('status')
+    if status not in ('RESTORE_PASS', 'RESTORING'):
+        return ['scheduled_restore_' + str(status or 'missing').lower()]
+    try:
+        age = ((now or datetime.datetime.now(datetime.timezone.utc)) - datetime.datetime.fromisoformat(record['checkedAt'])).total_seconds()
+        maximum = 4 * 3600 + 600 if status == 'RESTORING' else 8 * 86400
+        if not 0 <= age <= maximum:
+            return ['scheduled_restore_state_stale']
+    except (KeyError, ValueError, TypeError):
+        return ['scheduled_restore_state_invalid']
+    if status == 'RESTORE_PASS' and (record.get('temporaryResourcesRemoved') is not True or record.get('productionModified') is not False):
+        return ['scheduled_restore_result_invalid']
     return []
 
 
