@@ -43,7 +43,7 @@ const PDF_STANDARD_FONT_DATA_URL = new URL(
   import.meta.url,
 ).href;
 
-export const PARSER_VERSION = "wb-binary-parsers/2.1.0";
+export const PARSER_VERSION = "wb-binary-parsers/2.2.0";
 export const PARSER_LIMITS = Object.freeze({
   maxBytes: 50_000_000,
   maxArchiveBytes: 250_000_000,
@@ -277,16 +277,23 @@ async function parseXlsx(buffer) {
     }));
     const rows = [...xml.matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>/g)].map((rowMatch,rowIndex) => {
       const rowAttrs = Object.fromEntries([...rowMatch[1].matchAll(/([\w:]+)="([^"]*)"/g)].map((item) => [item[1],item[2]]));
-      const cells = [...rowMatch[2].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)].map((cellMatch,columnIndex) => {
+      let previousColumn=0;
+      const cells = [...rowMatch[2].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)].map((cellMatch) => {
         const attrs = Object.fromEntries([...cellMatch[1].matchAll(/([\w:]+)="([^"]*)"/g)].map((item) => [item[1],item[2]]));
-        const address = attrs.r || `${columnIndex+1}:${Number(rowAttrs.r||rowIndex+1)}`;
-        const formula = cellMatch[2].match(/<f(?:\s[^>]*)?>([\s\S]*?)<\/f>/)?.[1] || null;
-        const raw = cellMatch[2].match(/<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/)?.[1] ?? null;
-        const inline = cellMatch[2].match(/<is(?:\s[^>]*)?>([\s\S]*?)<\/is>/)?.[1];
-        const decoded = inline !== undefined ? spreadsheetTextNodes(inline) : attrs.t === "s" ? sharedStrings[Number(raw)] : entityDecode(raw);
+        const reference=attrs.r?/^([A-Z]{1,3})([1-9][0-9]*)$/.exec(attrs.r):null;
+        if(attrs.r&&!reference)throw new Error("xlsx_cell_reference_invalid");
+        const row=Number(rowAttrs.r||rowIndex+1),column=reference?[...reference[1]].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0):previousColumn+1;
+        if(column<1||column>16384||row<1||row>1048576||(reference&&Number(reference[2])!==row))throw new Error("xlsx_cell_reference_invalid");
+        previousColumn=column;
+        let letters='',index=column;while(index>0){index--;letters=String.fromCharCode(65+index%26)+letters;index=Math.floor(index/26);}
+        const address=attrs.r||letters+row,cellXml=cellMatch[2]||"";
+        const formula = cellXml.match(/<f(?:\s[^>]*)?>([\s\S]*?)<\/f>/)?.[1] || null;
+        const raw = cellXml.match(/<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/)?.[1] ?? null;
+        const inline = cellXml.match(/<is(?:\s[^>]*)?>([\s\S]*?)<\/is>/)?.[1];
+        const decoded = inline !== undefined ? spreadsheetTextNodes(inline) : raw === null ? null : attrs.t === "s" ? sharedStrings[Number(raw)] : entityDecode(raw);
         const result = formula ? decoded : null;
         const hyperlink = links.get(address);
-        return {address,row:Number(rowAttrs.r||rowIndex+1),column:columnIndex+1,value:formula?null:decoded,
+        return {address,row,column,value:formula?null:decoded,
           formula,result,displayed:decoded,numFmt:attrs.s||null,hyperlink:hyperlink?.target||null,
           externalLink:Boolean(hyperlink?.external),fetched:false};
       });
