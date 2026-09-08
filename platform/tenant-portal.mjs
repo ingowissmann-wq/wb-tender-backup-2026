@@ -1,3 +1,4 @@
+import { dispatchTenantJob } from './tenant-job-dispatch.mjs';
 import { MODULE_CATALOG, MODULE_KEYS, normalizeModuleKey } from "./saas-catalog.mjs";
 import { requireSaasJobModule, requireSaasModule } from "./saas-platform.mjs";
 import { requireTenantContext, withTenantContext } from "./tenant-context.mjs";
@@ -234,12 +235,21 @@ export function registerTenantPortalRoutes(app, { pool, authenticate, csrf, stor
     if(!row)return reply.code(404).send({error:"membership_not_found"});return row;
   });
 
-  app.post("/api/tenant-portal/modules/:module/jobs", { preHandler: [authenticate, tenantGuard, dynamicModuleGuard, csrf] }, async (req, reply) => {
+  app.post("/api/tenant-portal/modules/:module/jobs", { preHandler: [authenticate, tenantGuard, dynamicModuleGuard, tenantAdmin, csrf], bodyLimit:32768 }, async (req, reply) => {
     const jobType = String(req.body?.jobType || "").trim().toUpperCase();
     if (!/^[A-Z][A-Z0-9_]{2,63}$/.test(jobType)) return reply.code(400).send({ error: "job_type_invalid" });
-    const job = await withTenantContext(pool, req.tenant, async (db) =>
-      (await db.query("INSERT INTO tenant_portal.jobs(tenant_id,module_key,job_type,payload,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id,module_key,job_type,status,created_at", [req.tenant.id, req.moduleKey, jobType, req.body?.payload || {}, req.identity.userId])).rows[0]);
-    return reply.code(201).send(job);
+    try {
+      const job=await dispatchTenantJob({pool,storage,context:req.tenant,moduleKey:req.moduleKey,jobType,payload:req.body?.payload});
+      return reply.header('Cache-Control','no-store').code(job.status==='FAILED'?422:200).send(job);
+    } catch(error) {
+      const known=/^(job_type_|calculation_|document_review_|saas_monthly_tender_limit_exceeded)/.test(error.message);
+      return reply.code(known?(error.statusCode||409):503).send({error:known?error.message:'tenant_job_failed'});
+    }
+  });
+  app.get('/api/tenant-portal/modules/:module/jobs/:id',{preHandler:[authenticate,tenantGuard,dynamicModuleGuard]},async(req,reply)=>{
+    if(!UUID.test(String(req.params.id||'')))return reply.code(404).send({error:'job_not_found'});
+    const job=await withTenantContext(pool,req.tenant,async db=>(await db.query('SELECT id,module_key,job_type,status,created_at,claimed_at FROM tenant_portal.jobs WHERE tenant_id=$1 AND module_key=$2 AND id=$3',[req.tenant.id,req.moduleKey,req.params.id])).rows[0]);
+    return job?reply.header('Cache-Control','no-store').send(job):reply.code(404).send({error:'job_not_found'});
   });
 
   app.post("/api/tenant-portal/demo-data/enable", { preHandler: [authenticate, tenantGuard, requireSaasModule(MODULE_KEYS.CONTROL), csrf] }, async (req, reply) => {
