@@ -142,3 +142,6 @@ jobs:
 
       - name: Prove customer service lifecycle and tenant isolation against PostgreSQL
         run: DATABASE_URL_FILE="$RUNNER_TEMP/rollout-database-url" WB_TENDER_ROLLOUT_ISOLATED_TEST=true node tests/tenant-csm-postgres.integration.mjs
+
+      - name: Prove versioned Enterprise API pagination and tenant isolation against PostgreSQL
+        run: DATABASE_URL_FILE="$RUNNER_TEMP/rollout-database-url" WB_TENDER_ROLLOUT_ISOLATED_TEST=true node tests/tenant-enterprise-api-postgres.integration.mjs

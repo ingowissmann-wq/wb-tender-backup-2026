@@ -24,7 +24,7 @@ export const MODULE_ROUTE_CONTRACTS = Object.freeze({
   [MODULE_KEYS.DOCS]: { table: "files", implementation: "TENANT_OWNED_STORAGE" },
   [MODULE_KEYS.CONTROL]: { table: null, implementation: "TENANT_ADMIN" },
   [MODULE_KEYS.INSIGHTS]: { table: null, implementation: "TENANT_OPERATIONAL_REPORTING" },
-  [MODULE_KEYS.CONNECT]: { table: null, implementation: "SECURE_EMPTY_SHELL" },
+  [MODULE_KEYS.CONNECT]: { table: null, implementation: "READ_ONLY_API" },
 });
 
 function requestedModule(req, reply) {

@@ -25,7 +25,7 @@ export const MODULE_CATALOG = Object.freeze([
   { key: MODULE_KEYS.DOCS, slug: "docs", name: "WB Docs", description: "Central documents and files, folders, controlled downloads and document workflows.", category: "Content", status: "TENANT_OWNED", dependencies: [], availableInPlans: ["NORMAL", "PROFESSIONAL", "ENTERPRISE"] },
   { key: MODULE_KEYS.CONTROL, slug: "control", name: "WB Control", description: "Administration, roles, permissions, settings, audit and tenant administration.", category: "Administration", status: "TENANT_ADMIN", dependencies: [], availableInPlans: ["CORE", "NORMAL", "PROFESSIONAL", "ENTERPRISE"] },
   { key: MODULE_KEYS.INSIGHTS, slug: "insights", name: "WB Insights", description: "Tenant company workflow counts, current calculation stages, usage limits and failure reports.", category: "Analytics", status: "TENANT_OPERATIONAL_REPORTING", dependencies: [], availableInPlans: ["PROFESSIONAL", "ENTERPRISE"] },
-  { key: MODULE_KEYS.CONNECT, slug: "connect", name: "WB Connect", description: "API, integrations, SSO and enterprise connectors.", category: "Integration", status: "SECURE_EMPTY_SHELL", dependencies: [], availableInPlans: ["ENTERPRISE"] },
+  { key: MODULE_KEYS.CONNECT, slug: "connect", name: "WB Connect", description: "Versionierte lesende API für eigene Gesellschaften, Lose, Kalkulationen und Angebotspakete. Individuelle Anbindungen und SSO benötigen eine validierte Gegenstelle.", category: "Integration", status: "READ_ONLY_API", dependencies: [], availableInPlans: ["ENTERPRISE"] },
 ]);
 
 export const BUNDLE_MODULES = Object.freeze({
