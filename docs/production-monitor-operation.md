@@ -1,0 +1,9 @@
+# Produktionsüberwachung
+
+`deployment/systemd/wb-tender-production-monitor.timer` startet den lesenden Monitor alle zwei Minuten. Der geschützte Bericht steht unter `/var/lib/wb-tender-production-monitor/current.json`. Fehler erzeugen einen fehlgeschlagenen Service-Lauf und einen neutralen Eintrag im Systemjournal; Einzelheiten verbleiben in der Datei mit Modus 0600. Der Monitor verändert keine Geschäftsdaten und führt keinen Rollback oder Restore aus.
+
+Vor Installation werden Monitor und Units aus demselben freigegebenen Commit in ein eigenes Verzeichnis unter `/srv/wb-tender-production/auxiliary-releases` kopiert und mit SHA-256 manifestiert. Der Symlink `/srv/wb-tender-production/monitor-current` verweist auf dieses Verzeichnis. Systemd-Units sind vor dem Aktivieren mit `systemd-analyze verify` zu prüfen. Vorhandene Units und der bisherige Symlink sind als Rückfallpunkt zu sichern. Ein Wechsel des Symlinks aktiviert eine neue versionierte Monitorfassung ohne Änderungen in Anwendungscontainern.
+
+Geprüft werden Anwendungen und PostgreSQL, Release-Gleichheit, Versandverbote, HTTP-Routen, Warteschlangen und Importzustände, Loginfehler, Zahlungsfehler, Backupmanifest und Backupalter, Backup-Timer, Speicherreserve sowie der reale Malware-Scanner einschließlich seiner geladenen Signaturen. Eine vorhandene Manifestprüfsumme ersetzt keine erneute Wiederherstellung. Ein bereits vorhandener Neustart bleibt sichtbar und wird nicht stillschweigend als neuer Normalzustand übernommen.
+
+Der Timer kann schon während der Vorbereitung laufen. Dunkle SaaS-Routen, noch nicht migrierte Tabellen, fehlendes DNS oder fehlende Backupplanung müssen dann weiterhin Fehler auslösen. Ein aktiver Timer allein ist kein PRODUCTION_PASS. Externe Alarmzustellung und ein automatischer Cutover-Rollback benötigen zusätzliche gesondert geprüfte Betriebsmechanismen; sie werden durch diese Units nicht behauptet.

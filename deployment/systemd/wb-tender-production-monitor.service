@@ -1,0 +1,19 @@
+[Unit]
+Description=WB-Tender production health and integrity monitor
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 -B /srv/wb-tender-production/monitor-current/production-monitor.py
+TimeoutStartSec=120
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+StateDirectory=wb-tender-production-monitor
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/wb-tender-production-monitor
