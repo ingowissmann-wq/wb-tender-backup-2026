@@ -49,8 +49,8 @@ s = once(
 )
 s = once(
     s,
-    '  async sendVerification({ to, email, token }) {',
-    '  async sendVerification({ to, email, token, verificationPath = "/saas/verify" }) {',
+    '  async sendVerification({ to, email, token, purchaseKind="TRIAL", consentVersion=CURRENT_TRIAL_CONTRACT.version }) {',
+    '  async sendVerification({ to, email, token, purchaseKind="TRIAL", consentVersion=CURRENT_TRIAL_CONTRACT.version, verificationPath = "/saas/verify" }) {',
     "send_verification_signature",
 )
 s = once(
@@ -59,6 +59,7 @@ s = once(
     '    const url = this.verificationUrl(token, verificationPath);',
     "send_verification_url",
 )
+save(p, s)
 
 # 2) Stripe: opt-in success path for the email-first trial only. Legacy behavior remains unchanged.
 s = regex_once(
