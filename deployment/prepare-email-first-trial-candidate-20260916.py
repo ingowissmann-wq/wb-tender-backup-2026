@@ -59,7 +59,6 @@ s = once(
     '    const url = this.verificationUrl(token, verificationPath);',
     "send_verification_url",
 )
-save(p, s)
 
 # 2) Stripe: opt-in success path for the email-first trial only. Legacy behavior remains unchanged.
 s = regex_once(
@@ -127,13 +126,25 @@ route_call = "  registerEmailFirstTrialRoutes(app, { pool, guard, verificationPe
 if route_call not in s:
     s = once(s, route_anchor, route_anchor + route_call, "register_trial_routes")
 
-# Change only the trial CTA. Package registration remains legacy and untouched.
-s = regex_once(
-    s,
-    r'href="/saas/register\?plan=TRIAL"',
-    'href="/saas/trial/start"',
-    "trial_cta",
-)
+# Change only the public trial CTA. Accept current r3 wording/URL variants while leaving package CTAs untouched.
+if '/saas/trial/start' not in s:
+    s2, count = re.subn(
+        r'href="/saas/register\?plan=TRIAL[^\"]*"',
+        'href="/saas/trial/start"',
+        s,
+        count=1,
+    )
+    if count == 0:
+        s2, count = re.subn(
+            r'(<a\b[^>]*\bhref=")[^"]*("[^>]*>[^<]*(?:Testzugang|testen|Test starten)[^<]*</a>)',
+            r'\1/saas/trial/start\2',
+            s,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    if count != 1:
+        raise SystemExit(f"patch_anchor_trial_cta_count={count}")
+    s = s2
 save(p, s)
 
 # 5) Guardrails: the new code must never put fine-grained onboarding states in pending_registrations.
